@@ -7,6 +7,27 @@ import sys
 from datetime import datetime, timezone
 from uuid import uuid4
 
+FAKE_NOW_ENV_VAR = "PROCRAFILER_FAKE_NOW"
+
+
+def _resolve_now_utc() -> datetime:
+    """Return current UTC time, honoring PROCRAFILER_FAKE_NOW for tests.
+
+    The fake value must be an ISO-8601 string ending with 'Z' or an explicit
+    offset. Any parse error falls back to real time silently — this is a test
+    affordance, not a feature, and must never block production.
+    """
+    raw = os.environ.get(FAKE_NOW_ENV_VAR, "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
 from procrafiler import __version__
 from procrafiler.config import (
     FEATURE_NAMES,
@@ -173,10 +194,11 @@ def cmd_purge_mirror_trash(days: int | None) -> int:
     if days is None:
         days = load_runtime_policy(paths).mirror_retention_days
 
-    removed = purge_mirror_trash(paths, retention_days=days)
+    now_utc = _resolve_now_utc()
+    removed = purge_mirror_trash(paths, retention_days=days, now_utc=now_utc)
     event = {
         "event_id": str(uuid4()),
-        "event_time_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "event_time_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "operation_id": str(uuid4()),
         "action": "mirror_trash_purge",
         "status": "success",
