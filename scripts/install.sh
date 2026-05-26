@@ -80,7 +80,11 @@ mkdir -p "$APP_DIR" "$BIN_DIR" "$ENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade "$REPO_ROOT"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  cat > "$ENV_FILE" <<'EOF'
+  # Create with restrictive umask so the file containing API keys is never
+  # world-readable, even momentarily.
+  (
+    umask 077
+    cat > "$ENV_FILE" <<'EOF'
 # ProcraFiler runtime configuration
 # Per-task AI selection (provider:model,provider:model)
 # Set PRIMARY chain for each task, and optional FALLBACK chain.
@@ -108,6 +112,15 @@ PROCRAFILER_AI_NAMING_RETRIES=2
 # Provider keys
 MISTRAL_API_KEY=
 EOF
+  )
+fi
+
+# Always enforce restrictive permissions, even on pre-existing env files
+# (e.g. created by a prior install version that did not set 0600).
+if [[ "$MODE" == "system" ]]; then
+  chmod 640 "$ENV_FILE"
+else
+  chmod 600 "$ENV_FILE"
 fi
 
 cat > "$BIN_DIR/procrafiler" <<EOF
@@ -117,7 +130,9 @@ exec "$VENV_DIR/bin/procrafiler" "\$@"
 EOF
 chmod +x "$BIN_DIR/procrafiler"
 
-cat > "$META_FILE" <<EOF
+(
+  umask 077
+  cat > "$META_FILE" <<EOF
 MODE=$MODE
 PREFIX=$PREFIX
 PYTHON_BIN=$PYTHON_BIN
@@ -127,6 +142,8 @@ BIN_DIR=$BIN_DIR
 VENV_DIR=$VENV_DIR
 ENV_FILE=$ENV_FILE
 EOF
+)
+chmod 600 "$META_FILE"
 
 echo "ProcraFiler installed successfully."
 echo "Binary: $BIN_DIR/procrafiler"
