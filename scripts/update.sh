@@ -71,11 +71,28 @@ if [[ ! -f "$META_FILE" ]]; then
   exit 1
 fi
 
-# shellcheck disable=SC1090
-source "$META_FILE"
+# Parse install-meta.env without `source` to avoid arbitrary shell execution
+# if the metadata file is ever tampered with. Only known keys are read.
+read_meta() {
+  local key="$1"
+  local line
+  line="$(grep -E "^${key}=" "$META_FILE" | tail -n 1 || true)"
+  if [[ -z "$line" ]]; then
+    return 1
+  fi
+  printf '%s' "${line#${key}=}"
+}
+
+REPO_ROOT="$(read_meta REPO_ROOT)" || { echo "Missing REPO_ROOT in $META_FILE" >&2; exit 1; }
+VENV_DIR="$(read_meta VENV_DIR)" || { echo "Missing VENV_DIR in $META_FILE" >&2; exit 1; }
 
 if [[ ! -d "$REPO_ROOT" ]]; then
   echo "Repository path from metadata does not exist: $REPO_ROOT" >&2
+  exit 1
+fi
+
+if [[ ! -x "$VENV_DIR/bin/pip" ]]; then
+  echo "pip not found in venv: $VENV_DIR/bin/pip" >&2
   exit 1
 fi
 
