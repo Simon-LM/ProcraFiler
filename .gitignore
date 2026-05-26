@@ -16,6 +16,13 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+.directory
+
+# Secrets (never commit runtime env files or keys)
+*.env
+!.env.example
+*.key
+*.pem
 
 # ProcraFiler runtime artifacts
 runtime/
