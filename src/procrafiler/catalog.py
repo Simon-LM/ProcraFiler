@@ -28,6 +28,10 @@ class CatalogRepository:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_sha256 ON documents(sha256)")
+
+            existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+            if "flow_state" not in existing_columns:
+                conn.execute("ALTER TABLE documents ADD COLUMN flow_state TEXT")
             conn.commit()
 
     def upsert_document(
@@ -39,20 +43,24 @@ class CatalogRepository:
         current_path: str,
         status: str,
         updated_at_utc: str,
+        flow_state: str | None = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO documents (doc_id, sha256, current_filename, current_path, status, updated_at_utc)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO documents (
+                    doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                     sha256=excluded.sha256,
                     current_filename=excluded.current_filename,
                     current_path=excluded.current_path,
                     status=excluded.status,
-                    updated_at_utc=excluded.updated_at_utc
+                    updated_at_utc=excluded.updated_at_utc,
+                    flow_state=excluded.flow_state
                 """,
-                (doc_id, sha256, current_filename, current_path, status, updated_at_utc),
+                (doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state),
             )
             conn.commit()
 
@@ -61,11 +69,11 @@ class CatalogRepository:
             row = conn.execute("SELECT 1 FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)).fetchone()
             return row is not None
 
-    def list_documents(self) -> list[dict[str, str]]:
+    def list_documents(self) -> list[dict[str, str | None]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc
+                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state
                 FROM documents
                 ORDER BY updated_at_utc DESC
                 """
