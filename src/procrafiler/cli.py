@@ -196,18 +196,21 @@ def cmd_purge_mirror_trash(days: int | None) -> int:
 
     now_utc = _resolve_now_utc()
     removed = purge_mirror_trash(paths, retention_days=days, now_utc=now_utc)
-    event = {
-        "event_id": str(uuid4()),
-        "event_time_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "operation_id": str(uuid4()),
-        "action": "mirror_trash_purge",
-        "status": "success",
-        "message": f"Mirror trash purge completed, removed: {removed}",
-        "retention_days": days,
-        "removed_count": removed,
-    }
-    with paths.actions_log_file.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=True) + "\n")
+
+    features = load_feature_settings(paths)["features"]
+    if features.get("actions_log", True):
+        event = {
+            "event_id": str(uuid4()),
+            "event_time_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "operation_id": str(uuid4()),
+            "action": "mirror_trash_purge",
+            "status": "success",
+            "message": f"Mirror trash purge completed, removed: {removed}",
+            "retention_days": days,
+            "removed_count": removed,
+        }
+        with paths.actions_log_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=True) + "\n")
 
     print(f"Mirror trash purge completed, removed: {removed}")
     return 0
