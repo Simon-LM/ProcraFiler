@@ -40,6 +40,9 @@ from procrafiler.config import (
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
 from procrafiler.pipeline import process_all_inbox_files, process_next_inbox_file
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
+from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
+
+EXIT_TEMPFAIL = 75  # sysexits.h: temp resource shortage; reused for "lock held"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -166,16 +169,32 @@ def cmd_feature_set(feature: str, state: str) -> int:
     return 0
 
 
+def _print_lock_busy(err: RuntimeLockedError) -> None:
+    print(f"ProcraFiler is already running, aborting. Lock file: {err.lock_path}", file=sys.stderr)
+
+
 def cmd_process_once(dry_run: bool = False) -> int:
     paths = default_runtime_paths()
-    status = process_next_inbox_file(paths, dry_run=dry_run)
+    ensure_runtime_layout(paths)
+    try:
+        with runtime_lock(paths):
+            status = process_next_inbox_file(paths, dry_run=dry_run)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
     print(f"Pipeline result: {status}")
     return 0
 
 
 def cmd_process_all(dry_run: bool = False) -> int:
     paths = default_runtime_paths()
-    summary = process_all_inbox_files(paths, dry_run=dry_run)
+    ensure_runtime_layout(paths)
+    try:
+        with runtime_lock(paths):
+            summary = process_all_inbox_files(paths, dry_run=dry_run)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
     print(
         "Batch result: "
         f"processed: {summary['processed']}, "
@@ -195,22 +214,27 @@ def cmd_purge_mirror_trash(days: int | None) -> int:
         days = load_runtime_policy(paths).mirror_retention_days
 
     now_utc = _resolve_now_utc()
-    removed = purge_mirror_trash(paths, retention_days=days, now_utc=now_utc)
+    try:
+        with runtime_lock(paths):
+            removed = purge_mirror_trash(paths, retention_days=days, now_utc=now_utc)
 
-    features = load_feature_settings(paths)["features"]
-    if features.get("actions_log", True):
-        event = {
-            "event_id": str(uuid4()),
-            "event_time_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "operation_id": str(uuid4()),
-            "action": "mirror_trash_purge",
-            "status": "success",
-            "message": f"Mirror trash purge completed, removed: {removed}",
-            "retention_days": days,
-            "removed_count": removed,
-        }
-        with paths.actions_log_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=True) + "\n")
+            features = load_feature_settings(paths)["features"]
+            if features.get("actions_log", True):
+                event = {
+                    "event_id": str(uuid4()),
+                    "event_time_utc": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "operation_id": str(uuid4()),
+                    "action": "mirror_trash_purge",
+                    "status": "success",
+                    "message": f"Mirror trash purge completed, removed: {removed}",
+                    "retention_days": days,
+                    "removed_count": removed,
+                }
+                with paths.actions_log_file.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(event, ensure_ascii=True) + "\n")
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
 
     print(f"Mirror trash purge completed, removed: {removed}")
     return 0

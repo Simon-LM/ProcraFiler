@@ -20,6 +20,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `flow.validate_transition(current, next)`: enforces the state machine declared in `flow._TRANSITIONS`. Raises `InvalidTransition` on any illegal jump.
 - `documents.flow_state` SQLite column: persists the final pipeline state for each catalogued document. Existing DBs are migrated in place (column added if missing on `init_schema`).
 - `tests/test_state_machine.py`: end-to-end checks that the persisted `flow_state` matches the pipeline outcome on the library-store, manual-review, and duplicate paths, plus an explicit legacy-DB migration test.
+- `procrafiler.runtime_lock`: cross-process advisory lock (`fcntl.flock` on `{state_root}/procrafiler.lock`) acquired by mutating CLI commands. Two parallel `procrafiler process-all` runs would previously race on the inbox; the second invocation now exits cleanly with status 75 (`EX_TEMPFAIL`) instead of clobbering files.
+- `tests/test_runtime_lock.py`: covers acquire/release, denial when an external holder has the lock, recovery after release, and the CLI integration (process-once returns 75 + prints to stderr when locked).
 
 ### Changed
 
@@ -29,6 +31,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   - `mirror_sync` off → no mirror copy is performed; a single `mirror_sync_skipped` event is logged (when `actions_log` is on).
 - `cmd_purge_mirror_trash` in the CLI now honors `actions_log` when emitting its summary event, matching pipeline behavior.
 - `process_next_inbox_file` walks the 14-state flow machine explicitly. Before the audit the spec listed 14 states but the pipeline never visited any of them — it jumped straight from "file detected" to a final string. Every checkpoint now calls `validate_transition`, raising loudly if a future change tries an illegal jump.
+- CLI commands `process-once`, `process-all`, and `purge-mirror-trash` acquire a runtime lock before touching state. Read-only commands (`status`, `features`, `policy-effective`, `feature-set`, `init-layout`) stay lock-free.
 
 ### Fixed
 
