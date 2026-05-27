@@ -12,6 +12,7 @@ from uuid import uuid4
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
+from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
 from procrafiler.naming import build_timestamped_filename
 from procrafiler.taxonomy import decide_route_for_filename  # type: ignore[reportMissingImports]
@@ -185,7 +186,15 @@ def _sync_to_mirror(
 
 
 def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> str:
-    """Process one file from Inbox according to MVP flow rules."""
+    """Process one file from Inbox according to MVP flow rules.
+
+    Walks the state machine declared in `procrafiler.flow`. Every transition
+    goes through `validate_transition`, which raises `InvalidTransition` if
+    the code ever attempts an illegal jump. The final state lands in the
+    catalog's `flow_state` column for the documents we persist (manual review
+    and library store paths). Duplicate paths produce no DB row, only log
+    events — the spec says we never permanently delete in inbox/library.
+    """
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
 
@@ -195,6 +204,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
 
     operation_id = str(uuid4())
     source = candidates[0]
+    current_state = INITIAL_STATE
 
     _append_action_log(
         paths,
@@ -224,10 +234,13 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             features=features,
         )
         analysis_path = queued_target
+    current_state = validate_transition(current_state, "INBOX_QUEUED")
 
+    current_state = validate_transition(current_state, "PROCESSING_LOCKED")
     sha256 = _file_sha256(analysis_path)
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
+    current_state = validate_transition(current_state, "ANALYSIS_RUNNING")
 
     if dry_run:
         _append_action_log(
@@ -242,6 +255,8 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             features=features,
         )
         if repo.has_sha256(sha256):
+            current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
+            current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
             _append_action_log(
                 paths,
                 operation_id=operation_id,
@@ -253,10 +268,14 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 extra_fields={"dry_run": True},
                 features=features,
             )
-            return "INBOX_TRASH_PENDING_MANUAL"
+            return current_state
+
+        current_state = validate_transition(current_state, "CLASSIFICATION_READY")
+        current_state = validate_transition(current_state, "ROUTE_PROPOSED")
 
         route = decide_route_for_filename(source.name)
         if route.needs_manual_review:
+            current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
             _append_action_log(
                 paths,
                 operation_id=operation_id,
@@ -272,8 +291,10 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 },
                 features=features,
             )
-            return "USER_CONFIRMATION_REQUIRED"
+            return current_state
 
+        current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
+        current_state = validate_transition(current_state, "LIBRARY_STORED")
         _append_action_log(
             paths,
             operation_id=operation_id,
@@ -289,11 +310,13 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             },
             features=features,
         )
-        return "LIBRARY_STORED"
+        return current_state
 
     if repo.has_sha256(sha256):
+        current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
         trash_target = _ensure_unique_path(paths.inbox_trash_manual_dir / queued_target.name)
         move(str(queued_target), str(trash_target))
+        current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
 
         _append_action_log(
             paths,
@@ -317,10 +340,14 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             features=features,
         )
         _write_catalog_snapshot(paths, repo, now_utc, features=features)
-        return "INBOX_TRASH_PENDING_MANUAL"
+        return current_state
+
+    current_state = validate_transition(current_state, "CLASSIFICATION_READY")
+    current_state = validate_transition(current_state, "ROUTE_PROPOSED")
 
     route = decide_route_for_filename(queued_target.name)
     if route.needs_manual_review:
+        current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
         now_iso = _utc_iso(now_utc)
         repo.upsert_document(
             doc_id=str(uuid4()),
@@ -329,6 +356,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             current_path=str(queued_target),
             status="USER_CONFIRMATION_REQUIRED",
             updated_at_utc=now_iso,
+            flow_state=current_state,
         )
         _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
@@ -346,7 +374,9 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             },
             features=features,
         )
-        return "USER_CONFIRMATION_REQUIRED"
+        return current_state
+
+    current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
 
     route_dir = route.relative_dir or ("Revue_Manuelle",)
     target_dir = paths.library_root / Path(*route_dir)
@@ -390,6 +420,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
     final_name = build_timestamped_filename(candidate_name, now_utc=now_utc)
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
+    current_state = validate_transition(current_state, "LIBRARY_STORED")
 
     now_iso = _utc_iso(now_utc)
     repo.upsert_document(
@@ -399,6 +430,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         current_path=str(library_target),
         status="LIBRARY_STORED",
         updated_at_utc=now_iso,
+        flow_state=current_state,
     )
     _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
@@ -426,7 +458,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         features=features,
     )
 
-    return "LIBRARY_STORED"
+    return current_state
 
 
 def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> dict[str, int]:

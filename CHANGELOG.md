@@ -17,6 +17,9 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Release process documentation for changelog + tags.
 - `PROCRAFILER_FAKE_NOW` environment variable: time-sensitive CLI commands now consult this when set, so tests can pin a reference timestamp and stop drifting as the real clock advances.
 - `tests/test_feature_flags.py`: three end-to-end tests proving each feature flag actually changes pipeline behavior.
+- `flow.validate_transition(current, next)`: enforces the state machine declared in `flow._TRANSITIONS`. Raises `InvalidTransition` on any illegal jump.
+- `documents.flow_state` SQLite column: persists the final pipeline state for each catalogued document. Existing DBs are migrated in place (column added if missing on `init_schema`).
+- `tests/test_state_machine.py`: end-to-end checks that the persisted `flow_state` matches the pipeline outcome on the library-store, manual-review, and duplicate paths, plus an explicit legacy-DB migration test.
 
 ### Changed
 
@@ -25,6 +28,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
   - `catalog_snapshot` off → `catalog_snapshot.json` is no longer rewritten on each operation.
   - `mirror_sync` off → no mirror copy is performed; a single `mirror_sync_skipped` event is logged (when `actions_log` is on).
 - `cmd_purge_mirror_trash` in the CLI now honors `actions_log` when emitting its summary event, matching pipeline behavior.
+- `process_next_inbox_file` walks the 14-state flow machine explicitly. Before the audit the spec listed 14 states but the pipeline never visited any of them — it jumped straight from "file detected" to a final string. Every checkpoint now calls `validate_transition`, raising loudly if a future change tries an illegal jump.
 
 ### Fixed
 
