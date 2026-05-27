@@ -27,6 +27,7 @@ class TestCliMirrorPurge(unittest.TestCase):
         ensure_runtime_layout(self.paths)
 
     def tearDown(self) -> None:
+        os.environ.pop("PROCRAFILER_FAKE_NOW", None)
         self.tmp.cleanup()
 
     def test_purge_mirror_trash_cli(self) -> None:
@@ -38,6 +39,7 @@ class TestCliMirrorPurge(unittest.TestCase):
         new_file.write_text("new", encoding="utf-8")
 
         now = datetime(2026, 4, 2, 12, 0, 0, tzinfo=timezone.utc)
+        os.environ["PROCRAFILER_FAKE_NOW"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         old_ts = (now - timedelta(days=40)).timestamp()
         new_ts = (now - timedelta(days=2)).timestamp()
         os.utime(old_file, (old_ts, old_ts))
