@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from procrafiler.catalog import CatalogRepository
-from procrafiler.config import RuntimePaths, ensure_runtime_layout
+from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
 from procrafiler.naming import build_timestamped_filename
@@ -59,7 +59,10 @@ def _append_action_log(
     path_before: str | None = None,
     path_after: str | None = None,
     extra_fields: dict[str, Any] | None = None,
+    features: dict[str, bool] | None = None,
 ) -> None:
+    if features is not None and not features.get("actions_log", True):
+        return
     event: dict[str, Any] = {
         "event_id": str(uuid4()),
         "event_time_utc": _utc_iso(now_utc),
@@ -76,7 +79,15 @@ def _append_action_log(
         f.write(json.dumps(event, ensure_ascii=True) + "\n")
 
 
-def _write_catalog_snapshot(paths: RuntimePaths, repo: CatalogRepository, now_utc: datetime | None = None) -> None:
+def _write_catalog_snapshot(
+    paths: RuntimePaths,
+    repo: CatalogRepository,
+    now_utc: datetime | None = None,
+    *,
+    features: dict[str, bool] | None = None,
+) -> None:
+    if features is not None and not features.get("catalog_snapshot", True):
+        return
     documents = repo.list_documents()
     latest = documents[0]["updated_at_utc"] if documents else None
     snapshot: dict[str, Any] = {
@@ -100,7 +111,21 @@ def _sync_to_mirror(
     operation_id: str,
     library_file: Path,
     now_utc: datetime | None = None,
+    features: dict[str, bool] | None = None,
 ) -> bool:
+    if features is not None and not features.get("mirror_sync", True):
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="mirror_sync_skipped",
+            status="success",
+            message="Mirror sync skipped: feature disabled",
+            now_utc=now_utc,
+            path_before=str(library_file),
+            features=features,
+        )
+        return False
+
     relative_path = library_file.relative_to(paths.library_root)
     mirror_target = paths.mirror_root / relative_path
 
@@ -113,6 +138,7 @@ def _sync_to_mirror(
         now_utc=now_utc,
         path_before=str(library_file),
         path_after=str(mirror_target),
+        features=features,
     )
 
     result: Any = sync_library_file_to_mirror(paths, library_file, now_utc=now_utc)
@@ -127,6 +153,7 @@ def _sync_to_mirror(
             now_utc=now_utc,
             path_before=str(mirror_target),
             path_after=str(result.quarantined_path),
+            features=features,
         )
 
     if result.success:
@@ -139,6 +166,7 @@ def _sync_to_mirror(
             now_utc=now_utc,
             path_before=str(library_file),
             path_after=str(mirror_target),
+            features=features,
         )
         return True
 
@@ -151,6 +179,7 @@ def _sync_to_mirror(
         now_utc=now_utc,
         path_before=str(library_file),
         path_after=str(mirror_target),
+        features=features,
     )
     return False
 
@@ -158,6 +187,7 @@ def _sync_to_mirror(
 def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> str:
     """Process one file from Inbox according to MVP flow rules."""
     ensure_runtime_layout(paths)
+    features = load_feature_settings(paths)["features"]
 
     candidates = sorted([p for p in paths.inbox_dir.iterdir() if p.is_file()])
     if not candidates:
@@ -174,6 +204,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         message="File detected in inbox",
         now_utc=now_utc,
         path_before=str(source),
+        features=features,
     )
 
     queued_target = _ensure_unique_path(paths.queue_dir / source.name)
@@ -190,6 +221,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             now_utc=now_utc,
             path_before=str(source),
             path_after=str(queued_target),
+            features=features,
         )
         analysis_path = queued_target
 
@@ -207,6 +239,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             now_utc=now_utc,
             path_before=str(source),
             extra_fields={"dry_run": True},
+            features=features,
         )
         if repo.has_sha256(sha256):
             _append_action_log(
@@ -218,6 +251,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 now_utc=now_utc,
                 path_before=str(analysis_path),
                 extra_fields={"dry_run": True},
+                features=features,
             )
             return "INBOX_TRASH_PENDING_MANUAL"
 
@@ -236,6 +270,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                     "reason": route.reason,
                     "matched_extension": route.matched_extension,
                 },
+                features=features,
             )
             return "USER_CONFIRMATION_REQUIRED"
 
@@ -252,6 +287,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                     "target_route": "/".join(route.relative_dir or ("Revue_Manuelle",)),
                 "matched_extension": route.matched_extension,
             },
+            features=features,
         )
         return "LIBRARY_STORED"
 
@@ -267,6 +303,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             message="Exact duplicate detected by sha256",
             now_utc=now_utc,
             path_before=str(queued_target),
+            features=features,
         )
         _append_action_log(
             paths,
@@ -277,8 +314,9 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             now_utc=now_utc,
             path_before=str(queued_target),
             path_after=str(trash_target),
+            features=features,
         )
-        _write_catalog_snapshot(paths, repo, now_utc)
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
         return "INBOX_TRASH_PENDING_MANUAL"
 
     route = decide_route_for_filename(queued_target.name)
@@ -292,7 +330,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             status="USER_CONFIRMATION_REQUIRED",
             updated_at_utc=now_iso,
         )
-        _write_catalog_snapshot(paths, repo, now_utc)
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
         _append_action_log(
             paths,
@@ -306,6 +344,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 "reason": route.reason,
                 "matched_extension": route.matched_extension,
             },
+            features=features,
         )
         return "USER_CONFIRMATION_REQUIRED"
 
@@ -328,6 +367,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 "provider": name_suggestion.provider,
                 "model": name_suggestion.model,
             },
+            features=features,
         )
     else:
         _append_action_log(
@@ -343,6 +383,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 "model": name_suggestion.model,
                 "suggested_stem": name_suggestion.stem,
             },
+            features=features,
         )
 
     candidate_name = f"{name_suggestion.stem}{queued_target.suffix}"
@@ -359,7 +400,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         status="LIBRARY_STORED",
         updated_at_utc=now_iso,
     )
-    _write_catalog_snapshot(paths, repo, now_utc)
+    _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
     _append_action_log(
         paths,
@@ -374,6 +415,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             "target_route": "/".join(route_dir),
             "matched_extension": route.matched_extension,
         },
+        features=features,
     )
 
     _sync_to_mirror(
@@ -381,6 +423,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         operation_id=operation_id,
         library_file=library_target,
         now_utc=now_utc,
+        features=features,
     )
 
     return "LIBRARY_STORED"
@@ -388,6 +431,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
 
 def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> dict[str, int]:
     ensure_runtime_layout(paths)
+    features = load_feature_settings(paths)["features"]
 
     summary = {
         "processed": 0,
@@ -429,6 +473,7 @@ def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None
             ),
             now_utc=now_utc,
             extra_fields={"dry_run": True},
+            features=features,
         )
         return summary
 
@@ -477,6 +522,7 @@ def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None
         ),
         now_utc=now_utc,
         extra_fields={"dry_run": False},
+        features=features,
     )
 
     return summary
