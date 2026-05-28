@@ -461,6 +461,120 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
     return current_state
 
 
+class LibraryTrashError(RuntimeError):
+    """Raised when a library-trash operation is rejected up-front (bad path,
+    missing source, unknown to catalog).
+
+    Transition rejections (file is in catalog but current state can't reach
+    LIBRARY_TRASHED) are signalled by the standard InvalidTransition raised
+    from validate_transition. The CLI catches both.
+    """
+
+
+def move_library_file_to_trash(
+    paths: RuntimePaths,
+    library_file: Path,
+    *,
+    now_utc: datetime | None = None,
+) -> str:
+    """Move a library file to Library_Trash_Manual and quarantine its mirror.
+
+    The path must be inside library_root; we explicitly refuse to touch
+    inbox, queue, or mirror trees through this command. The file must
+    already exist in the catalog — bare files dropped into the library by
+    hand are out of scope (the user can `process-once` them first, or
+    delete them manually).
+
+    Mirror handling: if a mirror copy exists, it is moved to mirror_trash_dir
+    so the mirror stays consistent with the library. Missing mirror copies
+    are tolerated (just logged).
+    """
+    ensure_runtime_layout(paths)
+    features = load_feature_settings(paths)["features"]
+
+    resolved = library_file.resolve()
+    try:
+        relative_path = resolved.relative_to(paths.library_root.resolve())
+    except ValueError as exc:
+        raise LibraryTrashError(
+            f"refusing to trash: {library_file} is not under library_root ({paths.library_root})"
+        ) from exc
+
+    if not resolved.exists() or not resolved.is_file():
+        raise LibraryTrashError(f"refusing to trash: source file missing or not a file: {library_file}")
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    record = repo.find_by_current_path(str(resolved))
+    if record is None:
+        raise LibraryTrashError(
+            f"refusing to trash: no catalog entry for {library_file}. "
+            "Run `procrafiler process-once` first or delete the file manually."
+        )
+
+    operation_id = str(uuid4())
+    current_state = record["flow_state"] or "LIBRARY_STORED"
+    new_state = validate_transition(current_state, "LIBRARY_TRASHED")
+
+    trash_target = _ensure_unique_path(paths.library_trash_manual_dir / relative_path)
+    trash_target.parent.mkdir(parents=True, exist_ok=True)
+    move(str(resolved), str(trash_target))
+
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="library_trash",
+        status="success",
+        message="Library file moved to Library_Trash_Manual",
+        now_utc=now_utc,
+        path_before=str(resolved),
+        path_after=str(trash_target),
+        extra_fields={"previous_flow_state": current_state},
+        features=features,
+    )
+
+    mirror_source = paths.mirror_root / relative_path
+    if mirror_source.exists() and mirror_source.is_file():
+        mirror_trash_target = _ensure_unique_path(paths.mirror_trash_dir / relative_path)
+        mirror_trash_target.parent.mkdir(parents=True, exist_ok=True)
+        move(str(mirror_source), str(mirror_trash_target))
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="library_trash_mirror_quarantined",
+            status="success",
+            message="Mirror copy quarantined to keep mirror consistent with library",
+            now_utc=now_utc,
+            path_before=str(mirror_source),
+            path_after=str(mirror_trash_target),
+            features=features,
+        )
+    else:
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="library_trash_mirror_absent",
+            status="warning",
+            message="No mirror copy found to quarantine — mirror may have been out of sync",
+            now_utc=now_utc,
+            path_before=str(mirror_source),
+            features=features,
+        )
+
+    repo.upsert_document(
+        doc_id=str(record["doc_id"]),
+        sha256=str(record["sha256"]),
+        current_filename=trash_target.name,
+        current_path=str(trash_target),
+        status=new_state,
+        updated_at_utc=_utc_iso(now_utc),
+        flow_state=new_state,
+    )
+    _write_catalog_snapshot(paths, repo, now_utc, features=features)
+
+    return new_state
+
+
 def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> dict[str, int]:
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
