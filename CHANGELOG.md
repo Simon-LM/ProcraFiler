@@ -22,6 +22,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `tests/test_state_machine.py`: end-to-end checks that the persisted `flow_state` matches the pipeline outcome on the library-store, manual-review, and duplicate paths, plus an explicit legacy-DB migration test.
 - `procrafiler.runtime_lock`: cross-process advisory lock (`fcntl.flock` on `{state_root}/procrafiler.lock`) acquired by mutating CLI commands. Two parallel `procrafiler process-all` runs would previously race on the inbox; the second invocation now exits cleanly with status 75 (`EX_TEMPFAIL`) instead of clobbering files.
 - `tests/test_runtime_lock.py`: covers acquire/release, denial when an external holder has the lock, recovery after release, and the CLI integration (process-once returns 75 + prints to stderr when locked).
+- `procrafiler library-trash <path>` CLI command: moves a library file to `Library_Trash_Manual` (preserving the relative subdir layout) and simultaneously quarantines the matching mirror copy into `Mirror_Trash`. The library trash directory was created by `init-layout` since the start but had no command writing to it. Refuses paths outside `library_root`, missing files, and files that have no catalog entry — those need to be handled manually.
+- `LIBRARY_TRASHED` flow state with transitions `LIBRARY_STORED → LIBRARY_TRASHED` and `USER_CONFIRMATION_REQUIRED → LIBRARY_TRASHED`. Terminal state, mirrors how `INBOX_TRASH_PENDING_MANUAL` works on the inbox side.
+- `catalog.find_by_current_path(path)`: lookup helper to fetch a document row by its current_path, needed by `library-trash` to validate the source state before transitioning.
+- `tests/test_library_trash.py`: nine tests covering the happy path (file + mirror move correctly, catalog updated), tolerance for a missing mirror copy, the four refusal paths (outside library_root, missing file, uncatalogued file, invalid transition from a non-LIBRARY_STORED state), the double-trash guard, and CLI integration (success returns 0, invalid path returns 1).
 
 ### Changed
 

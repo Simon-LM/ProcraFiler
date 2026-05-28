@@ -69,6 +69,19 @@ class CatalogRepository:
             row = conn.execute("SELECT 1 FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)).fetchone()
             return row is not None
 
+    def find_by_current_path(self, current_path: str) -> dict[str, str | None] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state
+                FROM documents
+                WHERE current_path = ?
+                LIMIT 1
+                """,
+                (current_path,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def list_documents(self) -> list[dict[str, str | None]]:
         with self._connect() as conn:
             rows = conn.execute(

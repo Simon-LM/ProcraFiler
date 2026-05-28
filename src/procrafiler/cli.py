@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 FAKE_NOW_ENV_VAR = "PROCRAFILER_FAKE_NOW"
@@ -38,7 +39,12 @@ from procrafiler.config import (
     set_feature_flag,
 )
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
-from procrafiler.pipeline import process_all_inbox_files, process_next_inbox_file
+from procrafiler.pipeline import (
+    LibraryTrashError,
+    move_library_file_to_trash,
+    process_all_inbox_files,
+    process_next_inbox_file,
+)
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
 
@@ -67,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     purge_trash = subparsers.add_parser("purge-mirror-trash", help="Purge old files from Mirror_Trash by TTL")
     purge_trash.add_argument("--days", type=int, default=None, help="Retention period in days (default: policy)")
+
+    library_trash = subparsers.add_parser(
+        "library-trash",
+        help="Move a library file to Library_Trash_Manual and quarantine its mirror copy",
+    )
+    library_trash.add_argument("path", help="Path to the library file to trash (absolute or relative to cwd)")
 
     feature_set = subparsers.add_parser("feature-set", help="Enable or disable one feature")
     feature_set.add_argument("feature", choices=list(FEATURE_NAMES), help="Feature name")
@@ -240,6 +252,29 @@ def cmd_purge_mirror_trash(days: int | None) -> int:
     return 0
 
 
+def cmd_library_trash(path_str: str) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+
+    target = Path(path_str).expanduser()
+    if not target.is_absolute():
+        target = Path.cwd() / target
+
+    try:
+        with runtime_lock(paths):
+            try:
+                final_state = move_library_file_to_trash(paths, target, now_utc=_resolve_now_utc())
+            except LibraryTrashError as err:
+                print(str(err), file=sys.stderr)
+                return 1
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+
+    print(f"Library trash result: {final_state}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_runtime_env()
     parser = build_parser()
@@ -261,6 +296,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_process_all(args.dry_run)
     if args.command == "purge-mirror-trash":
         return cmd_purge_mirror_trash(args.days)
+    if args.command == "library-trash":
+        return cmd_library_trash(args.path)
 
     parser.print_help()
     return 1
