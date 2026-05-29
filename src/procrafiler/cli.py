@@ -45,6 +45,7 @@ from procrafiler.pipeline import (
     move_library_file_to_trash,
     process_all_inbox_files,
     process_next_inbox_file,
+    reconcile_catalog_snapshot,
 )
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
@@ -78,6 +79,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     purge_trash = subparsers.add_parser("purge-mirror-trash", help="Purge old files from Mirror_Trash by TTL")
     purge_trash.add_argument("--days", type=int, default=None, help="Retention period in days (default: policy)")
+
+    subparsers.add_parser(
+        "reconcile-snapshot",
+        help="Compare catalog_snapshot.json against catalog.db and rewrite the snapshot if out of sync",
+    )
 
     library_trash = subparsers.add_parser(
         "library-trash",
@@ -193,9 +199,11 @@ def _print_lock_busy(err: RuntimeLockedError) -> None:
 def cmd_process_once(dry_run: bool = False) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
     try:
         with runtime_lock(paths):
-            status = process_next_inbox_file(paths, dry_run=dry_run)
+            reconcile_catalog_snapshot(paths, now_utc=now_utc)
+            status = process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -206,9 +214,11 @@ def cmd_process_once(dry_run: bool = False) -> int:
 def cmd_process_all(dry_run: bool = False) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
     try:
         with runtime_lock(paths):
-            summary = process_all_inbox_files(paths, dry_run=dry_run)
+            reconcile_catalog_snapshot(paths, now_utc=now_utc)
+            summary = process_all_inbox_files(paths, now_utc=now_utc, dry_run=dry_run)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -268,6 +278,7 @@ def cmd_doctor() -> int:
 def cmd_library_trash(path_str: str) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
 
     target = Path(path_str).expanduser()
     if not target.is_absolute():
@@ -275,8 +286,9 @@ def cmd_library_trash(path_str: str) -> int:
 
     try:
         with runtime_lock(paths):
+            reconcile_catalog_snapshot(paths, now_utc=now_utc)
             try:
-                final_state = move_library_file_to_trash(paths, target, now_utc=_resolve_now_utc())
+                final_state = move_library_file_to_trash(paths, target, now_utc=now_utc)
             except LibraryTrashError as err:
                 print(str(err), file=sys.stderr)
                 return 1
@@ -285,6 +297,31 @@ def cmd_library_trash(path_str: str) -> int:
         return EXIT_TEMPFAIL
 
     print(f"Library trash result: {final_state}")
+    return 0
+
+
+def cmd_reconcile_snapshot() -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
+    try:
+        with runtime_lock(paths):
+            result = reconcile_catalog_snapshot(paths, now_utc=now_utc)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+
+    if result.rewrote_snapshot:
+        print(
+            f"Snapshot regenerated from DB ({result.reason}): "
+            f"{result.documents_in_db} documents in DB, "
+            f"{result.documents_in_snapshot_before} in previous snapshot"
+        )
+    else:
+        print(
+            f"Snapshot already consistent ({result.reason}): "
+            f"{result.documents_in_db} documents in DB"
+        )
     return 0
 
 
@@ -313,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_purge_mirror_trash(args.days)
     if args.command == "library-trash":
         return cmd_library_trash(args.path)
+    if args.command == "reconcile-snapshot":
+        return cmd_reconcile_snapshot()
 
     parser.print_help()
     return 1

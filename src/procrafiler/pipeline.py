@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import move
@@ -104,6 +105,104 @@ def _write_catalog_snapshot(
     tmp_path = paths.catalog_snapshot_file.with_suffix(".tmp")
     tmp_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
     tmp_path.replace(paths.catalog_snapshot_file)
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    """Outcome of comparing catalog_snapshot.json against the SQLite catalog.
+
+    `reason` explains what happened:
+    - "consistent": snapshot already matched the DB; nothing was written.
+    - "missing": snapshot file did not exist or was empty.
+    - "unreadable": snapshot file existed but failed to parse as JSON.
+    - "content_mismatch": snapshot existed but its doc set or updated_at_utc
+       differed from the DB.
+    - "feature_disabled": catalog_snapshot feature flag is off; nothing done.
+    """
+
+    reason: str
+    documents_in_db: int
+    documents_in_snapshot_before: int | None
+    rewrote_snapshot: bool
+
+
+def reconcile_catalog_snapshot(
+    paths: RuntimePaths,
+    *,
+    now_utc: datetime | None = None,
+) -> ReconcileResult:
+    """Compare snapshot.json against catalog.db and rewrite if out of sync.
+
+    Implements spec §4: the snapshot must stay synchronized with SQLite and
+    be repaired on startup if a mismatch is detected. The DB is the source
+    of truth — the snapshot is always rewritten from the DB on mismatch,
+    never the other way around.
+    """
+    ensure_runtime_layout(paths)
+    features = load_feature_settings(paths)["features"]
+
+    if not features.get("catalog_snapshot", True):
+        return ReconcileResult(
+            reason="feature_disabled",
+            documents_in_db=0,
+            documents_in_snapshot_before=None,
+            rewrote_snapshot=False,
+        )
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    db_documents = repo.list_documents()
+    db_index = {str(doc["doc_id"]): doc for doc in db_documents}
+
+    snapshot_documents: list[dict[str, Any]] | None
+    snapshot_file = paths.catalog_snapshot_file
+    if not snapshot_file.exists() or snapshot_file.stat().st_size == 0:
+        snapshot_documents = None
+        reason = "missing"
+    else:
+        try:
+            parsed = json.loads(snapshot_file.read_text(encoding="utf-8"))
+            raw_docs = parsed.get("documents", []) if isinstance(parsed, dict) else []
+            snapshot_documents = list(raw_docs) if isinstance(raw_docs, list) else []
+            reason = "consistent"
+        except (json.JSONDecodeError, OSError):
+            snapshot_documents = None
+            reason = "unreadable"
+
+    if snapshot_documents is not None and reason == "consistent":
+        snap_index = {str(doc.get("doc_id")): doc for doc in snapshot_documents}
+        if set(snap_index.keys()) != set(db_index.keys()):
+            reason = "content_mismatch"
+        else:
+            for doc_id, db_doc in db_index.items():
+                if snap_index[doc_id].get("updated_at_utc") != db_doc.get("updated_at_utc"):
+                    reason = "content_mismatch"
+                    break
+
+    rewrote = False
+    if reason != "consistent":
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
+        rewrote = True
+        _append_action_log(
+            paths,
+            operation_id=str(uuid4()),
+            action="snapshot_reconciled",
+            status="success",
+            message=f"Snapshot regenerated from DB ({reason})",
+            now_utc=now_utc,
+            extra_fields={
+                "reason": reason,
+                "documents_in_db": len(db_documents),
+            },
+            features=features,
+        )
+
+    return ReconcileResult(
+        reason=reason,
+        documents_in_db=len(db_documents),
+        documents_in_snapshot_before=len(snapshot_documents) if snapshot_documents is not None else None,
+        rewrote_snapshot=rewrote,
+    )
 
 
 def _sync_to_mirror(
