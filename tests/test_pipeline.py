@@ -78,6 +78,13 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(len(move_events), 1)
         self.assertEqual(move_events[0]["media_type"], "pdf")
         self.assertEqual(move_events[0]["target_route"], "Revue_Manuelle")
+        # The pipeline now reads the content locally before storing. The fake
+        # PDF bytes here have no valid text layer, so the reader flags OCR.
+        content_events = [e for e in events if e["action"] == "content_read"]
+        self.assertEqual(len(content_events), 1)
+        self.assertEqual(content_events[0]["media_type"], "pdf")
+        self.assertTrue(content_events[0]["needs_ai_reader"])
+        self.assertEqual(content_events[0]["reader_hint"], "ocr")
 
     def test_process_duplicate_to_inbox_trash_manual(self) -> None:
         first = self.paths.inbox_dir / "doc-a.pdf"
