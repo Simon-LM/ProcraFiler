@@ -120,6 +120,25 @@ def ensure_base_library_directories(library_root: Path) -> None:
         (library_root / Path(*relative_dir)).mkdir(parents=True, exist_ok=True)
 
 
+def category_label(relative_dir: tuple[str, ...]) -> str:
+    """Render a category path as a single label (e.g. ('Personnel','Documents') -> 'Personnel/Documents')."""
+    return "/".join(relative_dir)
+
+
+def classifiable_categories() -> tuple[tuple[str, ...], ...]:
+    """Semantic categories the AI may choose from — every base directory except
+    the interim review bucket (which is the fallback, not a real category)."""
+    return tuple(d for d in BASE_LIBRARY_DIRECTORIES if d != INTERIM_LIBRARY_DIR)
+
+
+def category_from_label(label: str) -> tuple[str, ...] | None:
+    """Map a category label back to its relative_dir tuple, or None if unknown."""
+    for relative_dir in classifiable_categories():
+        if category_label(relative_dir) == label:
+            return relative_dir
+    return None
+
+
 def dispatch_for_filename(filename: str) -> DispatchDecision:
     """Decide which reader/media type can process a file, from its extension.
 

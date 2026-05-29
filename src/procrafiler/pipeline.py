@@ -12,12 +12,19 @@ from uuid import uuid4
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
+from procrafiler.ai_classification import classify_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
 from procrafiler.naming import build_timestamped_filename
-from procrafiler.taxonomy import INTERIM_LIBRARY_DIR, dispatch_for_filename  # type: ignore[reportMissingImports]
+from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
+    INTERIM_LIBRARY_DIR,
+    category_from_label,
+    category_label,
+    classifiable_categories,
+    dispatch_for_filename,
+)
 
 
 def _utc_iso(now_utc: datetime | None = None) -> str:
@@ -509,8 +516,8 @@ def _process_next_inbox_file(
     current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
 
     # Read the content locally (no AI call here). For text files and readable
-    # PDFs this yields the text that AI naming/classification will consume once
-    # those land; for scans/images it records which AI reader is still needed.
+    # PDFs this yields the text the AI classifier consumes below; for
+    # scans/images it records which AI reader is still needed (built later).
     extraction = extract_text_content(queued_target, dispatch.media_type or "")
     _append_action_log(
         paths,
@@ -530,11 +537,50 @@ def _process_next_inbox_file(
         features=features,
     )
 
-    # No AI classifier yet: the extension told us the media type (how to read
-    # the file), but not its category. Until AI classification exists, every
-    # readable file lands in the interim review directory rather than a
-    # (wrongly) extension-derived category. See taxonomy.INTERIM_LIBRARY_DIR.
+    # Classify from the content. The category is decided by AI from what the
+    # file CONTAINS, never from its extension or original name. Files we can't
+    # read locally yet (scans/images awaiting their OCR/vision reader) and any
+    # uncertain/unconfigured AI outcome fall back to the interim review bucket
+    # — never to a guessed category.
     route_dir = INTERIM_LIBRARY_DIR
+    if extraction.text is not None and extraction.text.strip():
+        allowed = [category_label(c) for c in classifiable_categories()]
+        classification = classify_content(extraction.text, allowed_categories=allowed)
+        chosen = category_from_label(classification.category) if classification.category else None
+        if chosen is not None:
+            route_dir = chosen
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="classification_success",
+                status="success",
+                message="AI classified document from content",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={
+                    "category": classification.category,
+                    "provider": classification.provider,
+                    "model": classification.model,
+                },
+                features=features,
+            )
+        else:
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="classification_manual_review",
+                status="warning",
+                message="AI classification unavailable or uncertain, routing to manual review",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={
+                    "reason": classification.reason,
+                    "provider": classification.provider,
+                    "model": classification.model,
+                },
+                features=features,
+            )
+
     target_dir = paths.library_root / Path(*route_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
