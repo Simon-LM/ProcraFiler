@@ -2,8 +2,23 @@
 
 # ProcraFiler
 
-ProcraFiler is a Linux application (Ubuntu-first) for AI-assisted file sorting and classification.
-The AI acts as an analysis assistant, while decisions and actions remain controlled by explicit rules and safety guardrails.
+ProcraFiler is a Linux application (Ubuntu-first) that organizes your documents by **reading them with AI**.
+
+## The problem
+
+Files pile up with meaningless names — `scan_001.pdf`, `IMG_2024.jpg`, `document(3).pdf`. Sorting and renaming them by hand is tedious and decision-heavy, so it gets put off indefinitely (procrastination), and the pile grows until it is unmanageable.
+
+ProcraFiler removes that friction: you dump everything in one place and an AI does the reading, renaming, and filing for you.
+
+## How it works (IA-first)
+
+This is the core idea; everything else follows from it.
+
+- You drop files into a single **drop folder** (the `Inbox`, your "vrac"). **The app only ever processes what is in there** — it never touches anything else on your disk, except the folders it created itself.
+- An **AI reads each file's content** and, from that reading, **renames it** (timestamped) and **files it into a category**. The new name and the category are *outputs* of reading the content.
+- The **existing filename is never trusted** — distrusting it is the whole point. Every file is processed, even already-named ones, because the name may be wrong.
+- The **extension** only selects *which* AI reads the file (PDF extraction, OCR, image analysis, …). It never decides the name or the category.
+- **Safe by design:** the app never deletes anything (files only move to a trash folder you empty yourself), the mirror is hash-verified, and any AI doubt goes to manual review.
 
 ## Publisher
 
@@ -16,9 +31,9 @@ The AI acts as an analysis assistant, while decisions and actions remain control
 
 ## Goals
 
-- Automatically process new files from the Downloads folder.
-- Rename files with UTC timestamp prefixes.
-- Classify files into a main target library by AI, from the file content. The extension only selects which AI capability reads the file; it never decides the destination category.
+- Automatically process **every** new file from the Downloads folder, regardless of its current name.
+- Have an AI read each file's content, and from that reading derive a new descriptive name (under a UTC timestamp prefix) — the original filename is never reused as the basis.
+- Classify files into a main target library by AI, from the file content. The extension only selects which AI capability reads the file; it never decides the name or the destination category.
 - Process an archive folder of unclassified files (legacy files), with duplicate detection.
 - Generate per-document classification history.
 - Generate complete operational logs (moves, sizes, timestamps, statuses).
@@ -61,7 +76,7 @@ Full MVP details are documented in [docs/spec-mvp-v1.md](docs/spec-mvp-v1.md).
 
 ## Routing and Classification
 
-ProcraFiler keeps two decisions strictly separate. Conflating them is a design error.
+Every file is read by an AI; its name and category are **outputs of that reading**, never derived from the original filename (see the operating principle above). On top of that, ProcraFiler keeps two decisions strictly separate. Conflating them is a design error.
 
 **1. Technical dispatch — by extension.** The file extension decides *only* which processing capability reads the file:
 
@@ -93,7 +108,9 @@ The media folders (`Personnel/Medias/...`) are themselves content-decided destin
 
 ## AI Naming (MVP)
 
-ProcraFiler can use AI-generated filename stems with provider failover.
+The new filename is derived from the AI's reading of the file **content**, not from the original filename (which is never trusted). The AI returns a descriptive stem, which ProcraFiler places under a UTC timestamp prefix.
+
+> Note: in the current MVP code, the naming pass still receives the original filename as a placeholder input. This is a known gap — naming will be driven by the content-reading capabilities (OCR / PDF extraction / image analysis) once those exist, per the operating principle above.
 
 Expected AI output format:
 
