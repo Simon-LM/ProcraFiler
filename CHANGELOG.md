@@ -10,6 +10,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **Documentation: anchored the project's problem and its "IA-first" principle.** `README.md` now opens with the problem it solves (files pile up with meaningless names; manual sorting is procrastinated until unmanageable) followed by a "How it works (IA-first)" section; `docs/spec-mvp-v1.md` gains §1.0 Problem, §1.1 Operating principle, and §1.2 Action boundary. The founding premise is now unambiguous: every file is processed without exception (including already-named ones, since a name may be wrong); the existing filename is never a trusted input; an AI reads the content and derives BOTH the new name AND the category from that reading; the extension is only a technical dispatch signal. The **action boundary** is stated explicitly: the app only ever acts on files in its drop folder (`Inbox`, the "vrac") and never touches anything else on disk except folders it created. Also aligned: README Goals, "Routing and Classification" and "AI Naming" sections, and spec §3 naming example (`__Original-Name.ext` → an AI-derived name like `2026-04-01_22-10-06__Releve-BNP-Avril-2026.pdf`) and §9 (naming derives from content; content-reading is the prerequisite for naming + classification).
+
 - Initial project skeleton for ProcraFiler.
 - MIT open source licensing model.
 - Installation, update, and uninstall scripts for Ubuntu/Linux.
