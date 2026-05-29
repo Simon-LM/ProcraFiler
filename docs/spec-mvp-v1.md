@@ -83,11 +83,14 @@ Example:
 
 ## 9. IA Architecture Policy
 
-- Deterministic routing first (by file type and rules).
-- Specialized AI capabilities second (OCR, extraction, classification, image analysis).
-- Optional AI control pass for ambiguous outputs only.
+The extension and the destination category are two independent decisions and must never be conflated.
+
+- The file extension is a **technical dispatch signal only**: it selects which processing capability reads the file (PDF extraction, OCR, image analysis, plain-text reading). It never determines the destination category.
+- Specialized AI capabilities read the **content** (OCR, extraction, image analysis).
+- **AI classification determines the destination category from the content** — never from the extension.
+- An optional AI control pass (`SUPERVISOR`) reviews ambiguous outputs only.
 - Capability-level backend choice (local or API), with fallback and retries.
-- AI never performs irreversible actions.
+- AI never performs irreversible actions; uncertain outcomes are sent to manual review.
 
 ## 10. Taxonomy Policy
 
@@ -97,11 +100,12 @@ Example:
 - Folder move/rename operations require user confirmation.
 - New root branch creation requires user confirmation.
 
-MVP deterministic routing baseline:
+Extension dispatch vs. classification:
 
-- Routing priority is extension-first.
-- Common extensions are auto-routed to standard branches.
-- Unknown or missing extensions are flagged for manual review with alert logs.
+- The extension is a technical dispatch signal only: it selects which AI capability reads the file. It MUST NOT map to a destination category.
+- The destination category is always decided by AI classification from the file content, among the base branches below.
+- Unknown or missing extensions cannot be dispatched to a reader and are flagged for manual review with alert logs.
+- When AI classification is uncertain, the file is flagged for manual review.
 - Filename conflicts are resolved with deterministic numeric suffixes.
 
 MVP base branches include at least:
