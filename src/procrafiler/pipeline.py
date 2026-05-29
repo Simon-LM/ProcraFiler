@@ -205,6 +205,11 @@ def reconcile_catalog_snapshot(
     )
 
 
+MIRROR_SYNCED = "synced"
+MIRROR_SKIPPED = "skipped"
+MIRROR_FAILED = "failed"
+
+
 def _sync_to_mirror(
     paths: RuntimePaths,
     *,
@@ -212,7 +217,14 @@ def _sync_to_mirror(
     library_file: Path,
     now_utc: datetime | None = None,
     features: dict[str, bool] | None = None,
-) -> bool:
+) -> str:
+    """Sync one library file to the mirror.
+
+    Returns one of MIRROR_SYNCED / MIRROR_SKIPPED / MIRROR_FAILED. The caller
+    distinguishes a genuine failure (hash mismatch, copy error) from a
+    deliberate skip (mirror_sync feature off) — only the former should count
+    as a mirror failure in batch summaries.
+    """
     if features is not None and not features.get("mirror_sync", True):
         _append_action_log(
             paths,
@@ -224,7 +236,7 @@ def _sync_to_mirror(
             path_before=str(library_file),
             features=features,
         )
-        return False
+        return MIRROR_SKIPPED
 
     relative_path = library_file.relative_to(paths.library_root)
     mirror_target = paths.mirror_root / relative_path
@@ -268,7 +280,7 @@ def _sync_to_mirror(
             path_after=str(mirror_target),
             features=features,
         )
-        return True
+        return MIRROR_SYNCED
 
     _append_action_log(
         paths,
@@ -281,10 +293,27 @@ def _sync_to_mirror(
         path_after=str(mirror_target),
         features=features,
     )
-    return False
+    return MIRROR_FAILED
 
 
-def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> str:
+@dataclass(frozen=True)
+class ProcessResult:
+    """Outcome of processing one inbox file.
+
+    `flow_state` is the terminal state string (same value the public
+    `process_next_inbox_file` returns). `mirror_failed` is True only when a
+    mirror sync was attempted and failed — never when it was skipped because
+    the mirror_sync feature is off. The batch loop tallies this inline
+    instead of re-reading the action log after every file.
+    """
+
+    flow_state: str
+    mirror_failed: bool
+
+
+def _process_next_inbox_file(
+    paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False
+) -> ProcessResult:
     """Process one file from Inbox according to MVP flow rules.
 
     Walks the state machine declared in `procrafiler.flow`. Every transition
@@ -299,7 +328,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
 
     candidates = sorted([p for p in paths.inbox_dir.iterdir() if p.is_file()])
     if not candidates:
-        return "NOOP"
+        return ProcessResult("NOOP", mirror_failed=False)
 
     operation_id = str(uuid4())
     source = candidates[0]
@@ -367,7 +396,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 extra_fields={"dry_run": True},
                 features=features,
             )
-            return current_state
+            return ProcessResult(current_state, mirror_failed=False)
 
         current_state = validate_transition(current_state, "CLASSIFICATION_READY")
         current_state = validate_transition(current_state, "ROUTE_PROPOSED")
@@ -390,7 +419,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
                 },
                 features=features,
             )
-            return current_state
+            return ProcessResult(current_state, mirror_failed=False)
 
         current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
         current_state = validate_transition(current_state, "LIBRARY_STORED")
@@ -409,7 +438,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             },
             features=features,
         )
-        return current_state
+        return ProcessResult(current_state, mirror_failed=False)
 
     if repo.has_sha256(sha256):
         current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
@@ -439,7 +468,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             features=features,
         )
         _write_catalog_snapshot(paths, repo, now_utc, features=features)
-        return current_state
+        return ProcessResult(current_state, mirror_failed=False)
 
     current_state = validate_transition(current_state, "CLASSIFICATION_READY")
     current_state = validate_transition(current_state, "ROUTE_PROPOSED")
@@ -473,7 +502,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
             },
             features=features,
         )
-        return current_state
+        return ProcessResult(current_state, mirror_failed=False)
 
     current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
 
@@ -549,7 +578,7 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         features=features,
     )
 
-    _sync_to_mirror(
+    mirror_status = _sync_to_mirror(
         paths,
         operation_id=operation_id,
         library_file=library_target,
@@ -557,7 +586,17 @@ def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None
         features=features,
     )
 
-    return current_state
+    return ProcessResult(current_state, mirror_failed=mirror_status == MIRROR_FAILED)
+
+
+def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> str:
+    """Public entry point: process one inbox file and return its terminal state.
+
+    Thin wrapper over `_process_next_inbox_file` that preserves the historical
+    string return contract. Callers needing the mirror-failure flag (the batch
+    loop) call the internal helper directly.
+    """
+    return _process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run).flow_state
 
 
 class LibraryTrashError(RuntimeError):
@@ -723,36 +762,22 @@ def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None
         return summary
 
     while True:
-        previous_lines = [
-            line
-            for line in paths.actions_log_file.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-        previous_count = len(previous_lines)
-
-        status = process_next_inbox_file(paths, now_utc=now_utc, dry_run=False)
-        if status == "NOOP":
+        result = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=False)
+        if result.flow_state == "NOOP":
             break
 
         summary["total"] += 1
-        if status == "LIBRARY_STORED":
+        if result.flow_state == "LIBRARY_STORED":
             summary["processed"] += 1
-        elif status == "INBOX_TRASH_PENDING_MANUAL":
+        elif result.flow_state == "INBOX_TRASH_PENDING_MANUAL":
             summary["duplicates"] += 1
-        elif status == "USER_CONFIRMATION_REQUIRED":
+        elif result.flow_state == "USER_CONFIRMATION_REQUIRED":
             summary["manual_reviews"] += 1
-        elif status.startswith("ERROR"):
+        elif result.flow_state.startswith("ERROR"):
             summary["errors"] += 1
 
-        new_lines = [
-            line
-            for line in paths.actions_log_file.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ][previous_count:]
-        for line in new_lines:
-            event = json.loads(line)
-            if event.get("action") == "mirror_sync_failed":
-                summary["mirror_failures"] += 1
+        if result.mirror_failed:
+            summary["mirror_failures"] += 1
 
     _append_action_log(
         paths,

@@ -31,6 +31,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `pipeline.reconcile_catalog_snapshot(paths)` + `procrafiler reconcile-snapshot` CLI command: implements spec §4 — compares `catalog_snapshot.json` against `catalog.db` and rewrites the snapshot from the DB when they disagree. Reasons reported: `consistent`, `missing`, `unreadable`, `content_mismatch`, `feature_disabled`. The DB is the source of truth; the snapshot is only ever rewritten in the DB→snapshot direction.
 - Automatic snapshot reconciliation now runs at the start of every mutating CLI command (`process-once`, `process-all`, `library-trash`) inside the runtime lock. If the snapshot drifted (manual edit, crash mid-write, deleted file), it's repaired before the new work begins.
 - `tests/test_snapshot_reconcile.py`: nine tests covering each reason path, feature-disabled skip, action-log emission on rewrite, the standalone CLI command (consistent + rewrites cases), and an end-to-end check that `process-once` repairs a corrupted snapshot before processing.
+- `pipeline.ProcessResult` dataclass and internal `_process_next_inbox_file` helper carrying both the terminal `flow_state` and a `mirror_failed` flag, so the batch loop can tally mirror failures inline. `_sync_to_mirror` now returns an explicit `synced` / `skipped` / `failed` status (constants `MIRROR_SYNCED` / `MIRROR_SKIPPED` / `MIRROR_FAILED`) instead of a bare bool, letting callers tell a real failure apart from a deliberate skip.
+- `tests/test_process_all_mirror_failures.py`: five tests proving the batch counts a real mirror failure inline, that a disabled mirror (skip) is not counted as a failure, and that the per-file result carries the right `mirror_failed` flag on success / failure / duplicate paths.
 
 ### Changed
 
@@ -41,6 +43,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - `cmd_purge_mirror_trash` in the CLI now honors `actions_log` when emitting its summary event, matching pipeline behavior.
 - `process_next_inbox_file` walks the 14-state flow machine explicitly. Before the audit the spec listed 14 states but the pipeline never visited any of them — it jumped straight from "file detected" to a final string. Every checkpoint now calls `validate_transition`, raising loudly if a future change tries an illegal jump.
 - CLI commands `process-once`, `process-all`, and `purge-mirror-trash` acquire a runtime lock before touching state. Read-only commands (`status`, `features`, `policy-effective`, `feature-set`, `init-layout`) stay lock-free.
+- `process_all_inbox_files` no longer re-reads the entire `actions_log.jsonl` before and after every file just to count mirror failures (an O(N²) scan that grew with the log). It now reads the per-file `mirror_failed` flag returned by the pipeline and tallies inline. The public `process_next_inbox_file` keeps its string return contract unchanged.
 
 ### Fixed
 
