@@ -1,0 +1,265 @@
+"""Diagnostic checks for ProcraFiler runtime configuration.
+
+`procrafiler doctor` runs every check defined here and prints a structured
+report. Each check produces a `DoctorCheck` (OK / WARN / FAIL / SKIP);
+the CLI exits non-zero if any FAIL is present.
+
+The checks are deliberately read-only and fast — no file is moved, no
+network call is made by default. The lock check briefly tries to acquire
+the runtime lock to detect a concurrent process, but releases it
+immediately.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import stat
+from dataclasses import dataclass
+from typing import Callable
+
+from procrafiler.ai_naming import SUPPORTED_AI_TASKS, task_chain_from_env
+from procrafiler.config import RuntimePaths
+from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
+
+
+STATUS_OK = "OK"
+STATUS_WARN = "WARN"
+STATUS_FAIL = "FAIL"
+STATUS_SKIP = "SKIP"
+
+
+@dataclass(frozen=True)
+class DoctorCheck:
+    section: str
+    name: str
+    status: str
+    message: str
+
+
+def _check_path_writable(section: str, name: str, path) -> DoctorCheck:
+    if not path.exists():
+        return DoctorCheck(section, name, STATUS_FAIL, f"missing: {path}")
+    if not path.is_dir():
+        return DoctorCheck(section, name, STATUS_FAIL, f"not a directory: {path}")
+    if not os.access(path, os.W_OK):
+        return DoctorCheck(section, name, STATUS_FAIL, f"not writable: {path}")
+    return DoctorCheck(section, name, STATUS_OK, str(path))
+
+
+def check_paths(paths: RuntimePaths) -> list[DoctorCheck]:
+    section = "Paths"
+    return [
+        _check_path_writable(section, "workspace_root", paths.workspace_root),
+        _check_path_writable(section, "inbox_dir", paths.inbox_dir),
+        _check_path_writable(section, "queue_dir", paths.queue_dir),
+        _check_path_writable(section, "inbox_trash_manual_dir", paths.inbox_trash_manual_dir),
+        _check_path_writable(section, "library_root", paths.library_root),
+        _check_path_writable(section, "library_trash_manual_dir", paths.library_trash_manual_dir),
+        _check_path_writable(section, "mirror_root", paths.mirror_root),
+        _check_path_writable(section, "mirror_trash_dir", paths.mirror_trash_dir),
+        _check_path_writable(section, "state_root", paths.state_root),
+    ]
+
+
+def check_env(paths: RuntimePaths) -> list[DoctorCheck]:
+    section = "Env"
+    results: list[DoctorCheck] = []
+
+    loaded_from = os.environ.get("PROCRAFILER_ENV_LOADED_FROM", "")
+    if loaded_from:
+        results.append(DoctorCheck(section, "env_file_loaded", STATUS_OK, loaded_from))
+
+        # Permissions check — file with API keys should not be world-readable.
+        try:
+            mode = stat.S_IMODE(os.stat(loaded_from).st_mode)
+        except OSError as exc:
+            results.append(
+                DoctorCheck(section, "env_file_permissions", STATUS_WARN, f"could not stat: {exc}")
+            )
+        else:
+            if mode & 0o077:
+                results.append(
+                    DoctorCheck(
+                        section,
+                        "env_file_permissions",
+                        STATUS_WARN,
+                        f"too permissive: 0o{mode:03o} (expected 0o600 or 0o640)",
+                    )
+                )
+            else:
+                results.append(
+                    DoctorCheck(section, "env_file_permissions", STATUS_OK, f"0o{mode:03o}")
+                )
+    else:
+        results.append(
+            DoctorCheck(
+                section,
+                "env_file_loaded",
+                STATUS_WARN,
+                "no env file loaded — built-in defaults in use",
+            )
+        )
+
+    return results
+
+
+def check_ai_config() -> list[DoctorCheck]:
+    section = "AI"
+    results: list[DoctorCheck] = []
+
+    mistral_key = os.environ.get("MISTRAL_API_KEY", "").strip()
+    uses_mistral = False
+
+    for task in SUPPORTED_AI_TASKS:
+        chain = task_chain_from_env(task)
+        if not chain:
+            results.append(
+                DoctorCheck(section, f"task_{task.lower()}", STATUS_WARN, "no provider chain configured")
+            )
+            continue
+
+        providers = ",".join(f"{e.provider}:{e.model}" for e in chain)
+        results.append(
+            DoctorCheck(section, f"task_{task.lower()}", STATUS_OK, providers)
+        )
+        if any(e.provider == "mistral" for e in chain):
+            uses_mistral = True
+
+    if uses_mistral:
+        if mistral_key:
+            results.append(DoctorCheck(section, "mistral_api_key", STATUS_OK, "set"))
+        else:
+            results.append(
+                DoctorCheck(
+                    section,
+                    "mistral_api_key",
+                    STATUS_FAIL,
+                    "MISTRAL_API_KEY is unset but at least one task chain uses mistral",
+                )
+            )
+    else:
+        results.append(
+            DoctorCheck(
+                section,
+                "mistral_api_key",
+                STATUS_SKIP,
+                "no task chain uses mistral",
+            )
+        )
+
+    return results
+
+
+def check_catalog(paths: RuntimePaths) -> list[DoctorCheck]:
+    section = "Catalog"
+    db_path = paths.catalog_db_file
+
+    if not db_path.exists() or db_path.stat().st_size == 0:
+        return [
+            DoctorCheck(
+                section,
+                "catalog_db",
+                STATUS_WARN,
+                "catalog.db missing or empty — will be initialized on first process command",
+            )
+        ]
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+            if not columns:
+                return [
+                    DoctorCheck(
+                        section,
+                        "catalog_schema",
+                        STATUS_WARN,
+                        "documents table missing — will be created on first process command",
+                    )
+                ]
+            count_row = conn.execute("SELECT COUNT(*) AS n FROM documents").fetchone()
+            count = int(count_row["n"]) if count_row is not None else 0
+    except sqlite3.Error as exc:
+        return [DoctorCheck(section, "catalog_db", STATUS_FAIL, f"cannot open: {exc}")]
+
+    results = [DoctorCheck(section, "catalog_db", STATUS_OK, f"{count} documents")]
+    if "flow_state" in columns:
+        results.append(DoctorCheck(section, "catalog_schema", STATUS_OK, "flow_state column present"))
+    else:
+        results.append(
+            DoctorCheck(
+                section,
+                "catalog_schema",
+                STATUS_WARN,
+                "flow_state column missing — will be added on next process command",
+            )
+        )
+    return results
+
+
+def check_runtime_lock(paths: RuntimePaths) -> list[DoctorCheck]:
+    section = "Concurrency"
+    try:
+        with runtime_lock(paths):
+            return [DoctorCheck(section, "runtime_lock", STATUS_OK, "available")]
+    except RuntimeLockedError as err:
+        return [
+            DoctorCheck(
+                section,
+                "runtime_lock",
+                STATUS_WARN,
+                f"held by another process: {err.lock_path}",
+            )
+        ]
+
+
+def run_doctor(paths: RuntimePaths) -> list[DoctorCheck]:
+    checks: list[DoctorCheck] = []
+    for fn in _CHECK_GROUPS:
+        checks.extend(fn(paths))
+    return checks
+
+
+# Order matters here: path checks first (cheapest, most likely to fail),
+# then env/AI (config), then catalog (touches disk), then lock (briefly
+# acquires).
+_CHECK_GROUPS: tuple[Callable[[RuntimePaths], list[DoctorCheck]], ...] = (
+    check_paths,
+    check_env,
+    lambda _paths: check_ai_config(),
+    check_catalog,
+    check_runtime_lock,
+)
+
+
+def format_report(checks: list[DoctorCheck]) -> str:
+    """Produce a human-readable, section-grouped report."""
+    lines: list[str] = ["ProcraFiler doctor"]
+    current_section = ""
+    for check in checks:
+        if check.section != current_section:
+            current_section = check.section
+            lines.append("")
+            lines.append(current_section)
+            lines.append("-" * len(current_section))
+        lines.append(f"[{check.status}] {check.name}: {check.message}")
+
+    counts = {s: 0 for s in (STATUS_OK, STATUS_WARN, STATUS_FAIL, STATUS_SKIP)}
+    for check in checks:
+        counts[check.status] = counts.get(check.status, 0) + 1
+    lines.append("")
+    lines.append("Summary")
+    lines.append("-------")
+    lines.append(
+        f"{len(checks)} checks: "
+        f"{counts[STATUS_OK]} OK, "
+        f"{counts[STATUS_WARN]} WARN, "
+        f"{counts[STATUS_FAIL]} FAIL, "
+        f"{counts[STATUS_SKIP]} SKIP"
+    )
+    return "\n".join(lines)
+
+
+def overall_exit_code(checks: list[DoctorCheck]) -> int:
+    return 1 if any(c.status == STATUS_FAIL for c in checks) else 0
