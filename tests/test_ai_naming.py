@@ -36,10 +36,43 @@ class TestAiNaming(unittest.TestCase):
         os.environ.pop("PROCRAFILER_AI_NAMING_FALLBACK", None)
 
     def test_no_chain_returns_safe_fallback(self) -> None:
-        suggestion = suggest_stem_with_ai("Facture Avril 2026.pdf", chain=[])
+        suggestion = suggest_stem_with_ai("some document content", fallback_stem="Facture Avril 2026", chain=[])
         self.assertTrue(suggestion.used_fallback)
         self.assertEqual(suggestion.reason, "chain_not_configured")
         self.assertEqual(suggestion.stem, "Facture-Avril-2026")
+
+    def test_no_content_returns_fallback(self) -> None:
+        chain = [ChainEntry(provider="mistral", model="mistral-small-2506")]
+        # Chain is configured but there's nothing to read (e.g. a scan before
+        # OCR): we must not call the AI, and we fall back to the filename stem.
+        with patch("procrafiler.ai_naming.call_mistral_chat") as mocked:
+            suggestion = suggest_stem_with_ai("   ", fallback_stem="scan-001", chain=chain)
+        mocked.assert_not_called()
+        self.assertTrue(suggestion.used_fallback)
+        self.assertEqual(suggestion.reason, "no_content")
+        self.assertEqual(suggestion.stem, "scan-001")
+
+    def test_names_from_content_not_filename(self) -> None:
+        chain = [ChainEntry(provider="mistral", model="mistral-small-2506")]
+        captured: dict[str, str] = {}
+
+        def fake_call(prompt: str, model: str, **kwargs: object) -> str:
+            captured["prompt"] = prompt
+            return '{"stem":"Releve BNP avril 2026"}'
+
+        with patch("procrafiler.ai_naming.call_mistral_chat", side_effect=fake_call):
+            suggestion = suggest_stem_with_ai(
+                "Relevé de compte BNP Paribas - avril 2026 - solde 1234",
+                fallback_stem="scan-001",
+                chain=chain,
+                retries=0,
+            )
+
+        self.assertFalse(suggestion.used_fallback)
+        self.assertEqual(suggestion.stem, "Releve-BNP-avril-2026")
+        # The prompt carried the document content, not the filename stem.
+        self.assertIn("BNP Paribas", captured["prompt"])
+        self.assertNotIn("scan-001", captured["prompt"])
 
     def test_failover_to_second_provider(self) -> None:
         chain = [
@@ -52,7 +85,9 @@ class TestAiNaming(unittest.TestCase):
                 "procrafiler.ai_naming.call_ollama_chat",
                 return_value='{"stem":"Compte rendu reunion"}',
             ):
-                suggestion = suggest_stem_with_ai("meeting-notes.txt", chain=chain, retries=0)
+                suggestion = suggest_stem_with_ai(
+                    "notes de la réunion du 2 avril", fallback_stem="meeting-notes", chain=chain, retries=0
+                )
 
         self.assertFalse(suggestion.used_fallback)
         self.assertEqual(suggestion.provider, "ollama")
@@ -66,7 +101,9 @@ class TestAiNaming(unittest.TestCase):
             sleep_calls.append(seconds)
 
         with patch("procrafiler.ai_naming.call_mistral_chat", side_effect=ProviderCallError("API_ERROR_500")):
-            suggestion = suggest_stem_with_ai("scan.png", chain=chain, retries=2, sleep_fn=fake_sleep)
+            suggestion = suggest_stem_with_ai(
+                "contenu d'un scan", fallback_stem="scan", chain=chain, retries=2, sleep_fn=fake_sleep
+            )
 
         self.assertTrue(suggestion.used_fallback)
         self.assertEqual(suggestion.provider, "fallback")
@@ -77,7 +114,7 @@ class TestAiNaming(unittest.TestCase):
         noisy = 'Analyse:\n{"stem":"Facture EDF Avril"}\nFin.'
 
         with patch("procrafiler.ai_naming.call_mistral_chat", return_value=noisy):
-            suggestion = suggest_stem_with_ai("facture-edf-2026.pdf", chain=chain, retries=0)
+            suggestion = suggest_stem_with_ai("facture edf", fallback_stem="facture-edf-2026", chain=chain, retries=0)
 
         self.assertFalse(suggestion.used_fallback)
         self.assertEqual(suggestion.stem, "Facture-EDF-Avril")
@@ -87,7 +124,7 @@ class TestAiNaming(unittest.TestCase):
         fenced = '```json\n{"stem":"Releve bancaire mars"}\n```'
 
         with patch("procrafiler.ai_naming.call_ollama_chat", return_value=fenced):
-            suggestion = suggest_stem_with_ai("releve.pdf", chain=chain, retries=0)
+            suggestion = suggest_stem_with_ai("relevé bancaire", fallback_stem="releve", chain=chain, retries=0)
 
         self.assertFalse(suggestion.used_fallback)
         self.assertEqual(suggestion.stem, "Releve-bancaire-mars")
@@ -96,7 +133,7 @@ class TestAiNaming(unittest.TestCase):
         chain = [ChainEntry(provider="mistral", model="mistral-small-2506")]
 
         with patch("procrafiler.ai_naming.call_mistral_chat", return_value="nom libre sans json"):
-            suggestion = suggest_stem_with_ai("scan-contrat.png", chain=chain, retries=0)
+            suggestion = suggest_stem_with_ai("contenu d'un contrat", fallback_stem="scan-contrat", chain=chain, retries=0)
 
         self.assertTrue(suggestion.used_fallback)
         self.assertEqual(suggestion.stem, "scan-contrat")
@@ -107,7 +144,7 @@ class TestAiNaming(unittest.TestCase):
         chain = [ChainEntry(provider="mistral", model="mistral-small-2506")]
 
         with patch("procrafiler.ai_naming.call_mistral_chat", side_effect=ProviderCallError("API_ERROR_500")) as mocked:
-            suggestion = suggest_stem_with_ai("scan-contrat.png", chain=chain)
+            suggestion = suggest_stem_with_ai("contenu", fallback_stem="scan-contrat", chain=chain)
 
         self.assertTrue(suggestion.used_fallback)
         self.assertEqual(mocked.call_count, 2)

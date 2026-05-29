@@ -584,7 +584,14 @@ def _process_next_inbox_file(
     target_dir = paths.library_root / Path(*route_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    name_suggestion = suggest_stem_with_ai(queued_target.name)
+    # Name from the content the reader produced, not the original filename.
+    # When there is no readable content yet (scans/images awaiting OCR/vision),
+    # suggest_stem_with_ai falls back to the filename stem as a last resort.
+    naming_content = extraction.text if (extraction.text and extraction.text.strip()) else ""
+    name_suggestion = suggest_stem_with_ai(
+        naming_content,
+        fallback_stem=Path(queued_target.name).stem,
+    )
     if name_suggestion.used_fallback:
         _append_action_log(
             paths,
