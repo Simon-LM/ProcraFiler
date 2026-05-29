@@ -18,7 +18,7 @@ The AI acts as an analysis assistant, while decisions and actions remain control
 
 - Automatically process new files from the Downloads folder.
 - Rename files with UTC timestamp prefixes.
-- Classify files into a main target library with deterministic extension-based routing.
+- Classify files into a main target library by AI, from the file content. The extension only selects which AI capability reads the file; it never decides the destination category.
 - Process an archive folder of unclassified files (legacy files), with duplicate detection.
 - Generate per-document classification history.
 - Generate complete operational logs (moves, sizes, timestamps, statuses).
@@ -59,16 +59,23 @@ This separation keeps user files in `Downloads` while operational metadata stays
 
 Full MVP details are documented in [docs/spec-mvp-v1.md](docs/spec-mvp-v1.md).
 
-## Deterministic Routing (MVP)
+## Routing and Classification
 
-Routing priority is currently extension-first.
+ProcraFiler keeps two decisions strictly separate. Conflating them is a design error.
 
-- Known/common extensions are routed automatically to base folders (documents, images, videos, audio, archives).
-- Unknown extensions are kept for manual review with an explicit alert in the action log.
-- Files without extension are also flagged for manual review with alert logs.
+**1. Technical dispatch — by extension.** The file extension decides *only* which processing capability reads the file:
+
+- `pdf` → PDF text extraction; scanned image → OCR; `jpg`/`png` → image analysis; `txt`/`md` → direct text reading; and so on.
+- The extension **never** decides the destination category.
+- Unknown or missing extensions cannot be dispatched to a reader and are flagged for manual review with an explicit alert in the action log.
 - Name conflicts are resolved with `__1`, `__2`, ... suffixes.
 
-Base folders created by default include:
+**2. Semantic classification — by AI, from the content.** Once the right capability has read the file, an AI classification pass decides the destination category from the *content*, never from the extension:
+
+- A scanned receipt saved as `.jpg` is an administrative document, not a media image — only the content can tell.
+- When the AI is uncertain, the file goes to manual review. The AI never performs an irreversible action.
+
+Base folders are semantic categories (every destination is AI-decided from content, never reached by an extension rule):
 
 - `Personnel/Documents`
 - `Professionnel/Documents`
@@ -81,6 +88,8 @@ Base folders created by default include:
 - `Personnel/Medias/Audio`
 - `Personnel/Archives`
 - `Revue_Manuelle`
+
+The media folders (`Personnel/Medias/...`) are themselves content-decided destinations: a file being an image by extension does not by itself send it there — a photographed document is classified by what it contains.
 
 ## AI Naming (MVP)
 
