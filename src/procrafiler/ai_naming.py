@@ -6,7 +6,6 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -221,12 +220,20 @@ def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
     return str(content).strip()
 
 
-def _build_naming_prompt(original_name: str) -> str:
+# Cap the document text sent to the model: a concise title needs the gist, not
+# the whole file. Keeps token cost and latency bounded on large documents.
+MAX_NAMING_CONTENT_CHARS = 6000
+
+
+def _build_naming_prompt(content: str) -> str:
+    snippet = content[:MAX_NAMING_CONTENT_CHARS]
     return (
         "Return JSON only with this exact schema: {\"stem\": \"...\"}. "
-        "The value must be a concise French title without extension. "
-        "Do not add any other keys or commentary. "
-        f"Original filename: {original_name}"
+        "The value must be a concise French title (without extension) that "
+        "describes what the document is, based on its content below. "
+        "Do not add any other keys or commentary.\n\n"
+        "Document content:\n"
+        f"{snippet}"
     )
 
 
@@ -267,41 +274,59 @@ def _extract_json_dict(raw_output: str) -> dict[str, Any] | None:
     return None
 
 
-def _extract_suggested_stem(raw_output: str, original_name: str) -> tuple[str, bool]:
+def _extract_suggested_stem(raw_output: str, fallback_stem: str) -> tuple[str, bool]:
     payload = _extract_json_dict(raw_output)
     if payload is None:
-        return sanitize_filename_stem(Path(original_name).stem), False
+        return sanitize_filename_stem(fallback_stem), False
 
     stem_value = payload.get("stem")
     if not isinstance(stem_value, str) or not stem_value.strip():
-        return sanitize_filename_stem(Path(original_name).stem), False
+        return sanitize_filename_stem(fallback_stem), False
 
     candidate = stem_value.strip().strip("\"'")
     return sanitize_filename_stem(candidate), True
 
 
 def suggest_stem_with_ai(
-    original_name: str,
+    content: str,
     *,
+    fallback_stem: str,
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
     sleep_fn: Any = time.sleep,
 ) -> AINameSuggestion:
+    """Suggest a filename stem from the document CONTENT (never the filename).
+
+    `fallback_stem` is the deterministic last resort used only when the AI
+    can't run (no chain configured, no content available, or all providers
+    fail). Per the IA-first principle the original filename is not the basis
+    for naming; it survives solely as this fallback because something must be
+    written when reading isn't possible (those files go to manual review).
+    """
     chain_entries = chain or default_chain_from_env()
     if not chain_entries:
         return AINameSuggestion(
-            stem=sanitize_filename_stem(Path(original_name).stem),
+            stem=sanitize_filename_stem(fallback_stem),
             provider="none",
             model="none",
             raw_output="",
             used_fallback=True,
             reason="chain_not_configured",
         )
+    if not content.strip():
+        return AINameSuggestion(
+            stem=sanitize_filename_stem(fallback_stem),
+            provider="none",
+            model="none",
+            raw_output="",
+            used_fallback=True,
+            reason="no_content",
+        )
 
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("NAMING", default_value=60)
     retry_count = retries if retries is not None else _task_retries_from_env("NAMING", default_value=2)
-    prompt = _build_naming_prompt(original_name)
+    prompt = _build_naming_prompt(content)
 
     last_error = "unknown"
     for entry in chain_entries:
@@ -320,7 +345,7 @@ def suggest_stem_with_ai(
                 else:
                     raise ProviderCallError(f"unsupported_provider:{entry.provider}")
 
-                stem, is_valid_json = _extract_suggested_stem(raw_output, original_name)
+                stem, is_valid_json = _extract_suggested_stem(raw_output, fallback_stem)
                 if not is_valid_json:
                     raise ProviderCallError("INVALID_JSON_RESPONSE")
                 return AINameSuggestion(
@@ -339,7 +364,7 @@ def suggest_stem_with_ai(
                 break
 
     return AINameSuggestion(
-        stem=sanitize_filename_stem(Path(original_name).stem),
+        stem=sanitize_filename_stem(fallback_stem),
         provider="fallback",
         model="fallback",
         raw_output="",
