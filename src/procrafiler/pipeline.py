@@ -16,7 +16,7 @@ from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMis
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
 from procrafiler.naming import build_timestamped_filename
-from procrafiler.taxonomy import decide_route_for_filename  # type: ignore[reportMissingImports]
+from procrafiler.taxonomy import INTERIM_LIBRARY_DIR, dispatch_for_filename  # type: ignore[reportMissingImports]
 
 
 def _utc_iso(now_utc: datetime | None = None) -> str:
@@ -401,8 +401,8 @@ def _process_next_inbox_file(
         current_state = validate_transition(current_state, "CLASSIFICATION_READY")
         current_state = validate_transition(current_state, "ROUTE_PROPOSED")
 
-        route = decide_route_for_filename(source.name)
-        if route.needs_manual_review:
+        dispatch = dispatch_for_filename(source.name)
+        if not dispatch.can_dispatch:
             current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
             _append_action_log(
                 paths,
@@ -414,8 +414,8 @@ def _process_next_inbox_file(
                 path_before=str(source),
                 extra_fields={
                     "dry_run": True,
-                    "reason": route.reason,
-                    "matched_extension": route.matched_extension,
+                    "reason": dispatch.reason,
+                    "matched_extension": dispatch.matched_extension,
                 },
                 features=features,
             )
@@ -428,13 +428,14 @@ def _process_next_inbox_file(
             operation_id=operation_id,
             action="dry_run_route_to_library",
             status="success",
-            message="Dry-run routed file to library",
+            message="Dry-run routed file to interim review pending AI classification",
             now_utc=now_utc,
             path_before=str(analysis_path),
             extra_fields={
                 "dry_run": True,
-                    "target_route": "/".join(route.relative_dir or ("Revue_Manuelle",)),
-                "matched_extension": route.matched_extension,
+                "target_route": "/".join(INTERIM_LIBRARY_DIR),
+                "media_type": dispatch.media_type,
+                "matched_extension": dispatch.matched_extension,
             },
             features=features,
         )
@@ -473,8 +474,8 @@ def _process_next_inbox_file(
     current_state = validate_transition(current_state, "CLASSIFICATION_READY")
     current_state = validate_transition(current_state, "ROUTE_PROPOSED")
 
-    route = decide_route_for_filename(queued_target.name)
-    if route.needs_manual_review:
+    dispatch = dispatch_for_filename(queued_target.name)
+    if not dispatch.can_dispatch:
         current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
         now_iso = _utc_iso(now_utc)
         repo.upsert_document(
@@ -497,8 +498,8 @@ def _process_next_inbox_file(
             now_utc=now_utc,
             path_before=str(queued_target),
             extra_fields={
-                "reason": route.reason,
-                "matched_extension": route.matched_extension,
+                "reason": dispatch.reason,
+                "matched_extension": dispatch.matched_extension,
             },
             features=features,
         )
@@ -506,7 +507,11 @@ def _process_next_inbox_file(
 
     current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
 
-    route_dir = route.relative_dir or ("Revue_Manuelle",)
+    # No AI classifier yet: the extension told us the media type (how to read
+    # the file), but not its category. Until AI classification exists, every
+    # readable file lands in the interim review directory rather than a
+    # (wrongly) extension-derived category. See taxonomy.INTERIM_LIBRARY_DIR.
+    route_dir = INTERIM_LIBRARY_DIR
     target_dir = paths.library_root / Path(*route_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -567,13 +572,14 @@ def _process_next_inbox_file(
         operation_id=operation_id,
         action="move_to_library",
         status="success",
-        message="File moved to library",
+        message="File moved to interim review directory pending AI classification",
         now_utc=now_utc,
         path_before=str(queued_target),
         path_after=str(library_target),
         extra_fields={
             "target_route": "/".join(route_dir),
-            "matched_extension": route.matched_extension,
+            "media_type": dispatch.media_type,
+            "matched_extension": dispatch.matched_extension,
         },
         features=features,
     )
@@ -736,8 +742,8 @@ def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None
             if sha256 in known_hashes:
                 summary["duplicates"] += 1
             else:
-                route = decide_route_for_filename(candidate.name)
-                if route.needs_manual_review:
+                dispatch = dispatch_for_filename(candidate.name)
+                if not dispatch.can_dispatch:
                     summary["manual_reviews"] += 1
                     known_hashes.add(sha256)
                 else:

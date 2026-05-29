@@ -19,11 +19,27 @@ BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
 )
 
 
-_GROUPED_EXTENSION_ROUTES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("Personnel", "Documents"), ("pdf", "txt", "md", "rtf", "doc", "docx", "odt", "epub")),
-    (("Professionnel", "Documents"), ("xls", "xlsx", "ods", "csv", "tsv", "ppt", "pptx", "odp")),
+# Interim destination used while there is no AI classifier yet.
+#
+# The extension only tells us *how to read* a file (its media type), never
+# *where it belongs* (its category). The category is the job of AI
+# classification from the file content, which is not implemented yet. Until
+# then, every readable file lands here for a human (or, later, the AI) to
+# categorize. This is NOT an extension->category mapping — it is the explicit
+# absence of a category decision.
+INTERIM_LIBRARY_DIR: tuple[str, ...] = ("Revue_Manuelle",)
+
+
+# Extension -> media type. This is a TECHNICAL DISPATCH only: it decides which
+# processing capability can read the bytes (PDF extraction, OCR, image
+# analysis, plain-text reading, ...). It must NEVER be used to decide the
+# destination category. See docs/spec-mvp-v1.md §9-10.
+_GROUPED_MEDIA_TYPES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pdf", ("pdf",)),
+    ("text", ("txt", "md", "rtf", "doc", "docx", "odt", "epub")),
+    ("office", ("xls", "xlsx", "ods", "csv", "tsv", "ppt", "pptx", "odp")),
     (
-        ("Personnel", "Medias", "Images"),
+        "image",
         (
             "jpg",
             "jpeg",
@@ -49,10 +65,10 @@ _GROUPED_EXTENSION_ROUTES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] =
             "srw",
         ),
     ),
-    (("Personnel", "Medias", "Videos"), ("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "3gp")),
-    (("Personnel", "Medias", "Audio"), ("mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "wma", "aiff")),
+    ("video", ("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "mpg", "mpeg", "3gp")),
+    ("audio", ("mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "wma", "aiff")),
     (
-        ("Personnel", "Archives"),
+        "archive",
         (
             "zip",
             "rar",
@@ -72,22 +88,31 @@ _GROUPED_EXTENSION_ROUTES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] =
 )
 
 
-_EXTENSION_TO_ROUTE: dict[str, tuple[str, ...]] = {
-    ext: route
-    for route, exts in _GROUPED_EXTENSION_ROUTES
+_EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
+    ext: media_type
+    for media_type, exts in _GROUPED_MEDIA_TYPES
     for ext in exts
 }
 
 
 @dataclass(frozen=True)
-class RouteDecision:
-    relative_dir: tuple[str, ...] | None
+class DispatchDecision:
+    """Result of the technical dispatch step.
+
+    `media_type` is the reader class that can handle the file (pdf / text /
+    office / image / video / audio / archive), or None when the file cannot be
+    dispatched at all (no extension, or an extension we don't recognize). It is
+    deliberately NOT a destination folder — see the module docstring on
+    INTERIM_LIBRARY_DIR.
+    """
+
+    media_type: str | None
     reason: str | None
     matched_extension: str | None
 
     @property
-    def needs_manual_review(self) -> bool:
-        return self.relative_dir is None
+    def can_dispatch(self) -> bool:
+        return self.media_type is not None
 
 
 def ensure_base_library_directories(library_root: Path) -> None:
@@ -95,20 +120,26 @@ def ensure_base_library_directories(library_root: Path) -> None:
         (library_root / Path(*relative_dir)).mkdir(parents=True, exist_ok=True)
 
 
-def decide_route_for_filename(filename: str) -> RouteDecision:
+def dispatch_for_filename(filename: str) -> DispatchDecision:
+    """Decide which reader/media type can process a file, from its extension.
+
+    This answers only "what kind of bytes is this, and therefore which reader
+    handles it" — never "where does it belong". Files with no extension or an
+    unrecognized extension cannot be dispatched and must go to manual review.
+    """
     suffixes = [suffix.lower().lstrip(".") for suffix in Path(filename).suffixes if suffix]
     if not suffixes:
-        return RouteDecision(relative_dir=None, reason="no_extension", matched_extension=None)
+        return DispatchDecision(media_type=None, reason="no_extension", matched_extension=None)
 
     if len(suffixes) >= 2:
         compound_extension = f"{suffixes[-2]}.{suffixes[-1]}"
-        route = _EXTENSION_TO_ROUTE.get(compound_extension)
-        if route is not None:
-            return RouteDecision(relative_dir=route, reason=None, matched_extension=compound_extension)
+        media_type = _EXTENSION_TO_MEDIA_TYPE.get(compound_extension)
+        if media_type is not None:
+            return DispatchDecision(media_type=media_type, reason=None, matched_extension=compound_extension)
 
     extension = suffixes[-1]
-    route = _EXTENSION_TO_ROUTE.get(extension)
-    if route is None:
-        return RouteDecision(relative_dir=None, reason="unknown_extension", matched_extension=extension)
+    media_type = _EXTENSION_TO_MEDIA_TYPE.get(extension)
+    if media_type is None:
+        return DispatchDecision(media_type=None, reason="unknown_extension", matched_extension=extension)
 
-    return RouteDecision(relative_dir=route, reason=None, matched_extension=extension)
+    return DispatchDecision(media_type=media_type, reason=None, matched_extension=extension)

@@ -29,7 +29,11 @@ class TestPipeline(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_process_new_file_to_library(self) -> None:
+    def test_process_new_file_to_interim_review(self) -> None:
+        # Until AI classification exists, a readable file (known extension) is
+        # ingested into the interim review directory (Revue_Manuelle) rather
+        # than a wrongly extension-derived category. The extension only told us
+        # how to read it, not where it belongs.
         source = self.paths.inbox_dir / "my doc.pdf"
         source.write_bytes(b"hello-world")
 
@@ -38,13 +42,17 @@ class TestPipeline(unittest.TestCase):
         )
         self.assertEqual(status, "LIBRARY_STORED")
 
-        target_dir = self.paths.library_root / "Personnel" / "Documents"
+        # The file must NOT land in an extension-derived semantic category.
+        self.assertFalse((self.paths.library_root / "Personnel" / "Documents").exists()
+                         and list((self.paths.library_root / "Personnel" / "Documents").iterdir()))
+
+        target_dir = self.paths.library_root / "Revue_Manuelle"
         self.assertTrue(target_dir.exists())
         files = list(target_dir.iterdir())
         self.assertEqual(len(files), 1)
         self.assertTrue(files[0].name.startswith("2026-04-02_10-11-12__"))
 
-        mirror_target_dir = self.paths.mirror_root / "Personnel" / "Documents"
+        mirror_target_dir = self.paths.mirror_root / "Revue_Manuelle"
         self.assertTrue(mirror_target_dir.exists())
         mirror_files = list(mirror_target_dir.iterdir())
         self.assertEqual(len(mirror_files), 1)
@@ -65,6 +73,11 @@ class TestPipeline(unittest.TestCase):
         events = [json.loads(line) for line in lines]
         self.assertTrue(any(e["action"] == "mirror_sync_success" for e in events))
         self.assertTrue(any(e["action"] == "ai_naming_fallback" for e in events))
+        # The move records the technical media type, not a semantic category.
+        move_events = [e for e in events if e["action"] == "move_to_library"]
+        self.assertEqual(len(move_events), 1)
+        self.assertEqual(move_events[0]["media_type"], "pdf")
+        self.assertEqual(move_events[0]["target_route"], "Revue_Manuelle")
 
     def test_process_duplicate_to_inbox_trash_manual(self) -> None:
         first = self.paths.inbox_dir / "doc-a.pdf"
