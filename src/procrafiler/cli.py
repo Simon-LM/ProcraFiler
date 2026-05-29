@@ -38,6 +38,7 @@ from procrafiler.config import (
     load_feature_settings,
     set_feature_flag,
 )
+from procrafiler.doctor import format_report, overall_exit_code, run_doctor
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
 from procrafiler.pipeline import (
     LibraryTrashError,
@@ -64,6 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init-layout", help="Create workspace, state folders, and metadata files")
     subparsers.add_parser("features", help="List feature flags")
     subparsers.add_parser("policy-effective", help="Show effective runtime policy values")
+    subparsers.add_parser(
+        "doctor",
+        help="Diagnose paths, env, AI config, catalog schema, and lock state. Exit non-zero on any FAIL.",
+    )
 
     process_once = subparsers.add_parser("process-once", help="Process one file from Inbox")
     process_once.add_argument("--dry-run", action="store_true", help="Simulate one processing cycle")
@@ -252,6 +257,14 @@ def cmd_purge_mirror_trash(days: int | None) -> int:
     return 0
 
 
+def cmd_doctor() -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    checks = run_doctor(paths)
+    print(format_report(checks))
+    return overall_exit_code(checks)
+
+
 def cmd_library_trash(path_str: str) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -288,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_features()
     if args.command == "policy-effective":
         return cmd_policy_effective()
+    if args.command == "doctor":
+        return cmd_doctor()
     if args.command == "feature-set":
         return cmd_feature_set(args.feature, args.state)
     if args.command == "process-once":
