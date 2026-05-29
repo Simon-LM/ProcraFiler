@@ -13,6 +13,7 @@ from uuid import uuid4
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
+from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
 from procrafiler.naming import build_timestamped_filename
@@ -506,6 +507,28 @@ def _process_next_inbox_file(
         return ProcessResult(current_state, mirror_failed=False)
 
     current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
+
+    # Read the content locally (no AI call here). For text files and readable
+    # PDFs this yields the text that AI naming/classification will consume once
+    # those land; for scans/images it records which AI reader is still needed.
+    extraction = extract_text_content(queued_target, dispatch.media_type or "")
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="content_read",
+        status="success",
+        message="Local content extraction completed",
+        now_utc=now_utc,
+        path_before=str(queued_target),
+        extra_fields={
+            "media_type": dispatch.media_type,
+            "reason": extraction.reason,
+            "text_chars": len(extraction.text) if extraction.text is not None else 0,
+            "needs_ai_reader": extraction.needs_ai_reader,
+            "reader_hint": extraction.reader_hint,
+        },
+        features=features,
+    )
 
     # No AI classifier yet: the extension told us the media type (how to read
     # the file), but not its category. Until AI classification exists, every

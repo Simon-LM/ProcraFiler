@@ -22,7 +22,9 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11"
 ]
-dependencies = []
+dependencies = [
+  "pypdf>=6,<7",
+]
 
 [project.urls]
 Homepage = "https://simon-lm.dev"
