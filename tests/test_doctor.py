@@ -38,6 +38,13 @@ class TestDoctor(unittest.TestCase):
         os.environ["PROCRAFILER_LIBRARY_MIRROR_DIR"] = str(root / "ProcraFiler_Library_Mirror")
         os.environ["PROCRAFILER_HOME"] = str(root / ".state")
         os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
+        # These tests assert on the AI config the doctor sees, so start from a
+        # clean slate: drop any AI chain / key left in the environment by an
+        # earlier test (e.g. one that loaded the repo .env via the CLI). Each
+        # test sets the specific chain/key it needs.
+        for key in [k for k in os.environ if k.startswith("PROCRAFILER_AI_")]:
+            os.environ.pop(key, None)
+        os.environ.pop("MISTRAL_API_KEY", None)
         self.paths = default_runtime_paths()
         ensure_runtime_layout(self.paths)
 
