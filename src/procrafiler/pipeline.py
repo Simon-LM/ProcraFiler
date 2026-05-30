@@ -14,6 +14,7 @@ from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
 from procrafiler.ai_classification import classify_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
+from procrafiler.ai_reader import read_with_ocr  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
@@ -537,15 +538,50 @@ def _process_next_inbox_file(
         features=features,
     )
 
+    # The unified content text: what we read locally, or — for scanned PDFs —
+    # what the OCR reader produces. Naming and classification both consume it.
+    content_text = extraction.text
+    if (content_text is None or not content_text.strip()) and extraction.reader_hint == "ocr":
+        ocr_result = read_with_ocr(queued_target)
+        if ocr_result.text and ocr_result.text.strip():
+            content_text = ocr_result.text
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="ocr_read_success",
+                status="success",
+                message="OCR read scanned document",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={
+                    "provider": ocr_result.provider,
+                    "model": ocr_result.model,
+                    "text_chars": len(ocr_result.text),
+                },
+                features=features,
+            )
+        else:
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="ocr_read_unavailable",
+                status="warning",
+                message="OCR unavailable or empty, routing to manual review",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={"reason": ocr_result.reason},
+                features=features,
+            )
+
     # Classify from the content. The category is decided by AI from what the
     # file CONTAINS, never from its extension or original name. Files we can't
-    # read locally yet (scans/images awaiting their OCR/vision reader) and any
-    # uncertain/unconfigured AI outcome fall back to the interim review bucket
-    # — never to a guessed category.
+    # read at all (images awaiting their vision reader, or OCR unavailable) and
+    # any uncertain/unconfigured AI outcome fall back to the interim review
+    # bucket — never to a guessed category.
     route_dir = INTERIM_LIBRARY_DIR
-    if extraction.text is not None and extraction.text.strip():
+    if content_text is not None and content_text.strip():
         allowed = [category_label(c) for c in classifiable_categories()]
-        classification = classify_content(extraction.text, allowed_categories=allowed)
+        classification = classify_content(content_text, allowed_categories=allowed)
         chosen = category_from_label(classification.category) if classification.category else None
         if chosen is not None:
             route_dir = chosen
@@ -584,10 +620,11 @@ def _process_next_inbox_file(
     target_dir = paths.library_root / Path(*route_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Name from the content the reader produced, not the original filename.
-    # When there is no readable content yet (scans/images awaiting OCR/vision),
-    # suggest_stem_with_ai falls back to the filename stem as a last resort.
-    naming_content = extraction.text if (extraction.text and extraction.text.strip()) else ""
+    # Name from the content the reader produced (local extraction or OCR), not
+    # the original filename. When there is no readable content (images awaiting
+    # their vision reader, or OCR unavailable), suggest_stem_with_ai falls back
+    # to the filename stem as a last resort.
+    naming_content = content_text if (content_text and content_text.strip()) else ""
     name_suggestion = suggest_stem_with_ai(
         naming_content,
         fallback_stem=Path(queued_target.name).stem,
