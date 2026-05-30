@@ -14,7 +14,7 @@ from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
 from procrafiler.ai_classification import classify_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
-from procrafiler.ai_reader import read_with_ocr  # type: ignore[reportMissingImports]
+from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
@@ -538,8 +538,9 @@ def _process_next_inbox_file(
         features=features,
     )
 
-    # The unified content text: what we read locally, or — for scanned PDFs —
-    # what the OCR reader produces. Naming and classification both consume it.
+    # The unified content text: what we read locally, or — for scanned PDFs and
+    # images — what the OCR / vision reader produces. Naming and classification
+    # both consume it.
     content_text = extraction.text
     if (content_text is None or not content_text.strip()) and extraction.reader_hint == "ocr":
         ocr_result = read_with_ocr(queued_target)
@@ -570,6 +571,37 @@ def _process_next_inbox_file(
                 now_utc=now_utc,
                 path_before=str(queued_target),
                 extra_fields={"reason": ocr_result.reason},
+                features=features,
+            )
+    elif (content_text is None or not content_text.strip()) and extraction.reader_hint == "vision":
+        vision_result = read_with_vision(queued_target)
+        if vision_result.text and vision_result.text.strip():
+            content_text = vision_result.text
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="vision_read_success",
+                status="success",
+                message="Vision model read image",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={
+                    "provider": vision_result.provider,
+                    "model": vision_result.model,
+                    "text_chars": len(vision_result.text),
+                },
+                features=features,
+            )
+        else:
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="vision_read_unavailable",
+                status="warning",
+                message="Vision reader unavailable or empty, routing to manual review",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={"reason": vision_result.reason},
                 features=features,
             )
 
