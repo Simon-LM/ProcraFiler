@@ -108,9 +108,7 @@ The media folders (`Personnel/Medias/...`) are themselves content-decided destin
 
 ## AI Naming (MVP)
 
-The new filename is derived from the AI's reading of the file **content**, not from the original filename (which is never trusted). The AI returns a descriptive stem, which ProcraFiler places under a UTC timestamp prefix.
-
-> Note: in the current MVP code, the naming pass still receives the original filename as a placeholder input. This is a known gap — naming will be driven by the content-reading capabilities (OCR / PDF extraction / image analysis) once those exist, per the operating principle above.
+The new filename is derived from the AI's reading of the file **content**, not from the original filename (which is never trusted). The AI returns a descriptive stem, which ProcraFiler places under a UTC timestamp prefix. The original filename survives only as a deterministic last-resort fallback when no content can be read and the AI is unavailable.
 
 Expected AI output format:
 
@@ -144,6 +142,28 @@ Environment variables:
 - `PROCRAFILER_AI_TIMEOUT` / `PROCRAFILER_AI_RETRIES` (global defaults)
 - `PROCRAFILER_AI_NAMING_TIMEOUT` / `PROCRAFILER_AI_NAMING_RETRIES` (task override)
 - `MISTRAL_API_KEY` (required for Mistral calls)
+
+## Commands
+
+Processing (the core loop):
+
+```bash
+procrafiler process-once            # process one file from the Inbox
+procrafiler process-once --dry-run  # simulate, mutate nothing
+procrafiler process-all             # process every file currently in the Inbox
+procrafiler process-all --dry-run
+```
+
+Diagnostics and maintenance:
+
+```bash
+procrafiler doctor                  # check paths, env, AI config, catalog, lock (exit non-zero on FAIL)
+procrafiler reconcile-snapshot      # rebuild catalog_snapshot.json from the DB if they drifted
+procrafiler library-trash <path>    # move a library file to Library_Trash_Manual (you delete manually)
+procrafiler purge-mirror-trash      # delete old mirror backups from Mirror_Trash by TTL
+```
+
+Mutating commands (`process-*`, `library-trash`, `purge-mirror-trash`) take a runtime lock, so two runs never race on the same Inbox.
 
 ## Feature Controls (Terminal)
 
@@ -261,4 +281,13 @@ sudo ./scripts/uninstall.sh --mode system
 
 ## Project Status
 
-Initial skeleton is in place to start development of the classification engine, AI connectors, and safety pipelines.
+The IA-first core is implemented end to end:
+
+- **Reading** — every file is read for its content: text files and readable PDFs locally (via `pypdf`), scanned PDFs via Mistral OCR, images via a Mistral vision model.
+- **Naming** — the new filename is derived from that content.
+- **Classification** — the destination category is decided by AI from that content; uncertain or unreadable files go to manual review (`Revue_Manuelle`), never a guessed category.
+- **Safety** — the app never deletes your files: duplicates and removals are *moved* to dedicated trash folders for you to empty manually; the only deletion is the explicit `purge-mirror-trash` command, scoped to old mirror backups in `Mirror_Trash`.
+
+Every AI task is configured per the env variables above (provider/model never hardcoded); with no chain configured, files simply route to manual review.
+
+Not yet implemented: the optional `SUPERVISOR` control pass, and `VIDEO` / audio analysis (planned for a later phase). API request/response contracts for OCR and vision should be confirmed with a live key.

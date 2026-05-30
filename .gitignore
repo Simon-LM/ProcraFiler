@@ -28,3 +28,7 @@ venv/
 runtime/
 logs/
 history/
+
+# Local dev sandbox for manual / end-to-end testing (real files, generated
+# library/mirror/state, never committed)
+sandbox/
