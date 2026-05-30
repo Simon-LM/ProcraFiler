@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,34 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _iter_inbox_files(inbox_dir: Path) -> list[Path]:
+    """All files anywhere under the Inbox, recursively — but NEVER outside it.
+
+    Files dropped inside subfolders must be processed too (the AI re-classifies
+    them, so the original folder structure is irrelevant). Two safety rules keep
+    the scan strictly inside the Inbox:
+
+    - `os.walk(..., followlinks=False)` does not descend into symlinked
+      directories, so a symlinked folder can't drag the scan elsewhere.
+    - every candidate's resolved path must be under the resolved Inbox; anything
+      that escapes (e.g. a symlinked file pointing outside) is skipped.
+    """
+    inbox_root = inbox_dir.resolve()
+    files: list[Path] = []
+    for dirpath, _dirnames, filenames in os.walk(inbox_dir, followlinks=False):
+        for name in filenames:
+            candidate = Path(dirpath) / name
+            if not candidate.is_file():
+                continue
+            try:
+                candidate.resolve().relative_to(inbox_root)
+            except (OSError, ValueError):
+                # Resolves outside the Inbox (symlink escape) or is unreadable.
+                continue
+            files.append(candidate)
+    return sorted(files)
 
 
 def _ensure_unique_path(target: Path) -> Path:
@@ -335,7 +364,7 @@ def _process_next_inbox_file(
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
 
-    candidates = sorted([p for p in paths.inbox_dir.iterdir() if p.is_file()])
+    candidates = _iter_inbox_files(paths.inbox_dir)
     if not candidates:
         return ProcessResult("NOOP", mirror_failed=False)
 
@@ -881,7 +910,7 @@ def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None
         repo = CatalogRepository(paths.catalog_db_file)
         repo.init_schema()
         known_hashes = {doc["sha256"] for doc in repo.list_documents()}
-        for candidate in sorted([p for p in paths.inbox_dir.iterdir() if p.is_file()]):
+        for candidate in _iter_inbox_files(paths.inbox_dir):
             sha256 = _file_sha256(candidate)
             summary["total"] += 1
             if sha256 in known_hashes:
