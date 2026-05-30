@@ -27,7 +27,11 @@ class TestOcrPipeline(unittest.TestCase):
         self.now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
-        for key in ("PROCRAFILER_AI_OCR_PRIMARY", "PROCRAFILER_AI_CLASSIFICATION_PRIMARY"):
+        for key in (
+            "PROCRAFILER_AI_OCR_PRIMARY",
+            "PROCRAFILER_AI_IMAGE_PRIMARY",
+            "PROCRAFILER_AI_CLASSIFICATION_PRIMARY",
+        ):
             os.environ.pop(key, None)
         self.tmp.cleanup()
 
@@ -69,6 +73,34 @@ class TestOcrPipeline(unittest.TestCase):
         self.assertEqual(len(review_files), 1)
         events = self._events()
         self.assertTrue(any(e["action"] == "ocr_read_unavailable" for e in events))
+
+    def test_image_is_vision_read_then_classified(self) -> None:
+        os.environ["PROCRAFILER_AI_IMAGE_PRIMARY"] = "mistral:mistral-medium-latest"
+        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        (self.paths.inbox_dir / "photo.jpg").write_bytes(b"\xff\xd8\xff fake image bytes")
+
+        with patch("procrafiler.ai_reader.call_mistral_vision", return_value="Recu de carte bancaire, total 42 EUR"):
+            with patch(
+                "procrafiler.ai_classification.call_mistral_chat",
+                return_value='{"category": "Banque"}',
+            ):
+                status = process_next_inbox_file(self.paths, now_utc=self.now)
+
+        self.assertEqual(status, "LIBRARY_STORED")
+        banque_files = [p for p in (self.paths.library_root / "Banque").rglob("*") if p.is_file()]
+        self.assertEqual(len(banque_files), 1)
+        events = self._events()
+        self.assertTrue(any(e["action"] == "vision_read_success" for e in events))
+
+    def test_image_without_vision_chain_goes_to_manual_review(self) -> None:
+        (self.paths.inbox_dir / "photo.jpg").write_bytes(b"\xff\xd8\xff fake image bytes")
+        status = process_next_inbox_file(self.paths, now_utc=self.now)
+
+        self.assertEqual(status, "LIBRARY_STORED")
+        review_files = [p for p in (self.paths.library_root / "Revue_Manuelle").rglob("*") if p.is_file()]
+        self.assertEqual(len(review_files), 1)
+        events = self._events()
+        self.assertTrue(any(e["action"] == "vision_read_unavailable" for e in events))
 
 
 if __name__ == "__main__":
