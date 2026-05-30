@@ -11,11 +11,6 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ### Added
 
 - **The Inbox is now read recursively** — files dropped inside subfolders (any depth) are processed too, not just files at the Inbox root. The original folder structure is irrelevant (the AI re-classifies each file). A strict boundary guard keeps the scan inside the Inbox: `os.walk(followlinks=False)` does not descend into symlinked directories, and any file whose resolved path escapes the Inbox (e.g. a symlink pointing elsewhere on disk) is skipped. New `pipeline._iter_inbox_files`. New `tests/test_inbox_recursion.py` (4): a nested file is processed, deep nesting works, a symlinked file pointing outside the Inbox is ignored, and a symlinked directory escaping the Inbox is not descended.
-
-### Fixed
-
-- `tests/test_doctor.py` now clears any `PROCRAFILER_AI_*` chain and `MISTRAL_API_KEY` in `setUp`, so its AI-config assertions are deterministic even when another test has loaded the repo `.env` into the process environment (the CLI auto-loads `cwd/.env`). Each doctor test still sets the specific chain/key it needs.
-
 - **`docs/backlog.md`** — a running checklist of deferred work and open questions. Seeded with the first observed classification ambiguity (a manual for professional-grade equipment used as a hobby, classified `Professionnel` where `Personnel` was expected — the Perso/Pro split depends on the user's relationship to the document, not its content; cases are logged generically/anonymized), three candidate solutions to weigh once more cases are collected, and the known deferred features (SUPERVISOR, VIDEO/audio, automatic watcher) and open evaluations (live OCR/vision smoke test, `mistral-small` on images).
 
 - **Docs and config refreshed for the completed IA-first core.** `README.md`: removed the now-false "naming is a filename placeholder" note (naming derives from content since the naming change); rewrote "Project Status" to describe the implemented reading/naming/classification/safety behavior; added a "Commands" section documenting `process-once` / `process-all` (+ `--dry-run`), `doctor`, `reconcile-snapshot`, `library-trash`, and `purge-mirror-trash`. `.env.example`: per-task chains now show the recommended models (NAMING/CLASSIFICATION → `mistral-small-latest`, OCR → `mistral-ocr-latest`, IMAGE → `mistral-medium-latest`) and clearly mark which tasks are USED vs reserved (PDF readable is read locally; SUPERVISOR and VIDEO/audio are not implemented yet); notes that real env files are gitignored. `.gitignore`: added `sandbox/` for the local dev test area.
@@ -76,6 +71,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- `tests/test_doctor.py` now clears any `PROCRAFILER_AI_*` chain and `MISTRAL_API_KEY` in `setUp`, so its AI-config assertions are deterministic even when another test has loaded the repo `.env` into the process environment (the CLI auto-loads `cwd/.env`). Each doctor test still sets the specific chain/key it needs.
 - `tests/test_cli.py::test_purge_mirror_trash_cli` no longer drifts: it pins `PROCRAFILER_FAKE_NOW` so the CLI uses the same reference timestamp the test fabricates `mtime`s relative to. Previously the test silently broke as the real-world clock moved past the test's hand-crafted 2026-04-02 reference.
 
 ### Security
