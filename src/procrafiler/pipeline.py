@@ -74,6 +74,27 @@ def _iter_inbox_files(inbox_dir: Path) -> list[Path]:
     return sorted(files)
 
 
+def _resolve_document_date(ai_date: str | None, source_path: Path, now_utc: datetime | None) -> datetime:
+    """Pick the date used to prefix the stored filename.
+
+    Cascade: the date the AI found inside the document content (at midnight UTC —
+    a document states a day, not a time, and midnight keeps same-day files
+    grouped instead of scattered by processing seconds) → the file's
+    modification time → the processing time. This only affects the FILENAME
+    prefix; action-log and catalog timestamps keep the real processing time.
+    """
+    if ai_date:
+        try:
+            return datetime.strptime(ai_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        pass
+    return now_utc or datetime.now(timezone.utc)
+
+
 def _ensure_unique_path(target: Path) -> Path:
     if not target.exists():
         return target
@@ -724,7 +745,11 @@ def _process_next_inbox_file(
         )
 
     candidate_name = f"{name_suggestion.stem}{queued_target.suffix}"
-    final_name = build_timestamped_filename(candidate_name, now_utc=now_utc)
+    # Date the file by its CONTENT (the date the AI found in it), falling back to
+    # the file's mtime, then the processing time. Only the filename prefix uses
+    # this; logs/catalog keep the real processing time (now_utc).
+    document_dt = _resolve_document_date(name_suggestion.document_date, queued_target, now_utc)
+    final_name = build_timestamped_filename(candidate_name, now_utc=document_dt)
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
     current_state = validate_transition(current_state, "LIBRARY_STORED")

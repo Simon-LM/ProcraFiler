@@ -6,6 +6,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -24,6 +25,10 @@ class AINameSuggestion:
     raw_output: str
     used_fallback: bool
     reason: str | None
+    # The document's own date (YYYY-MM-DD) when the AI found one in the content,
+    # else None. Used by the pipeline to date the file by its content, not by
+    # the time it happened to be processed.
+    document_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -228,13 +233,31 @@ MAX_NAMING_CONTENT_CHARS = 6000
 def _build_naming_prompt(content: str) -> str:
     snippet = content[:MAX_NAMING_CONTENT_CHARS]
     return (
-        "Return JSON only with this exact schema: {\"stem\": \"...\"}. "
-        "The value must be a concise French title (without extension) that "
-        "describes what the document is, based on its content below. "
+        "Return JSON only with this exact schema: {\"stem\": \"...\", \"date\": \"...\"}.\n"
+        "- \"stem\": a concise French title (without extension) describing what the "
+        "document is, based on its content.\n"
+        "- \"date\": the document's own date as YYYY-MM-DD if one is clearly stated "
+        "in the content (e.g. a letter, invoice, or statement date); otherwise null.\n"
         "Do not add any other keys or commentary.\n\n"
         "Document content:\n"
         f"{snippet}"
     )
+
+
+def _extract_document_date(raw_output: str) -> str | None:
+    """Return the document's own date as YYYY-MM-DD if the model gave a valid one."""
+    payload = _extract_json_dict(raw_output)
+    if payload is None:
+        return None
+    value = payload.get("date")
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    try:
+        datetime.strptime(candidate, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return candidate
 
 
 def _extract_json_dict(raw_output: str) -> dict[str, Any] | None:
@@ -355,6 +378,7 @@ def suggest_stem_with_ai(
                     raw_output=raw_output,
                     used_fallback=False,
                     reason=None,
+                    document_date=_extract_document_date(raw_output),
                 )
             except (RateLimitedError, ProviderCallError) as exc:
                 last_error = str(exc)

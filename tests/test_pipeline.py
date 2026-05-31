@@ -36,6 +36,10 @@ class TestPipeline(unittest.TestCase):
         # how to read it, not where it belongs.
         source = self.paths.inbox_dir / "my doc.pdf"
         source.write_bytes(b"hello-world")
+        # No AI chain here, so the filename date comes from the file's mtime
+        # (the content-date cascade). Pin it so the prefix is deterministic.
+        mtime = datetime(2026, 4, 2, 10, 11, 12, tzinfo=timezone.utc).timestamp()
+        os.utime(source, (mtime, mtime))
 
         status: str = process_next_inbox_file(
             self.paths, now_utc=datetime(2026, 4, 2, 10, 11, 12, tzinfo=timezone.utc)
