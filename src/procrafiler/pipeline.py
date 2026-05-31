@@ -4,12 +4,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import move
 from typing import Any
 from uuid import uuid4
+
+# Optional live-progress callback: the CLI passes one to stream human-readable
+# lines as each file is processed (so the user can watch and interrupt). The
+# pipeline never prints directly — it only calls this when given.
+ProgressFn = Callable[[str], None]
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
@@ -371,7 +377,10 @@ class ProcessResult:
 
 
 def _process_next_inbox_file(
-    paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False
+    paths: RuntimePaths,
+    now_utc: datetime | None = None,
+    dry_run: bool = False,
+    progress: ProgressFn | None = None,
 ) -> ProcessResult:
     """Process one file from Inbox according to MVP flow rules.
 
@@ -384,6 +393,7 @@ def _process_next_inbox_file(
     """
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
+    emit: ProgressFn = progress or (lambda _message: None)
 
     candidates = _iter_inbox_files(paths.inbox_dir)
     if not candidates:
@@ -392,6 +402,11 @@ def _process_next_inbox_file(
     operation_id = str(uuid4())
     source = candidates[0]
     current_state = INITIAL_STATE
+    try:
+        display_name = str(source.relative_to(paths.inbox_dir))
+    except ValueError:
+        display_name = source.name
+    emit(f"→ {display_name}")
 
     _append_action_log(
         paths,
@@ -528,6 +543,7 @@ def _process_next_inbox_file(
             features=features,
         )
         _write_catalog_snapshot(paths, repo, now_utc, features=features)
+        emit("   duplicate → Inbox_Trash_Manual")
         return ProcessResult(current_state, mirror_failed=False)
 
     current_state = validate_transition(current_state, "CLASSIFICATION_READY")
@@ -562,6 +578,7 @@ def _process_next_inbox_file(
             },
             features=features,
         )
+        emit(f"   → manual review (unreadable: {dispatch.reason})")
         return ProcessResult(current_state, mirror_failed=False)
 
     current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
@@ -570,6 +587,14 @@ def _process_next_inbox_file(
     # PDFs this yields the text the AI classifier consumes below; for
     # scans/images it records which AI reader is still needed (built later).
     extraction = extract_text_content(queued_target, dispatch.media_type or "")
+    emit(
+        f"   read: {dispatch.media_type}"
+        + (
+            f", {len(extraction.text)} chars"
+            if extraction.text is not None
+            else f" (needs {extraction.reader_hint or 'AI reader'})"
+        )
+    )
     _append_action_log(
         paths,
         operation_id=operation_id,
@@ -611,6 +636,7 @@ def _process_next_inbox_file(
                 },
                 features=features,
             )
+            emit(f"   OCR: {len(ocr_result.text)} chars")
         else:
             _append_action_log(
                 paths,
@@ -623,6 +649,7 @@ def _process_next_inbox_file(
                 extra_fields={"reason": ocr_result.reason},
                 features=features,
             )
+            emit(f"   OCR unavailable ({ocr_result.reason})")
     elif (content_text is None or not content_text.strip()) and extraction.reader_hint == "vision":
         vision_result = read_with_vision(queued_target)
         if vision_result.text and vision_result.text.strip():
@@ -642,6 +669,7 @@ def _process_next_inbox_file(
                 },
                 features=features,
             )
+            emit(f"   vision: {len(vision_result.text)} chars")
         else:
             _append_action_log(
                 paths,
@@ -654,6 +682,7 @@ def _process_next_inbox_file(
                 extra_fields={"reason": vision_result.reason},
                 features=features,
             )
+            emit(f"   vision unavailable ({vision_result.reason})")
 
     # Classify from the content. The category is decided by AI from what the
     # file CONTAINS, never from its extension or original name. Files we can't
@@ -682,6 +711,7 @@ def _process_next_inbox_file(
                 },
                 features=features,
             )
+            emit(f"   classified → {classification.category}")
         else:
             _append_action_log(
                 paths,
@@ -698,8 +728,11 @@ def _process_next_inbox_file(
                 },
                 features=features,
             )
+            emit(f"   → manual review ({classification.reason})")
 
     target_dir = paths.library_root / Path(*route_dir)
+    if not target_dir.exists():
+        emit(f"   created folder: {'/'.join(route_dir)}")
     target_dir.mkdir(parents=True, exist_ok=True)
 
     # Name from the content the reader produced (local extraction or OCR), not
@@ -753,6 +786,7 @@ def _process_next_inbox_file(
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
     current_state = validate_transition(current_state, "LIBRARY_STORED")
+    emit(f"   filed → {'/'.join(route_dir)}/{library_target.name}")
 
     now_iso = _utc_iso(now_utc)
     repo.upsert_document(
@@ -794,14 +828,20 @@ def _process_next_inbox_file(
     return ProcessResult(current_state, mirror_failed=mirror_status == MIRROR_FAILED)
 
 
-def process_next_inbox_file(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> str:
+def process_next_inbox_file(
+    paths: RuntimePaths,
+    now_utc: datetime | None = None,
+    dry_run: bool = False,
+    progress: ProgressFn | None = None,
+) -> str:
     """Public entry point: process one inbox file and return its terminal state.
 
     Thin wrapper over `_process_next_inbox_file` that preserves the historical
     string return contract. Callers needing the mirror-failure flag (the batch
-    loop) call the internal helper directly.
+    loop) call the internal helper directly. `progress`, if given, receives
+    human-readable lines as the file is processed.
     """
-    return _process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run).flow_state
+    return _process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run, progress=progress).flow_state
 
 
 class LibraryTrashError(RuntimeError):
@@ -918,7 +958,12 @@ def move_library_file_to_trash(
     return new_state
 
 
-def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None, dry_run: bool = False) -> dict[str, int]:
+def process_all_inbox_files(
+    paths: RuntimePaths,
+    now_utc: datetime | None = None,
+    dry_run: bool = False,
+    progress: ProgressFn | None = None,
+) -> dict[str, int]:
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
 
@@ -967,7 +1012,7 @@ def process_all_inbox_files(paths: RuntimePaths, now_utc: datetime | None = None
         return summary
 
     while True:
-        result = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=False)
+        result = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=False, progress=progress)
         if result.flow_state == "NOOP":
             break
 

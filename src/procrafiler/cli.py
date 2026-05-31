@@ -196,6 +196,11 @@ def _print_lock_busy(err: RuntimeLockedError) -> None:
     print(f"ProcraFiler is already running, aborting. Lock file: {err.lock_path}", file=sys.stderr)
 
 
+def _live(message: str) -> None:
+    """Print a pipeline progress line in real time (so the user can watch/interrupt)."""
+    print(message, flush=True)
+
+
 def cmd_process_once(dry_run: bool = False) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -203,7 +208,7 @@ def cmd_process_once(dry_run: bool = False) -> int:
     try:
         with runtime_lock(paths):
             reconcile_catalog_snapshot(paths, now_utc=now_utc)
-            status = process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run)
+            status = process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run, progress=_live)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -218,7 +223,7 @@ def cmd_process_all(dry_run: bool = False) -> int:
     try:
         with runtime_lock(paths):
             reconcile_catalog_snapshot(paths, now_utc=now_utc)
-            summary = process_all_inbox_files(paths, now_utc=now_utc, dry_run=dry_run)
+            summary = process_all_inbox_files(paths, now_utc=now_utc, dry_run=dry_run, progress=_live)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
