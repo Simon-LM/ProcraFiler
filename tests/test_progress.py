@@ -45,7 +45,7 @@ class TestProgress(unittest.TestCase):
         os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
         (self.paths.inbox_dir / "rel.txt").write_bytes(b"Releve de compte bancaire")
         lines: list[str] = []
-        with patch("procrafiler.ai_classification.call_mistral_chat", return_value='{"category": "Banque"}'):
+        with patch("procrafiler.ai_classification.call_mistral_chat", return_value='{"path": "Banque"}'):
             process_all_inbox_files(self.paths, now_utc=self.now, progress=lines.append)
         joined = "\n".join(lines)
         self.assertIn("classified → Banque", joined)

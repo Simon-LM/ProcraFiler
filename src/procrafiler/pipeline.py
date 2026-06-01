@@ -18,7 +18,7 @@ from uuid import uuid4
 ProgressFn = Callable[[str], None]
 
 from procrafiler.catalog import CatalogRepository
-from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings
+from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings, load_runtime_policy
 from procrafiler.ai_classification import classify_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
@@ -28,10 +28,11 @@ from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[repor
 from procrafiler.naming import build_timestamped_filename
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
-    category_from_label,
     category_label,
     classifiable_categories,
     dispatch_for_filename,
+    existing_category_paths,
+    normalize_category_path,
 )
 
 
@@ -691,11 +692,15 @@ def _process_next_inbox_file(
     # bucket — never to a guessed category.
     route_dir = INTERIM_LIBRARY_DIR
     if content_text is not None and content_text.strip():
-        allowed = [category_label(c) for c in classifiable_categories()]
-        classification = classify_content(content_text, allowed_categories=allowed)
-        chosen = category_from_label(classification.category) if classification.category else None
-        if chosen is not None:
-            route_dir = chosen
+        base_categories = [category_label(c) for c in classifiable_categories()]
+        existing_paths = existing_category_paths(paths.library_root)
+        classification = classify_content(
+            content_text, base_categories=base_categories, existing_paths=existing_paths
+        )
+        max_depth = load_runtime_policy(paths).taxonomy_max_depth
+        validated = normalize_category_path(classification.path, max_depth) if classification.path else None
+        if validated is not None:
+            route_dir = validated
             _append_action_log(
                 paths,
                 operation_id=operation_id,
@@ -705,13 +710,14 @@ def _process_next_inbox_file(
                 now_utc=now_utc,
                 path_before=str(queued_target),
                 extra_fields={
-                    "category": classification.category,
+                    "category": "/".join(validated),
+                    "proposed_path": classification.path,
                     "provider": classification.provider,
                     "model": classification.model,
                 },
                 features=features,
             )
-            emit(f"   classified → {classification.category}")
+            emit(f"   classified → {'/'.join(validated)}")
         else:
             _append_action_log(
                 paths,
