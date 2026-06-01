@@ -97,6 +97,7 @@ The descriptive part comes from what the document *is*, established by reading i
 - `USER_CONFIRMATION_REQUIRED`
 - `ROUTE_CONFIRMED`
 - `LIBRARY_STORED`
+- `DECISION_PENDING` (catalog status: the AI was unsure but offered options; the file waits in the decisions queue until resolved by `review`, and is not mirrored until then)
 - `INBOX_TRASH_PENDING_MANUAL`
 - `ERROR_RETRYABLE`
 - `ERROR_BLOCKING`
@@ -128,7 +129,8 @@ Extension dispatch vs. classification:
 - The extension is a technical dispatch signal only: it selects which AI capability reads the file. It MUST NOT map to a destination category.
 - The destination category is always decided by AI classification from the file content, among the base branches below.
 - Unknown or missing extensions cannot be dispatched to a reader and are flagged for manual review with alert logs.
-- When AI classification is uncertain, the file is flagged for manual review.
+- When AI classification is uncertain but can still propose plausible folders, the file enters the **decisions queue** (`DECISION_PENDING`) with those options and waits for the user to choose via `review`; when it cannot even propose options, it is flagged for plain manual review.
+- New root branch creation is performed by the user during `review` (the AI may never create a top-level category).
 - Filename conflicts are resolved with deterministic numeric suffixes.
 
 MVP base branches include at least:

@@ -46,6 +46,7 @@ from procrafiler.pipeline import (
     process_all_inbox_files,
     process_next_inbox_file,
     reconcile_catalog_snapshot,
+    run_review,
 )
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
@@ -83,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "reconcile-snapshot",
         help="Compare catalog_snapshot.json against catalog.db and rewrite the snapshot if out of sync",
+    )
+
+    subparsers.add_parser(
+        "review",
+        help="Resolve the decisions queue: files the AI was unsure about, with its proposed options",
     )
 
     library_trash = subparsers.add_parser(
@@ -232,9 +238,12 @@ def cmd_process_all(dry_run: bool = False) -> int:
         f"processed: {summary['processed']}, "
         f"duplicates: {summary['duplicates']}, "
         f"manual_reviews: {summary['manual_reviews']}, "
+        f"pending_decisions: {summary['pending_decisions']}, "
         f"errors: {summary['errors']}, "
         f"mirror_failures: {summary['mirror_failures']}"
     )
+    if summary["pending_decisions"]:
+        print(f"  {summary['pending_decisions']} file(s) awaiting your decision — run: procrafiler review")
     return 0
 
 
@@ -330,6 +339,26 @@ def cmd_reconcile_snapshot() -> int:
     return 0
 
 
+def cmd_review() -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
+    try:
+        with runtime_lock(paths):
+            reconcile_catalog_snapshot(paths, now_utc=now_utc)
+            # Resolve input/print at call time so the interactive loop reads the
+            # real terminal (and tests can patch builtins.input).
+            summary = run_review(paths, input_fn=input, output_fn=print, now_utc=now_utc)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(
+        f"Review done: resolved {summary['resolved']}, "
+        f"skipped {summary['skipped']} of {summary['pending']} pending."
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_runtime_env()
     parser = build_parser()
@@ -357,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_library_trash(args.path)
     if args.command == "reconcile-snapshot":
         return cmd_reconcile_snapshot()
+    if args.command == "review":
+        return cmd_review()
 
     parser.print_help()
     return 1

@@ -33,6 +33,7 @@ from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     dispatch_for_filename,
     existing_category_paths,
     normalize_category_path,
+    normalize_review_path,
 )
 
 
@@ -369,12 +370,17 @@ class ProcessResult:
     `flow_state` is the terminal state string (same value the public
     `process_next_inbox_file` returns). `mirror_failed` is True only when a
     mirror sync was attempted and failed — never when it was skipped because
-    the mirror_sync feature is off. The batch loop tallies this inline
-    instead of re-reading the action log after every file.
+    the mirror_sync feature is off. `pending` is True when the file was parked
+    in the decisions queue (the AI was unsure and offered options): it is
+    physically in Revue_Manuelle with flow_state LIBRARY_STORED, but awaits
+    `review`, so the batch loop counts it separately from a settled placement.
+    The batch loop tallies these inline instead of re-reading the action log
+    after every file.
     """
 
     flow_state: str
     mirror_failed: bool
+    pending: bool = False
 
 
 def _process_next_inbox_file(
@@ -691,6 +697,8 @@ def _process_next_inbox_file(
     # any uncertain/unconfigured AI outcome fall back to the interim review
     # bucket — never to a guessed category.
     route_dir = INTERIM_LIBRARY_DIR
+    pending_options: list[str] | None = None
+    pending_reason: str | None = None
     if content_text is not None and content_text.strip():
         base_categories = [category_label(c) for c in classifiable_categories()]
         existing_paths = existing_category_paths(paths.library_root)
@@ -719,22 +727,56 @@ def _process_next_inbox_file(
             )
             emit(f"   classified → {'/'.join(validated)}")
         else:
-            _append_action_log(
-                paths,
-                operation_id=operation_id,
-                action="classification_manual_review",
-                status="warning",
-                message="AI classification unavailable or uncertain, routing to manual review",
-                now_utc=now_utc,
-                path_before=str(queued_target),
-                extra_fields={
-                    "reason": classification.reason,
-                    "provider": classification.provider,
-                    "model": classification.model,
-                },
-                features=features,
-            )
-            emit(f"   → manual review ({classification.reason})")
+            # No confident path. Collect the AI's alternatives (validated against
+            # the taxonomy, de-duplicated). If at least one survives, the file is
+            # a genuine decision-with-options → park it in the decisions queue for
+            # `review`. If none survive (AI unconfigured, hard failure, or all
+            # options invalid), fall back to plain manual review as before: a
+            # settled placement in Revue_Manuelle that IS mirrored.
+            options: list[str] = []
+            for alt in classification.alternatives:
+                normalized = normalize_category_path(alt, max_depth)
+                if normalized is not None:
+                    label = "/".join(normalized)
+                    if label not in options:
+                        options.append(label)
+            if options:
+                pending_options = options
+                pending_reason = classification.reason
+                _append_action_log(
+                    paths,
+                    operation_id=operation_id,
+                    action="decision_pending",
+                    status="warning",
+                    message="AI uncertain, parking file in the decisions queue for review",
+                    now_utc=now_utc,
+                    path_before=str(queued_target),
+                    extra_fields={
+                        "reason": classification.reason,
+                        "options": options,
+                        "provider": classification.provider,
+                        "model": classification.model,
+                    },
+                    features=features,
+                )
+                emit(f"   → decision pending ({len(options)} options)")
+            else:
+                _append_action_log(
+                    paths,
+                    operation_id=operation_id,
+                    action="classification_manual_review",
+                    status="warning",
+                    message="AI classification unavailable or uncertain, routing to manual review",
+                    now_utc=now_utc,
+                    path_before=str(queued_target),
+                    extra_fields={
+                        "reason": classification.reason,
+                        "provider": classification.provider,
+                        "model": classification.model,
+                    },
+                    features=features,
+                )
+                emit(f"   → manual review ({classification.reason})")
 
     target_dir = paths.library_root / Path(*route_dir)
     if not target_dir.exists():
@@ -795,14 +837,33 @@ def _process_next_inbox_file(
     emit(f"   filed → {'/'.join(route_dir)}/{library_target.name}")
 
     now_iso = _utc_iso(now_utc)
+    # A parked file is physically in Revue_Manuelle but NOT a settled placement:
+    # its status is DECISION_PENDING and it carries the AI's options for `review`.
+    # We deliberately do NOT mirror it — the mirror holds the durable library, and
+    # the destination will change once the user resolves the decision.
+    is_pending = bool(pending_options)
+    if is_pending:
+        pending_blob = json.dumps(
+            {
+                "options": pending_options,
+                "reason": pending_reason,
+                "snippet": (content_text or "")[:280],
+            }
+        )
+        catalog_status = "DECISION_PENDING"
+    else:
+        pending_blob = None
+        catalog_status = "LIBRARY_STORED"
+
     repo.upsert_document(
         doc_id=str(uuid4()),
         sha256=sha256,
         current_filename=library_target.name,
         current_path=str(library_target),
-        status="LIBRARY_STORED",
+        status=catalog_status,
         updated_at_utc=now_iso,
         flow_state=current_state,
+        pending_decision=pending_blob,
     )
     _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
@@ -822,6 +883,10 @@ def _process_next_inbox_file(
         },
         features=features,
     )
+
+    if is_pending:
+        # No mirror while the decision is pending.
+        return ProcessResult(current_state, mirror_failed=False, pending=True)
 
     mirror_status = _sync_to_mirror(
         paths,
@@ -964,6 +1029,162 @@ def move_library_file_to_trash(
     return new_state
 
 
+class PendingDecisionError(RuntimeError):
+    """Raised when a `review` resolution is rejected (invalid path, file gone)."""
+
+
+def resolve_pending_decision(
+    paths: RuntimePaths,
+    record: dict[str, Any],
+    chosen_label: str,
+    *,
+    now_utc: datetime | None = None,
+) -> tuple[str, ...]:
+    """Re-file one parked (DECISION_PENDING) document into the chosen category.
+
+    `record` is a row from `list_pending_decisions()`. `chosen_label` is the
+    user's pick — an existing option, an existing folder, or a brand-new path
+    (a new subfolder, or a new root category, which is allowed ONLY here). The
+    file moves out of Revue_Manuelle into the chosen category, the catalog entry
+    becomes LIBRARY_STORED with its pending decision cleared, and only now is the
+    file mirrored (it is finally a settled placement).
+    """
+    ensure_runtime_layout(paths)
+    features = load_feature_settings(paths)["features"]
+    max_depth = load_runtime_policy(paths).taxonomy_max_depth
+
+    target_route = normalize_review_path(chosen_label, max_depth)
+    if target_route is None:
+        raise PendingDecisionError(f"invalid category path: {chosen_label!r}")
+
+    source = Path(str(record["current_path"]))
+    if not source.exists() or not source.is_file():
+        raise PendingDecisionError(f"file to re-file is missing: {source}")
+
+    operation_id = str(uuid4())
+    target_dir = paths.library_root / Path(*target_route)
+    created_folder = not target_dir.exists()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    library_target = _ensure_unique_path(target_dir / source.name)
+    move(str(source), str(library_target))
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    repo.upsert_document(
+        doc_id=str(record["doc_id"]),
+        sha256=str(record["sha256"]),
+        current_filename=library_target.name,
+        current_path=str(library_target),
+        status="LIBRARY_STORED",
+        updated_at_utc=_utc_iso(now_utc),
+        flow_state="LIBRARY_STORED",
+        pending_decision=None,  # decision resolved → leave the queue
+    )
+    _write_catalog_snapshot(paths, repo, now_utc, features=features)
+
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="decision_resolved",
+        status="success",
+        message="User resolved a pending decision; file re-filed from review queue",
+        now_utc=now_utc,
+        path_before=str(source),
+        path_after=str(library_target),
+        extra_fields={
+            "chosen_path": "/".join(target_route),
+            "chosen_label": chosen_label,
+            "created_folder": created_folder,
+        },
+        features=features,
+    )
+
+    _sync_to_mirror(
+        paths,
+        operation_id=operation_id,
+        library_file=library_target,
+        now_utc=now_utc,
+        features=features,
+    )
+    return target_route
+
+
+InputFn = Callable[[str], str]
+OutputFn = Callable[[str], None]
+
+
+def run_review(
+    paths: RuntimePaths,
+    *,
+    input_fn: InputFn = input,
+    output_fn: OutputFn = print,
+    now_utc: datetime | None = None,
+) -> dict[str, int]:
+    """Interactively resolve the decisions queue (files the AI was unsure about).
+
+    For each parked file we show the AI's options and let the user pick a number,
+    type a custom path (new subfolder or new root category), or skip. `input_fn`
+    / `output_fn` are injectable so the loop is testable without a real terminal.
+    The caller is responsible for holding the runtime lock.
+    """
+    ensure_runtime_layout(paths)
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    pending = repo.list_pending_decisions()
+
+    summary = {"pending": len(pending), "resolved": 0, "skipped": 0}
+    if not pending:
+        output_fn("No decisions pending.")
+        return summary
+
+    output_fn(f"{len(pending)} decision(s) pending.")
+    for record in pending:
+        raw_blob = record.get("pending_decision")
+        try:
+            data = json.loads(raw_blob) if raw_blob else {}
+        except (TypeError, ValueError):
+            data = {}
+        options = [o for o in data.get("options", []) if isinstance(o, str)]
+        reason = data.get("reason")
+        snippet = (data.get("snippet") or "").strip().replace("\n", " ")
+
+        output_fn("")
+        output_fn(f"File: {record['current_filename']}")
+        if reason:
+            output_fn(f"  Why pending: {reason}")
+        if snippet:
+            output_fn(f"  Snippet: {snippet[:160]}")
+        if options:
+            output_fn("  Options:")
+            for index, option in enumerate(options, start=1):
+                output_fn(f"    {index}) {option}")
+        else:
+            output_fn("  (no AI options — type a category path)")
+        output_fn("  Choose a number, or type a custom path (new subfolder or new root), or 's' to skip.")
+
+        choice = (input_fn("  > ") or "").strip()
+        if choice.lower() in {"", "s", "skip"}:
+            summary["skipped"] += 1
+            output_fn("  skipped")
+            continue
+
+        if choice.isdigit() and 1 <= int(choice) <= len(options):
+            chosen_label = options[int(choice) - 1]
+        else:
+            chosen_label = choice  # custom path (existing folder, new subfolder, or new root)
+
+        try:
+            route = resolve_pending_decision(paths, record, chosen_label, now_utc=now_utc)
+        except PendingDecisionError as exc:
+            output_fn(f"  error: {exc}")
+            summary["skipped"] += 1
+            continue
+        summary["resolved"] += 1
+        output_fn(f"  filed → {'/'.join(route)}")
+
+    return summary
+
+
 def process_all_inbox_files(
     paths: RuntimePaths,
     now_utc: datetime | None = None,
@@ -977,6 +1198,7 @@ def process_all_inbox_files(
         "processed": 0,
         "duplicates": 0,
         "manual_reviews": 0,
+        "pending_decisions": 0,
         "errors": 0,
         "mirror_failures": 0,
         "total": 0,
@@ -1023,7 +1245,9 @@ def process_all_inbox_files(
             break
 
         summary["total"] += 1
-        if result.flow_state == "LIBRARY_STORED":
+        if result.pending:
+            summary["pending_decisions"] += 1
+        elif result.flow_state == "LIBRARY_STORED":
             summary["processed"] += 1
         elif result.flow_state == "INBOX_TRASH_PENDING_MANUAL":
             summary["duplicates"] += 1
@@ -1043,8 +1267,8 @@ def process_all_inbox_files(
         message=(
             "Batch completed: "
             f"processed={summary['processed']}, duplicates={summary['duplicates']}, "
-            f"manual_reviews={summary['manual_reviews']}, errors={summary['errors']}, "
-            f"mirror_failures={summary['mirror_failures']}"
+            f"manual_reviews={summary['manual_reviews']}, pending_decisions={summary['pending_decisions']}, "
+            f"errors={summary['errors']}, mirror_failures={summary['mirror_failures']}"
         ),
         now_utc=now_utc,
         extra_fields={"dry_run": False},

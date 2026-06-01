@@ -32,6 +32,10 @@ class CatalogRepository:
             existing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
             if "flow_state" not in existing_columns:
                 conn.execute("ALTER TABLE documents ADD COLUMN flow_state TEXT")
+            if "pending_decision" not in existing_columns:
+                # JSON blob describing a parked decision (options + reason +
+                # snippet) for files awaiting `procrafiler review`. NULL otherwise.
+                conn.execute("ALTER TABLE documents ADD COLUMN pending_decision TEXT")
             conn.commit()
 
     def upsert_document(
@@ -44,25 +48,42 @@ class CatalogRepository:
         status: str,
         updated_at_utc: str,
         flow_state: str | None = None,
+        pending_decision: str | None = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO documents (
-                    doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state
+                    doc_id, sha256, current_filename, current_path, status, updated_at_utc,
+                    flow_state, pending_decision
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                     sha256=excluded.sha256,
                     current_filename=excluded.current_filename,
                     current_path=excluded.current_path,
                     status=excluded.status,
                     updated_at_utc=excluded.updated_at_utc,
-                    flow_state=excluded.flow_state
+                    flow_state=excluded.flow_state,
+                    pending_decision=excluded.pending_decision
                 """,
-                (doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state),
+                (doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state, pending_decision),
             )
             conn.commit()
+
+    def list_pending_decisions(self) -> list[dict[str, str | None]]:
+        """Documents parked for `review` (status DECISION_PENDING), oldest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc,
+                       flow_state, pending_decision
+                FROM documents
+                WHERE status = 'DECISION_PENDING'
+                ORDER BY updated_at_utc ASC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def has_sha256(self, sha256: str) -> bool:
         with self._connect() as conn:

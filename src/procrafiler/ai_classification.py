@@ -15,7 +15,7 @@ routes the file to manual review. The AI never forces a destination (spec §7).
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from procrafiler.ai_naming import (  # type: ignore[reportMissingImports]
@@ -46,6 +46,9 @@ class ClassificationResult:
     raw_output: str
     used_fallback: bool
     reason: str | None
+    # Candidate paths the AI considered — shown to the user by `review` when the
+    # file lands in the decisions queue (uncertain / no confident path).
+    alternatives: list[str] = field(default_factory=list)
 
 
 def _build_classification_prompt(text: str, base_categories: list[str], existing_paths: list[str]) -> str:
@@ -54,7 +57,8 @@ def _build_classification_prompt(text: str, base_categories: list[str], existing
     snippet = text[:MAX_CONTENT_CHARS]
     return (
         "You file a document into a folder tree, based on its content.\n"
-        "Return JSON only, with this exact schema: {\"path\": \"...\"}.\n\n"
+        "Return JSON only, with this exact schema: "
+        "{\"path\": \"...\", \"alternatives\": [\"...\", \"...\"]}.\n\n"
         "Rules:\n"
         "- \"path\" MUST start with one of these existing base categories "
         "(you may NOT invent a new top-level category):\n"
@@ -65,7 +69,9 @@ def _build_classification_prompt(text: str, base_categories: list[str], existing
         "folder fits. Use short, normalized names (no accents needed).\n"
         "- If you are confident about the base category but unsure about "
         "subfolders, return just the base category.\n"
-        "- If you truly cannot tell, return {\"path\": null}.\n"
+        "- If you truly cannot tell, set \"path\" to null.\n"
+        "- \"alternatives\": up to 3 other plausible paths (each also under a base "
+        "category). Always provide some when you are unsure.\n"
         "- Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"
         f"{tree}\n\n"
@@ -74,14 +80,19 @@ def _build_classification_prompt(text: str, base_categories: list[str], existing
     )
 
 
-def _extract_path(raw_output: str) -> str | None:
+def _extract_path_and_alternatives(raw_output: str) -> tuple[str | None, list[str]]:
     payload = _extract_json_dict(raw_output)
     if payload is None:
-        return None
-    value = payload.get("path")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return value.strip().strip("/")
+        return None, []
+    raw_path = payload.get("path")
+    path = raw_path.strip().strip("/") if isinstance(raw_path, str) and raw_path.strip() else None
+    alternatives: list[str] = []
+    raw_alts = payload.get("alternatives")
+    if isinstance(raw_alts, list):
+        for alt in raw_alts:
+            if isinstance(alt, str) and alt.strip():
+                alternatives.append(alt.strip().strip("/"))
+    return path, alternatives
 
 
 def classify_content(
@@ -122,19 +133,31 @@ def classify_content(
                 else:
                     raise ProviderCallError(f"unsupported_provider:{entry.provider}")
 
-                path = _extract_path(raw_output)
-                if path is None:
-                    # Invalid JSON, missing, or explicit null/uncertain. Retry /
-                    # fail over; if it persists the file ends up in manual review.
-                    raise ProviderCallError("UNCLASSIFIED_OR_UNCERTAIN")
-                return ClassificationResult(
-                    path=path,
-                    provider=entry.provider,
-                    model=entry.model,
-                    raw_output=raw_output,
-                    used_fallback=False,
-                    reason=None,
-                )
+                path, alternatives = _extract_path_and_alternatives(raw_output)
+                if path is not None:
+                    return ClassificationResult(
+                        path=path,
+                        provider=entry.provider,
+                        model=entry.model,
+                        raw_output=raw_output,
+                        used_fallback=False,
+                        reason=None,
+                        alternatives=alternatives,
+                    )
+                if alternatives:
+                    # The AI deliberately declined to pick (null path) but offered
+                    # options → not an error, route to the decisions queue.
+                    return ClassificationResult(
+                        path=None,
+                        provider=entry.provider,
+                        model=entry.model,
+                        raw_output=raw_output,
+                        used_fallback=True,
+                        reason="uncertain_with_options",
+                        alternatives=alternatives,
+                    )
+                # No path and no options (or unparseable). Retry / fail over.
+                raise ProviderCallError("UNCLASSIFIED_OR_UNCERTAIN")
             except (RateLimitedError, ProviderCallError) as exc:
                 last_error = str(exc)
                 if attempt < retry_count:
