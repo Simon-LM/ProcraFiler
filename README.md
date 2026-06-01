@@ -152,7 +152,10 @@ procrafiler process-once            # process one file from the Inbox
 procrafiler process-once --dry-run  # simulate, mutate nothing
 procrafiler process-all             # process every file currently in the Inbox
 procrafiler process-all --dry-run
+procrafiler review                  # resolve files the AI was unsure about (the decisions queue)
 ```
+
+When the AI cannot confidently place a file but has plausible candidates, it does not guess: the file is parked in the **decisions queue** (`Revue_Manuelle`, status `DECISION_PENDING`) and `process-all` tells you how many are waiting. `procrafiler review` walks them one by one, showing the AI's options — you pick one, type a custom path (a new subfolder, or a brand-new top-level category, which is allowed only here), or skip. Only once you resolve a file is it re-filed and mirrored.
 
 Diagnostics and maintenance:
 
@@ -285,7 +288,7 @@ The IA-first core is implemented end to end:
 
 - **Reading** — every file is read for its content: text files and readable PDFs locally (via `pypdf`), scanned PDFs via Mistral OCR, images via a Mistral vision model.
 - **Naming** — the new filename is derived from that content.
-- **Classification** — the destination category is decided by AI from that content; uncertain or unreadable files go to manual review (`Revue_Manuelle`), never a guessed category.
+- **Classification** — the destination category is decided by AI from that content, never a guessed category. When the AI is unsure but has candidates, the file enters the **decisions queue** for you to resolve with `procrafiler review`; truly unreadable or optionless files go to plain manual review (`Revue_Manuelle`).
 - **Safety** — the app never deletes your files: duplicates and removals are *moved* to dedicated trash folders for you to empty manually; the only deletion is the explicit `purge-mirror-trash` command, scoped to old mirror backups in `Mirror_Trash`.
 
 Every AI task is configured per the env variables above (provider/model never hardcoded); with no chain configured, files simply route to manual review.

@@ -9,9 +9,11 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from procrafiler.cli import main  # type: ignore[reportMissingImports]
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
+from procrafiler.pipeline import process_next_inbox_file
 
 
 class TestCliMirrorPurge(unittest.TestCase):
@@ -99,6 +101,51 @@ class TestCliMirrorPurge(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("removed: 1", out.getvalue())
         self.assertFalse(old_file.exists())
+
+
+class TestCliReview(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        os.environ["PROCRAFILER_WORKSPACE_DIR"] = str(root / "ProcraFiler_Inbox")
+        os.environ["PROCRAFILER_LIBRARY_DIR"] = str(root / "ProcraFiler_Library")
+        os.environ["PROCRAFILER_LIBRARY_MIRROR_DIR"] = str(root / "ProcraFiler_Library_Mirror")
+        os.environ["PROCRAFILER_HOME"] = str(root / ".state")
+        os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
+        self.paths = default_runtime_paths()
+        ensure_runtime_layout(self.paths)
+
+    def tearDown(self) -> None:
+        os.environ.pop("PROCRAFILER_FAKE_NOW", None)
+        os.environ.pop("PROCRAFILER_AI_CLASSIFICATION_PRIMARY", None)
+        self.tmp.cleanup()
+
+    def _park_one(self) -> None:
+        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        (self.paths.inbox_dir / "lettre.txt").write_bytes(b"contenu ambigu")
+        now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
+        with patch(
+            "procrafiler.ai_classification.call_mistral_chat",
+            return_value=json.dumps({"path": None, "alternatives": ["Banque", "Administratif/Impots"]}),
+        ):
+            process_next_inbox_file(self.paths, now_utc=now)
+
+    def test_review_no_pending(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(["review"])
+        self.assertEqual(code, 0)
+        self.assertIn("No decisions pending.", out.getvalue())
+
+    def test_review_resolves_via_cli_stdin(self) -> None:
+        self._park_one()
+        out = io.StringIO()
+        with redirect_stdout(out), patch("builtins.input", return_value="1"):
+            code = main(["review"])
+        self.assertEqual(code, 0)
+        self.assertIn("resolved 1", out.getvalue())
+        filed = [p for p in (self.paths.library_root / "Banque").rglob("*") if p.is_file()]
+        self.assertEqual(len(filed), 1)
 
 
 if __name__ == "__main__":

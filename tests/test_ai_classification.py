@@ -75,6 +75,39 @@ class TestAiClassification(unittest.TestCase):
     def test_returns_classification_result_type(self) -> None:
         self.assertIsInstance(_classify("x", chain=[]), ClassificationResult)
 
+    def test_confident_path_carries_alternatives(self) -> None:
+        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        raw = '{"path": "Banque", "alternatives": ["Administratif", "Banque/Releves"]}'
+        with patch("procrafiler.ai_classification.call_mistral_chat", return_value=raw):
+            result = _classify("Relevé BNP", chain=chain, retries=0)
+        self.assertFalse(result.used_fallback)
+        self.assertEqual(result.path, "Banque")
+        self.assertEqual(result.alternatives, ["Administratif", "Banque/Releves"])
+
+    def test_null_path_with_alternatives_is_uncertain_not_failure(self) -> None:
+        # The AI declined to pick (null path) but offered options → this is a
+        # decision-with-options, not an error: no fallback retry, options kept.
+        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        raw = '{"path": null, "alternatives": ["Banque", "Administratif/Impots"]}'
+        with patch("procrafiler.ai_classification.call_mistral_chat", return_value=raw) as call:
+            result = _classify("ambiguous", chain=chain, retries=2)
+        self.assertIsNone(result.path)
+        self.assertTrue(result.used_fallback)
+        self.assertEqual(result.reason, "uncertain_with_options")
+        self.assertEqual(result.alternatives, ["Banque", "Administratif/Impots"])
+        self.assertEqual(call.call_count, 1)  # no wasted retries on a deliberate decline
+
+    def test_null_path_no_alternatives_retries_then_fallback(self) -> None:
+        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        sleeps: list[int] = []
+        raw = '{"path": null, "alternatives": []}'
+        with patch("procrafiler.ai_classification.call_mistral_chat", return_value=raw):
+            result = _classify("x", chain=chain, retries=1, sleep_fn=lambda s: sleeps.append(s))
+        self.assertTrue(result.used_fallback)
+        self.assertEqual(result.provider, "fallback")
+        self.assertEqual(result.alternatives, [])
+        self.assertEqual(sleeps, [1])  # retried once before giving up
+
 
 if __name__ == "__main__":
     unittest.main()

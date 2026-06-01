@@ -192,6 +192,42 @@ def normalize_category_path(label: str, max_depth: int) -> tuple[str, ...] | Non
     return full
 
 
+def normalize_review_path(label: str, max_depth: int) -> tuple[str, ...] | None:
+    """Validate a path a USER chose during `review`, allowing a brand-new root.
+
+    Same slugify+depth-cap rules as `normalize_category_path`, with one
+    difference: the user may create a new top-level category here (this is the
+    ONLY place new roots are allowed — the AI never can). To avoid forking a
+    near-duplicate root, a typed first segment that matches an existing base
+    case-insensitively snaps onto that base's canonical casing. Returns the
+    validated relative_dir tuple, or None when the label is empty.
+    """
+    segments = [s.strip() for s in label.split("/") if s.strip()]
+    if not segments:
+        return None
+
+    lowered = [s.lower() for s in segments]
+    matched_base: tuple[str, ...] | None = None
+    for base in sorted(classifiable_categories(), key=len, reverse=True):
+        if tuple(lowered[: len(base)]) == tuple(part.lower() for part in base):
+            matched_base = base
+            break
+
+    if matched_base is not None:
+        rest = segments[len(matched_base):]
+        sub = tuple(slug for slug in (sanitize_filename_stem(seg) for seg in rest) if slug)
+        full = matched_base + sub
+    else:
+        # Brand-new root category — slugify every segment, including the first.
+        full = tuple(slug for slug in (sanitize_filename_stem(seg) for seg in segments) if slug)
+
+    if not full:
+        return None
+    if max_depth > 0:
+        full = full[:max_depth]
+    return full
+
+
 def dispatch_for_filename(filename: str) -> DispatchDecision:
     """Decide which reader/media type can process a file, from its extension.
 
