@@ -43,7 +43,7 @@ class TestClassificationPipeline(unittest.TestCase):
 
         with patch(
             "procrafiler.ai_classification.call_mistral_chat",
-            return_value='{"category": "Banque"}',
+            return_value='{"path": "Banque"}',
         ):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
 
@@ -73,7 +73,7 @@ class TestClassificationPipeline(unittest.TestCase):
 
         with patch(
             "procrafiler.ai_classification.call_mistral_chat",
-            return_value='{"category": null}',
+            return_value='{"path": null}',
         ):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
 

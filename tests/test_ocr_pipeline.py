@@ -51,7 +51,7 @@ class TestOcrPipeline(unittest.TestCase):
         with patch("procrafiler.ai_reader.call_mistral_ocr", return_value="Releve de compte BNP avril 2026"):
             with patch(
                 "procrafiler.ai_classification.call_mistral_chat",
-                return_value='{"category": "Banque"}',
+                return_value='{"path": "Banque"}',
             ):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
@@ -82,7 +82,7 @@ class TestOcrPipeline(unittest.TestCase):
         with patch("procrafiler.ai_reader.call_mistral_vision", return_value="Recu de carte bancaire, total 42 EUR"):
             with patch(
                 "procrafiler.ai_classification.call_mistral_chat",
-                return_value='{"category": "Banque"}',
+                return_value='{"path": "Banque"}',
             ):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 

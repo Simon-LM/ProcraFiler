@@ -83,7 +83,10 @@ def default_runtime_policy() -> RuntimePolicy:
     return RuntimePolicy(
         mirror_retention_days=30,
         mirror_versions_keep=3,
-        taxonomy_max_depth=6,
+        # A safety net against a runaway/hallucinated AI folder path, not a
+        # design constraint on classification. High on purpose; tune in
+        # policy.toml if ever needed.
+        taxonomy_max_depth=10,
     )
 
 

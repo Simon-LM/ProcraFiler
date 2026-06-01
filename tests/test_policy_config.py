@@ -32,7 +32,7 @@ class TestPolicyConfig(unittest.TestCase):
         policy = load_runtime_policy(self.paths)
         self.assertEqual(policy.mirror_retention_days, 30)
         self.assertEqual(policy.mirror_versions_keep, 3)
-        self.assertEqual(policy.taxonomy_max_depth, 6)
+        self.assertEqual(policy.taxonomy_max_depth, 10)
         self.assertTrue(self.paths.policy_file.exists())
 
     def test_policy_override_from_toml(self) -> None:

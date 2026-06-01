@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from procrafiler.naming import sanitize_filename_stem
+
 
 BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Personnel", "Documents"),
@@ -137,6 +139,57 @@ def category_from_label(label: str) -> tuple[str, ...] | None:
         if category_label(relative_dir) == label:
             return relative_dir
     return None
+
+
+def existing_category_paths(library_root: Path) -> list[str]:
+    """List every folder currently under the base categories, as labels.
+
+    Shown to the AI so it can REUSE an existing folder instead of inventing a
+    near-duplicate. The base categories themselves are included; the interim
+    review bucket is not (it is not a real category)."""
+    paths: list[str] = []
+    for base in classifiable_categories():
+        base_dir = library_root / Path(*base)
+        if not base_dir.exists():
+            continue
+        paths.append(category_label(base))
+        for directory in sorted(p for p in base_dir.rglob("*") if p.is_dir()):
+            paths.append("/".join(directory.relative_to(library_root).parts))
+    return paths
+
+
+def normalize_category_path(label: str, max_depth: int) -> tuple[str, ...] | None:
+    """Validate an AI-proposed folder path into a safe relative_dir, or None.
+
+    Rules (P2a):
+    - The path MUST start with one of the existing base categories — the AI may
+      not create a new top-level category.
+    - Segments below the base are new/existing subfolders; their names are
+      normalized (slugified) so `Impôts` / `impots` / `Impots ` collapse to one
+      folder instead of three.
+    - Total depth is capped at `max_depth` (a safety net; 0 means uncapped).
+    Returns the validated relative_dir tuple, or None when no base matches
+    (caller then routes the file to manual review).
+    """
+    segments = [s.strip() for s in label.split("/") if s.strip()]
+    if not segments:
+        return None
+
+    matched_base: tuple[str, ...] | None = None
+    for base in sorted(classifiable_categories(), key=len, reverse=True):
+        if tuple(segments[: len(base)]) == base:
+            matched_base = base
+            break
+    if matched_base is None:
+        return None
+
+    sub_segments: tuple[str, ...] = tuple(
+        slug for slug in (sanitize_filename_stem(seg) for seg in segments[len(matched_base):]) if slug
+    )
+    full = matched_base + sub_segments
+    if max_depth > 0:
+        full = full[:max_depth]
+    return full
 
 
 def dispatch_for_filename(filename: str) -> DispatchDecision:
