@@ -81,6 +81,48 @@ def _iter_inbox_files(inbox_dir: Path) -> list[Path]:
     return sorted(files)
 
 
+def _prune_empty_inbox_dirs(inbox_dir: Path) -> int:
+    """Remove now-empty SUBdirectories left under the Inbox after files move out.
+
+    The user drops files inside arbitrary subfolders (e.g. `Inbox/CV/…`); once
+    every file in such a folder has been processed, the empty folder is clutter.
+    We delete those, bottom-up so nested empties go too, under strict bounds:
+
+    - The Inbox root itself is NEVER removed (it is the drop point).
+    - We never follow symlinked directories (`os.walk(followlinks=False)`), and
+      never `rmdir` a symlink — only real directories whose resolved path is
+      inside the Inbox. A symlink pointing elsewhere can't drag us out.
+    - `rmdir` only succeeds on an already-empty directory, so a folder that still
+      holds an unprocessed file (or a non-empty subfolder) is left untouched.
+
+    Returns the number of directories removed.
+    """
+    inbox_root = inbox_dir.resolve()
+    if not inbox_root.exists():
+        return 0
+    removed = 0
+    for dirpath, _dirnames, _filenames in os.walk(inbox_root, topdown=False, followlinks=False):
+        candidate = Path(dirpath)
+        if candidate.is_symlink():
+            continue
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved == inbox_root:
+            continue  # never remove the Inbox root itself
+        try:
+            resolved.relative_to(inbox_root)
+        except ValueError:
+            continue  # outside the Inbox — refuse to touch
+        try:
+            candidate.rmdir()  # succeeds only if empty
+            removed += 1
+        except OSError:
+            pass  # not empty (or vanished) — leave it
+    return removed
+
+
 def _resolve_document_date(ai_date: str | None, source_path: Path, now_utc: datetime | None) -> datetime:
     """Pick the date used to prefix the stored filename.
 
@@ -920,7 +962,10 @@ def process_next_inbox_file(
     loop) call the internal helper directly. `progress`, if given, receives
     human-readable lines as the file is processed.
     """
-    return _process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run, progress=progress).flow_state
+    flow_state = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=dry_run, progress=progress).flow_state
+    if not dry_run:
+        _prune_empty_inbox_dirs(paths.inbox_dir)
+    return flow_state
 
 
 class LibraryTrashError(RuntimeError):
@@ -1284,6 +1329,9 @@ def process_all_inbox_files(
 
         if result.mirror_failed:
             summary["mirror_failures"] += 1
+
+    # Tidy up: drop the now-empty Inbox subfolders the processed files left behind.
+    _prune_empty_inbox_dirs(paths.inbox_dir)
 
     _append_action_log(
         paths,
