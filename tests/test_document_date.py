@@ -8,26 +8,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from procrafiler.ai_naming import _extract_document_date
+from procrafiler.ai_analysis import _extract_document_date
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 from procrafiler.pipeline import _resolve_document_date, process_next_inbox_file
 
 
 class TestExtractDocumentDate(unittest.TestCase):
+    # _extract_document_date now receives the already-parsed analysis payload.
     def test_valid_date(self) -> None:
-        self.assertEqual(_extract_document_date('{"stem":"x","date":"2026-04-30"}'), "2026-04-30")
+        self.assertEqual(_extract_document_date({"name": "x", "date": "2026-04-30"}), "2026-04-30")
 
     def test_null_date(self) -> None:
-        self.assertIsNone(_extract_document_date('{"stem":"x","date":null}'))
+        self.assertIsNone(_extract_document_date({"name": "x", "date": None}))
 
     def test_missing_date(self) -> None:
-        self.assertIsNone(_extract_document_date('{"stem":"x"}'))
+        self.assertIsNone(_extract_document_date({"name": "x"}))
 
     def test_bad_format(self) -> None:
-        self.assertIsNone(_extract_document_date('{"stem":"x","date":"30/04/2026"}'))
+        self.assertIsNone(_extract_document_date({"name": "x", "date": "30/04/2026"}))
 
     def test_impossible_date(self) -> None:
-        self.assertIsNone(_extract_document_date('{"stem":"x","date":"2026-13-45"}'))
+        self.assertIsNone(_extract_document_date({"name": "x", "date": "2026-13-45"}))
 
 
 class TestResolveDocumentDate(unittest.TestCase):
@@ -70,13 +71,13 @@ class TestDocumentDatePipeline(unittest.TestCase):
         os.environ["PROCRAFILER_LIBRARY_MIRROR_DIR"] = str(root / "ProcraFiler_Library_Mirror")
         os.environ["PROCRAFILER_HOME"] = str(root / ".state")
         os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
-        os.environ["PROCRAFILER_AI_NAMING_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         self.paths = default_runtime_paths()
         ensure_runtime_layout(self.paths)
         self.now = datetime(2026, 5, 1, 9, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
-        for k in ("PROCRAFILER_AI_NAMING_PRIMARY",):
+        for k in ("PROCRAFILER_AI_ANALYSIS_PRIMARY",):
             os.environ.pop(k, None)
         self.tmp.cleanup()
 
@@ -84,8 +85,8 @@ class TestDocumentDatePipeline(unittest.TestCase):
         (self.paths.inbox_dir / "scan.txt").write_bytes(b"Facture du 30 avril 2026, montant 84 EUR")
 
         with patch(
-            "procrafiler.ai_naming.call_mistral_chat",
-            return_value='{"stem":"Facture EDF","date":"2026-04-30"}',
+            "procrafiler.ai_analysis.call_mistral_chat",
+            return_value='{"name":"Facture EDF","category_path":"Administratif","date":"2026-04-30"}',
         ):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
 

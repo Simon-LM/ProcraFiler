@@ -50,8 +50,8 @@ class TestDoctor(unittest.TestCase):
 
     def tearDown(self) -> None:
         for key in (
-            "PROCRAFILER_AI_NAMING_PRIMARY",
-            "PROCRAFILER_AI_NAMING_FALLBACK",
+            "PROCRAFILER_AI_ANALYSIS_PRIMARY",
+            "PROCRAFILER_AI_ANALYSIS_FALLBACK",
             "PROCRAFILER_ENV_LOADED_FROM",
             "MISTRAL_API_KEY",
         ):
@@ -98,19 +98,19 @@ class TestDoctor(unittest.TestCase):
 
     def test_ai_config_warns_when_no_chain_configured(self) -> None:
         results = {c.name: c for c in check_ai_config()}
-        self.assertEqual(results["task_naming"].status, STATUS_WARN)
+        self.assertEqual(results["task_analysis"].status, STATUS_WARN)
         self.assertEqual(results["mistral_api_key"].status, STATUS_SKIP)
 
     def test_ai_config_fails_when_mistral_used_without_api_key(self) -> None:
-        os.environ["PROCRAFILER_AI_NAMING_PRIMARY"] = "mistral:mistral-small-2506"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-2506"
         os.environ.pop("MISTRAL_API_KEY", None)
 
         results = {c.name: c for c in check_ai_config()}
-        self.assertEqual(results["task_naming"].status, STATUS_OK)
+        self.assertEqual(results["task_analysis"].status, STATUS_OK)
         self.assertEqual(results["mistral_api_key"].status, STATUS_FAIL)
 
     def test_ai_config_ok_when_mistral_used_with_api_key(self) -> None:
-        os.environ["PROCRAFILER_AI_NAMING_PRIMARY"] = "mistral:mistral-small-2506"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-2506"
         os.environ["MISTRAL_API_KEY"] = "test-key"
 
         results = {c.name: c for c in check_ai_config()}

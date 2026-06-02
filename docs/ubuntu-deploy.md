@@ -49,11 +49,11 @@ Edit it and fill your API keys/settings:
 sudo nano /etc/procrafiler/procrafiler.env
 ```
 
-Minimum required when using Mistral naming:
+Minimum required when using Mistral for the analysis call:
 
 ```dotenv
-PROCRAFILER_AI_NAMING_PRIMARY=mistral:mistral-small-2506
-PROCRAFILER_AI_NAMING_FALLBACK=
+PROCRAFILER_AI_ANALYSIS_PRIMARY=mistral:mistral-small-2506
+PROCRAFILER_AI_ANALYSIS_FALLBACK=
 MISTRAL_API_KEY=<YOUR_KEY>
 PROCRAFILER_AI_TIMEOUT=60
 PROCRAFILER_AI_RETRIES=2

@@ -29,7 +29,7 @@ class TestProgress(unittest.TestCase):
         self.now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
-        os.environ.pop("PROCRAFILER_AI_CLASSIFICATION_PRIMARY", None)
+        os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
         self.tmp.cleanup()
 
     def test_progress_lines_for_manual_review(self) -> None:
@@ -42,10 +42,13 @@ class TestProgress(unittest.TestCase):
         self.assertIn("manual review", joined.lower())
 
     def test_progress_lines_for_classified_file(self) -> None:
-        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         (self.paths.inbox_dir / "rel.txt").write_bytes(b"Releve de compte bancaire")
         lines: list[str] = []
-        with patch("procrafiler.ai_classification.call_mistral_chat", return_value='{"path": "Banque"}'):
+        with patch(
+            "procrafiler.ai_analysis.call_mistral_chat",
+            return_value='{"name": "Releve", "category_path": "Banque"}',
+        ):
             process_all_inbox_files(self.paths, now_utc=self.now, progress=lines.append)
         joined = "\n".join(lines)
         self.assertIn("classified → Banque", joined)

@@ -73,19 +73,19 @@ class TestSubfolderPipeline(unittest.TestCase):
         os.environ["PROCRAFILER_LIBRARY_MIRROR_DIR"] = str(root / "ProcraFiler_Library_Mirror")
         os.environ["PROCRAFILER_HOME"] = str(root / ".state")
         os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
-        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         self.paths = default_runtime_paths()
         ensure_runtime_layout(self.paths)
         self.now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
-        os.environ.pop("PROCRAFILER_AI_CLASSIFICATION_PRIMARY", None)
+        os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
         self.tmp.cleanup()
 
     def _run(self, ai_path: str) -> None:
         with patch(
-            "procrafiler.ai_classification.call_mistral_chat",
-            return_value=json.dumps({"path": ai_path}),
+            "procrafiler.ai_analysis.call_mistral_chat",
+            return_value=json.dumps({"name": "Doc", "category_path": ai_path}),
         ):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
         self.assertEqual(status, "LIBRARY_STORED")

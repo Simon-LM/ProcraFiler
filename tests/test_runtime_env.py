@@ -14,19 +14,19 @@ class TestRuntimeEnv(unittest.TestCase):
             env_file = Path(tmp) / "procrafiler.env"
             env_file.write_text(
                 "# comment\n"
-                "PROCRAFILER_AI_NAMING_PRIMARY=mistral:mistral-small-2506\n"
+                "PROCRAFILER_AI_ANALYSIS_PRIMARY=mistral:mistral-small-2506\n"
                 "MISTRAL_API_KEY=abc123\n",
                 encoding="utf-8",
             )
 
-            os.environ.pop("PROCRAFILER_AI_NAMING_PRIMARY", None)
+            os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
             os.environ.pop("MISTRAL_API_KEY", None)
             os.environ.pop("PROCRAFILER_ENV_LOADED_FROM", None)
 
             loaded = load_runtime_env([env_file])
 
             self.assertEqual(loaded, env_file)
-            self.assertEqual(os.environ.get("PROCRAFILER_AI_NAMING_PRIMARY"), "mistral:mistral-small-2506")
+            self.assertEqual(os.environ.get("PROCRAFILER_AI_ANALYSIS_PRIMARY"), "mistral:mistral-small-2506")
             self.assertEqual(os.environ.get("MISTRAL_API_KEY"), "abc123")
             self.assertEqual(os.environ.get("PROCRAFILER_ENV_LOADED_FROM"), str(env_file))
 

@@ -30,7 +30,7 @@ class TestOcrPipeline(unittest.TestCase):
         for key in (
             "PROCRAFILER_AI_OCR_PRIMARY",
             "PROCRAFILER_AI_IMAGE_PRIMARY",
-            "PROCRAFILER_AI_CLASSIFICATION_PRIMARY",
+            "PROCRAFILER_AI_ANALYSIS_PRIMARY",
         ):
             os.environ.pop(key, None)
         self.tmp.cleanup()
@@ -44,14 +44,14 @@ class TestOcrPipeline(unittest.TestCase):
 
     def test_scanned_pdf_is_ocr_read_then_classified(self) -> None:
         os.environ["PROCRAFILER_AI_OCR_PRIMARY"] = "mistral:mistral-ocr-latest"
-        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         # Fake PDF bytes: pypdf can't extract a text layer -> reader_hint "ocr".
         (self.paths.inbox_dir / "scan.pdf").write_bytes(b"%PDF-1.4 scanned, no text layer")
 
         with patch("procrafiler.ai_reader.call_mistral_ocr", return_value="Releve de compte BNP avril 2026"):
             with patch(
-                "procrafiler.ai_classification.call_mistral_chat",
-                return_value='{"path": "Banque"}',
+                "procrafiler.ai_analysis.call_mistral_chat",
+                return_value='{"name": "Releve BNP", "category_path": "Banque"}',
             ):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
@@ -61,7 +61,7 @@ class TestOcrPipeline(unittest.TestCase):
 
         events = self._events()
         self.assertTrue(any(e["action"] == "ocr_read_success" for e in events))
-        self.assertTrue(any(e["action"] == "classification_success" and e["category"] == "Banque" for e in events))
+        self.assertTrue(any(e["action"] == "analysis_success" and e["category"] == "Banque" for e in events))
 
     def test_scanned_pdf_without_ocr_chain_goes_to_manual_review(self) -> None:
         # No OCR chain configured -> OCR unavailable -> Revue_Manuelle.
@@ -76,13 +76,13 @@ class TestOcrPipeline(unittest.TestCase):
 
     def test_image_is_vision_read_then_classified(self) -> None:
         os.environ["PROCRAFILER_AI_IMAGE_PRIMARY"] = "mistral:mistral-medium-latest"
-        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         (self.paths.inbox_dir / "photo.jpg").write_bytes(b"\xff\xd8\xff fake image bytes")
 
         with patch("procrafiler.ai_reader.call_mistral_vision", return_value="Recu de carte bancaire, total 42 EUR"):
             with patch(
-                "procrafiler.ai_classification.call_mistral_chat",
-                return_value='{"path": "Banque"}',
+                "procrafiler.ai_analysis.call_mistral_chat",
+                return_value='{"name": "Recu carte", "category_path": "Banque"}',
             ):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
