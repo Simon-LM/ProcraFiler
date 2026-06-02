@@ -76,7 +76,9 @@ class TestPipeline(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 6)
         events = [json.loads(line) for line in lines]
         self.assertTrue(any(e["action"] == "mirror_sync_success" for e in events))
-        self.assertTrue(any(e["action"] == "ai_naming_fallback" for e in events))
+        # The fake PDF has no text layer and there is no OCR chain, so the content
+        # is unreadable and the unified analysis never runs.
+        self.assertTrue(any(e["action"] == "ocr_read_unavailable" for e in events))
         # The move records the technical media type, not a semantic category.
         move_events = [e for e in events if e["action"] == "move_to_library"]
         self.assertEqual(len(move_events), 1)

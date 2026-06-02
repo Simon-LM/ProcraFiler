@@ -19,13 +19,12 @@ ProgressFn = Callable[[str], None]
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings, load_runtime_policy
-from procrafiler.ai_classification import classify_content  # type: ignore[reportMissingImports]
-from procrafiler.ai_naming import suggest_stem_with_ai  # type: ignore[reportMissingImports]
+from procrafiler.ai_analysis import analyze_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
-from procrafiler.naming import build_timestamped_filename
+from procrafiler.naming import build_timestamped_filename, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
     category_label,
@@ -158,6 +157,19 @@ def _write_catalog_snapshot(
     if features is not None and not features.get("catalog_snapshot", True):
         return
     documents = repo.list_documents()
+    # The catalog stores the per-document fiche (§4.1) as a JSON *string* in
+    # `content_json` (queryable via json_extract). Inline it as nested JSON in
+    # the snapshot so the human-readable mirror shows the fiche, not an escaped
+    # blob.
+    for document in documents:
+        raw_content = document.pop("content_json", None)
+        parsed_content: Any = None
+        if raw_content:
+            try:
+                parsed_content = json.loads(raw_content)
+            except (TypeError, ValueError):
+                parsed_content = None
+        document["content"] = parsed_content
     latest = documents[0]["updated_at_utc"] if documents else None
     snapshot: dict[str, Any] = {
         "meta": {
@@ -621,13 +633,16 @@ def _process_next_inbox_file(
     )
 
     # The unified content text: what we read locally, or — for scanned PDFs and
-    # images — what the OCR / vision reader produces. Naming and classification
-    # both consume it.
+    # images — what the OCR / vision reader produces. The single analysis call
+    # (naming + classification + fiche) consumes it. `read_via` records which
+    # reader produced it, for the fiche's provenance.
     content_text = extraction.text
+    read_via: str | None = "text" if (content_text is not None and content_text.strip()) else None
     if (content_text is None or not content_text.strip()) and extraction.reader_hint == "ocr":
         ocr_result = read_with_ocr(queued_target)
         if ocr_result.text and ocr_result.text.strip():
             content_text = ocr_result.text
+            read_via = "ocr"
             _append_action_log(
                 paths,
                 operation_id=operation_id,
@@ -661,6 +676,7 @@ def _process_next_inbox_file(
         vision_result = read_with_vision(queued_target)
         if vision_result.text and vision_result.text.strip():
             content_text = vision_result.text
+            read_via = "vision"
             _append_action_log(
                 paths,
                 operation_id=operation_id,
@@ -691,37 +707,41 @@ def _process_next_inbox_file(
             )
             emit(f"   vision unavailable ({vision_result.reason})")
 
-    # Classify from the content. The category is decided by AI from what the
-    # file CONTAINS, never from its extension or original name. Files we can't
-    # read at all (images awaiting their vision reader, or OCR unavailable) and
-    # any uncertain/unconfigured AI outcome fall back to the interim review
-    # bucket — never to a guessed category.
+    # One analysis call reads the content once and returns the whole fiche: the
+    # descriptive name, the document's date, the destination category (+
+    # alternatives), a summary, keywords, and entities (spec §4.1, §9). Naming
+    # and classification are NOT separate passes. Files we can't read at all
+    # (images awaiting their vision reader, or OCR unavailable) and any
+    # uncertain/unconfigured outcome fall back to the interim review bucket —
+    # never to a guessed category.
     route_dir = INTERIM_LIBRARY_DIR
     pending_options: list[str] | None = None
     pending_reason: str | None = None
+    analysis = None
+    validated: tuple[str, ...] | None = None
     if content_text is not None and content_text.strip():
         base_categories = [category_label(c) for c in classifiable_categories()]
         existing_paths = existing_category_paths(paths.library_root)
-        classification = classify_content(
+        analysis = analyze_content(
             content_text, base_categories=base_categories, existing_paths=existing_paths
         )
         max_depth = load_runtime_policy(paths).taxonomy_max_depth
-        validated = normalize_category_path(classification.path, max_depth) if classification.path else None
+        validated = normalize_category_path(analysis.category_path, max_depth) if analysis.category_path else None
         if validated is not None:
             route_dir = validated
             _append_action_log(
                 paths,
                 operation_id=operation_id,
-                action="classification_success",
+                action="analysis_success",
                 status="success",
-                message="AI classified document from content",
+                message="AI analyzed and classified document from content",
                 now_utc=now_utc,
                 path_before=str(queued_target),
                 extra_fields={
                     "category": "/".join(validated),
-                    "proposed_path": classification.path,
-                    "provider": classification.provider,
-                    "model": classification.model,
+                    "proposed_path": analysis.category_path,
+                    "provider": analysis.provider,
+                    "model": analysis.model,
                 },
                 features=features,
             )
@@ -734,7 +754,7 @@ def _process_next_inbox_file(
             # options invalid), fall back to plain manual review as before: a
             # settled placement in Revue_Manuelle that IS mirrored.
             options: list[str] = []
-            for alt in classification.alternatives:
+            for alt in analysis.alternatives:
                 normalized = normalize_category_path(alt, max_depth)
                 if normalized is not None:
                     label = "/".join(normalized)
@@ -742,7 +762,7 @@ def _process_next_inbox_file(
                         options.append(label)
             if options:
                 pending_options = options
-                pending_reason = classification.reason
+                pending_reason = analysis.reason or "uncertain_with_options"
                 _append_action_log(
                     paths,
                     operation_id=operation_id,
@@ -752,10 +772,10 @@ def _process_next_inbox_file(
                     now_utc=now_utc,
                     path_before=str(queued_target),
                     extra_fields={
-                        "reason": classification.reason,
+                        "reason": pending_reason,
                         "options": options,
-                        "provider": classification.provider,
-                        "model": classification.model,
+                        "provider": analysis.provider,
+                        "model": analysis.model,
                     },
                     features=features,
                 )
@@ -764,72 +784,40 @@ def _process_next_inbox_file(
                 _append_action_log(
                     paths,
                     operation_id=operation_id,
-                    action="classification_manual_review",
+                    action="analysis_manual_review",
                     status="warning",
-                    message="AI classification unavailable or uncertain, routing to manual review",
+                    message="AI analysis unavailable or uncertain, routing to manual review",
                     now_utc=now_utc,
                     path_before=str(queued_target),
                     extra_fields={
-                        "reason": classification.reason,
-                        "provider": classification.provider,
-                        "model": classification.model,
+                        "reason": analysis.reason,
+                        "provider": analysis.provider,
+                        "model": analysis.model,
                     },
                     features=features,
                 )
-                emit(f"   → manual review ({classification.reason})")
+                emit(f"   → manual review ({analysis.reason})")
 
     target_dir = paths.library_root / Path(*route_dir)
     if not target_dir.exists():
         emit(f"   created folder: {'/'.join(route_dir)}")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Name from the content the reader produced (local extraction or OCR), not
-    # the original filename. When there is no readable content (images awaiting
-    # their vision reader, or OCR unavailable), suggest_stem_with_ai falls back
-    # to the filename stem as a last resort.
-    naming_content = content_text if (content_text and content_text.strip()) else ""
-    name_suggestion = suggest_stem_with_ai(
-        naming_content,
-        fallback_stem=Path(queued_target.name).stem,
-    )
-    if name_suggestion.used_fallback:
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="ai_naming_fallback",
-            status="warning",
-            message="AI naming unavailable, using deterministic fallback stem",
-            now_utc=now_utc,
-            path_before=str(queued_target),
-            extra_fields={
-                "reason": name_suggestion.reason,
-                "provider": name_suggestion.provider,
-                "model": name_suggestion.model,
-            },
-            features=features,
-        )
+    # The descriptive name comes from the SAME analysis (the content, never the
+    # original filename). When the analysis couldn't run or returned no name
+    # (no readable content, or all providers failed), fall back to the filename
+    # stem — those files are in manual review anyway.
+    if analysis is not None and analysis.name:
+        stem = analysis.name
     else:
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="ai_naming_success",
-            status="success",
-            message="AI naming suggestion applied",
-            now_utc=now_utc,
-            path_before=str(queued_target),
-            extra_fields={
-                "provider": name_suggestion.provider,
-                "model": name_suggestion.model,
-                "suggested_stem": name_suggestion.stem,
-            },
-            features=features,
-        )
+        stem = sanitize_filename_stem(Path(queued_target.name).stem)
+    document_date = analysis.document_date if analysis is not None else None
 
-    candidate_name = f"{name_suggestion.stem}{queued_target.suffix}"
+    candidate_name = f"{stem}{queued_target.suffix}"
     # Date the file by its CONTENT (the date the AI found in it), falling back to
     # the file's mtime, then the processing time. Only the filename prefix uses
     # this; logs/catalog keep the real processing time (now_utc).
-    document_dt = _resolve_document_date(name_suggestion.document_date, queued_target, now_utc)
+    document_dt = _resolve_document_date(document_date, queued_target, now_utc)
     final_name = build_timestamped_filename(candidate_name, now_utc=document_dt)
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
@@ -837,6 +825,25 @@ def _process_next_inbox_file(
     emit(f"   filed → {'/'.join(route_dir)}/{library_target.name}")
 
     now_iso = _utc_iso(now_utc)
+    # Persist the document fiche (§4.1): the understanding from this single read,
+    # so search and `reorganize` never need to re-read the file. Stored as a JSON
+    # string in the catalog (queryable); the snapshot inlines it as nested JSON.
+    fiche: dict[str, Any] = {
+        "name": analysis.name if analysis is not None else None,
+        "document_date": document_date,
+        "category_path": "/".join(validated) if validated is not None else None,
+        "alternatives": pending_options or (analysis.alternatives if analysis is not None else []),
+        "summary": analysis.summary if analysis is not None else None,
+        "keywords": analysis.keywords if analysis is not None else [],
+        "entities": analysis.entities if analysis is not None else {},
+        "language": analysis.language if analysis is not None else None,
+        "read_via": read_via,
+        "provider": analysis.provider if analysis is not None else None,
+        "model": analysis.model if analysis is not None else None,
+        "analyzed_at": now_iso,
+    }
+    content_json = json.dumps(fiche, ensure_ascii=True)
+
     # A parked file is physically in Revue_Manuelle but NOT a settled placement:
     # its status is DECISION_PENDING and it carries the AI's options for `review`.
     # We deliberately do NOT mirror it — the mirror holds the durable library, and
@@ -864,6 +871,7 @@ def _process_next_inbox_file(
         updated_at_utc=now_iso,
         flow_state=current_state,
         pending_decision=pending_blob,
+        content_json=content_json,
     )
     _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
@@ -872,7 +880,7 @@ def _process_next_inbox_file(
         operation_id=operation_id,
         action="move_to_library",
         status="success",
-        message="File moved to interim review directory pending AI classification",
+        message="File stored in the library",
         now_utc=now_utc,
         path_before=str(queued_target),
         path_after=str(library_target),
@@ -1015,6 +1023,7 @@ def move_library_file_to_trash(
             features=features,
         )
 
+    existing_fiche = record.get("content_json")
     repo.upsert_document(
         doc_id=str(record["doc_id"]),
         sha256=str(record["sha256"]),
@@ -1023,6 +1032,7 @@ def move_library_file_to_trash(
         status=new_state,
         updated_at_utc=_utc_iso(now_utc),
         flow_state=new_state,
+        content_json=str(existing_fiche) if existing_fiche else None,
     )
     _write_catalog_snapshot(paths, repo, now_utc, features=features)
 
@@ -1068,6 +1078,21 @@ def resolve_pending_decision(
     library_target = _ensure_unique_path(target_dir / source.name)
     move(str(source), str(library_target))
 
+    # Keep the document fiche, but update its category_path to reflect the
+    # resolved destination (the AI proposed; the user decided).
+    raw_fiche = record.get("content_json")
+    content_json: str | None = None
+    if raw_fiche:
+        try:
+            fiche = json.loads(raw_fiche)
+        except (TypeError, ValueError):
+            fiche = None
+        if isinstance(fiche, dict):
+            fiche["category_path"] = "/".join(target_route)
+            content_json = json.dumps(fiche, ensure_ascii=True)
+        else:
+            content_json = str(raw_fiche)
+
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
     repo.upsert_document(
@@ -1079,6 +1104,7 @@ def resolve_pending_decision(
         updated_at_utc=_utc_iso(now_utc),
         flow_state="LIBRARY_STORED",
         pending_decision=None,  # decision resolved → leave the queue
+        content_json=content_json,
     )
     _write_catalog_snapshot(paths, repo, now_utc, features=features)
 

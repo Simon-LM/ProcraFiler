@@ -117,16 +117,16 @@ class TestCliReview(unittest.TestCase):
 
     def tearDown(self) -> None:
         os.environ.pop("PROCRAFILER_FAKE_NOW", None)
-        os.environ.pop("PROCRAFILER_AI_CLASSIFICATION_PRIMARY", None)
+        os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
         self.tmp.cleanup()
 
     def _park_one(self) -> None:
-        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         (self.paths.inbox_dir / "lettre.txt").write_bytes(b"contenu ambigu")
         now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
         with patch(
-            "procrafiler.ai_classification.call_mistral_chat",
-            return_value=json.dumps({"path": None, "alternatives": ["Banque", "Administratif/Impots"]}),
+            "procrafiler.ai_analysis.call_mistral_chat",
+            return_value=json.dumps({"category_path": None, "alternatives": ["Banque", "Administratif/Impots"]}),
         ):
             process_next_inbox_file(self.paths, now_utc=now)
 

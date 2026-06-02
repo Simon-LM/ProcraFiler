@@ -54,19 +54,19 @@ class _PipelineTestCase(unittest.TestCase):
         os.environ["PROCRAFILER_LIBRARY_MIRROR_DIR"] = str(root / "ProcraFiler_Library_Mirror")
         os.environ["PROCRAFILER_HOME"] = str(root / ".state")
         os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
-        os.environ["PROCRAFILER_AI_CLASSIFICATION_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
         self.paths = default_runtime_paths()
         ensure_runtime_layout(self.paths)
         self.now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
-        os.environ.pop("PROCRAFILER_AI_CLASSIFICATION_PRIMARY", None)
+        os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
         self.tmp.cleanup()
 
     def _process(self, ai_output: dict[str, object], content: bytes = b"contenu") -> str:
         (self.paths.inbox_dir / "lettre.txt").write_bytes(content)
         with patch(
-            "procrafiler.ai_classification.call_mistral_chat",
+            "procrafiler.ai_analysis.call_mistral_chat",
             return_value=json.dumps(ai_output),
         ):
             return process_next_inbox_file(self.paths, now_utc=self.now)
@@ -86,7 +86,7 @@ class _PipelineTestCase(unittest.TestCase):
 
 class TestParking(_PipelineTestCase):
     def test_uncertain_with_options_is_parked(self) -> None:
-        state = self._process({"path": None, "alternatives": ["Banque", "Administratif/Impots"]})
+        state = self._process({"category_path": None, "alternatives": ["Banque", "Administratif/Impots"]})
         # Physically stored (flow state) but parked for review (catalog status).
         self.assertEqual(state, "LIBRARY_STORED")
         self.assertEqual(len(self._files_under("Revue_Manuelle")), 1)
@@ -103,14 +103,14 @@ class TestParking(_PipelineTestCase):
     def test_invalid_options_fall_back_to_plain_manual_review(self) -> None:
         # Options that don't map to any base survive validation as none → this is
         # ordinary manual review (settled in Revue_Manuelle, and mirrored).
-        state = self._process({"path": None, "alternatives": ["Loisirs/Audio", "Inexistant"]})
+        state = self._process({"category_path": None, "alternatives": ["Loisirs/Audio", "Inexistant"]})
         self.assertEqual(state, "LIBRARY_STORED")
         self.assertEqual(self._repo().list_pending_decisions(), [])
         self.assertEqual(len(self._files_under("Revue_Manuelle")), 1)
         self.assertEqual(len(self._mirror_files()), 1)  # settled → mirrored
 
     def test_confident_path_is_not_parked(self) -> None:
-        state = self._process({"path": "Banque", "alternatives": ["Administratif"]})
+        state = self._process({"category_path": "Banque", "alternatives": ["Administratif"]})
         self.assertEqual(state, "LIBRARY_STORED")
         self.assertEqual(self._repo().list_pending_decisions(), [])
         self.assertEqual(len(self._files_under("Banque")), 1)
@@ -119,7 +119,7 @@ class TestParking(_PipelineTestCase):
 
 class TestRunReview(_PipelineTestCase):
     def _park_one(self) -> None:
-        self._process({"path": None, "alternatives": ["Banque", "Administratif/Impots"]})
+        self._process({"category_path": None, "alternatives": ["Banque", "Administratif/Impots"]})
 
     def _review(self, answers: list[str]) -> tuple[dict[str, int], list[str]]:
         out: list[str] = []
@@ -146,6 +146,9 @@ class TestRunReview(_PipelineTestCase):
         # Settled now → mirrored, and the queue is empty.
         self.assertEqual(len(self._mirror_files()), 1)
         self.assertEqual(self._repo().list_pending_decisions(), [])
+        # The fiche is kept and its category_path now reflects the user's choice.
+        doc = self._repo().list_documents()[0]
+        self.assertEqual(json.loads(doc["content_json"])["category_path"], "Banque")
 
     def test_resolve_with_custom_new_root(self) -> None:
         self._park_one()
@@ -165,7 +168,7 @@ class TestRunReview(_PipelineTestCase):
 
 class TestResolveDirect(_PipelineTestCase):
     def test_invalid_label_raises(self) -> None:
-        self._process({"path": None, "alternatives": ["Banque"]})
+        self._process({"category_path": None, "alternatives": ["Banque"]})
         record = self._repo().list_pending_decisions()[0]
         with self.assertRaises(PendingDecisionError):
             resolve_pending_decision(self.paths, record, "   ", now_utc=self.now)
@@ -173,7 +176,7 @@ class TestResolveDirect(_PipelineTestCase):
         self.assertEqual(len(self._repo().list_pending_decisions()), 1)
 
     def test_missing_source_raises(self) -> None:
-        self._process({"path": None, "alternatives": ["Banque"]})
+        self._process({"category_path": None, "alternatives": ["Banque"]})
         record = dict(self._repo().list_pending_decisions()[0])
         record["current_path"] = str(self.paths.library_root / "Revue_Manuelle" / "gone.txt")
         with self.assertRaises(PendingDecisionError):

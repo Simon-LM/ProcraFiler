@@ -36,6 +36,13 @@ class CatalogRepository:
                 # JSON blob describing a parked decision (options + reason +
                 # snippet) for files awaiting `procrafiler review`. NULL otherwise.
                 conn.execute("ALTER TABLE documents ADD COLUMN pending_decision TEXT")
+            if "content_json" not in existing_columns:
+                # The document fiche (spec §4.1) as a JSON string: name, date,
+                # category_path, alternatives, summary, keywords, entities,
+                # language, provenance. Produced once at read time; powers search
+                # and reorganization without re-reading the file. NULL when the
+                # analysis step could not run.
+                conn.execute("ALTER TABLE documents ADD COLUMN content_json TEXT")
             conn.commit()
 
     def upsert_document(
@@ -49,15 +56,16 @@ class CatalogRepository:
         updated_at_utc: str,
         flow_state: str | None = None,
         pending_decision: str | None = None,
+        content_json: str | None = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO documents (
                     doc_id, sha256, current_filename, current_path, status, updated_at_utc,
-                    flow_state, pending_decision
+                    flow_state, pending_decision, content_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                     sha256=excluded.sha256,
                     current_filename=excluded.current_filename,
@@ -65,9 +73,13 @@ class CatalogRepository:
                     status=excluded.status,
                     updated_at_utc=excluded.updated_at_utc,
                     flow_state=excluded.flow_state,
-                    pending_decision=excluded.pending_decision
+                    pending_decision=excluded.pending_decision,
+                    content_json=excluded.content_json
                 """,
-                (doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state, pending_decision),
+                (
+                    doc_id, sha256, current_filename, current_path, status, updated_at_utc,
+                    flow_state, pending_decision, content_json,
+                ),
             )
             conn.commit()
 
@@ -77,7 +89,7 @@ class CatalogRepository:
             rows = conn.execute(
                 """
                 SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc,
-                       flow_state, pending_decision
+                       flow_state, pending_decision, content_json
                 FROM documents
                 WHERE status = 'DECISION_PENDING'
                 ORDER BY updated_at_utc ASC
@@ -94,7 +106,8 @@ class CatalogRepository:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state
+                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc,
+                       flow_state, content_json
                 FROM documents
                 WHERE current_path = ?
                 LIMIT 1
@@ -107,7 +120,8 @@ class CatalogRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc, flow_state
+                SELECT doc_id, sha256, current_filename, current_path, status, updated_at_utc,
+                       flow_state, content_json
                 FROM documents
                 ORDER BY updated_at_utc DESC
                 """

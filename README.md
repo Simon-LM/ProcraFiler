@@ -106,27 +106,27 @@ Base folders are semantic categories (every destination is AI-decided from conte
 
 The media folders (`Personnel/Medias/...`) are themselves content-decided destinations: a file being an image by extension does not by itself send it there — a photographed document is classified by what it contains.
 
-## AI Naming (MVP)
+## AI Analysis (MVP)
 
-The new filename is derived from the AI's reading of the file **content**, not from the original filename (which is never trusted). The AI returns a descriptive stem, which ProcraFiler places under a UTC timestamp prefix. The original filename survives only as a deterministic last-resort fallback when no content can be read and the AI is unavailable.
+A **single analysis call** reads the file **content** (never the original filename, which is never trusted) and returns the whole document fiche at once: the descriptive name, the document's date, the destination category (+ alternatives), a summary, keywords, and entities. Naming and classification are not separate passes — one read, one call, one record persisted in the catalog (so files become searchable at no extra AI cost). The descriptive name goes under a UTC timestamp prefix; the original filename survives only as a deterministic last-resort fallback when no content can be read and the AI is unavailable.
 
 Expected AI output format:
 
-- JSON object with one key: `{"stem":"..."}`
+- A single JSON object: `{"name":"...", "date":"YYYY-MM-DD"|null, "category_path":"...", "alternatives":[...], "summary":"...", "keywords":[...], "entities":{...}}`
 - If a model returns extra text before/after JSON, ProcraFiler extracts the JSON object.
-- If no valid JSON object is found, ProcraFiler falls back to deterministic naming.
+- If no valid JSON object is found, ProcraFiler retries, then falls back to deterministic naming + manual review.
 
 - Provider chain format: `provider:model,provider:model,...`
 - Split rule: split only on the first `:`
 - Retry strategy: exponential backoff per provider attempt (`1s`, `2s`, `4s`, ...)
 - Failover: move to next provider when retries are exhausted
-- Safe fallback: keep deterministic stem if all providers fail
+- Safe fallback: deterministic stem + manual review if all providers fail
 - No provider is forced by default. Each task is user-configured.
 
 Environment variables:
 
-- `PROCRAFILER_AI_NAMING_PRIMARY`
-- `PROCRAFILER_AI_NAMING_FALLBACK`
+- `PROCRAFILER_AI_ANALYSIS_PRIMARY` (the unified read→name→classify→summarize call)
+- `PROCRAFILER_AI_ANALYSIS_FALLBACK`
 - `PROCRAFILER_AI_OCR_PRIMARY`
 - `PROCRAFILER_AI_OCR_FALLBACK`
 - `PROCRAFILER_AI_PDF_PRIMARY`
@@ -137,10 +137,8 @@ Environment variables:
 - `PROCRAFILER_AI_VIDEO_FALLBACK`
 - `PROCRAFILER_AI_SUPERVISOR_PRIMARY`
 - `PROCRAFILER_AI_SUPERVISOR_FALLBACK`
-- `PROCRAFILER_AI_CLASSIFICATION_PRIMARY`
-- `PROCRAFILER_AI_CLASSIFICATION_FALLBACK`
 - `PROCRAFILER_AI_TIMEOUT` / `PROCRAFILER_AI_RETRIES` (global defaults)
-- `PROCRAFILER_AI_NAMING_TIMEOUT` / `PROCRAFILER_AI_NAMING_RETRIES` (task override)
+- `PROCRAFILER_AI_ANALYSIS_TIMEOUT` / `PROCRAFILER_AI_ANALYSIS_RETRIES` (task override)
 - `MISTRAL_API_KEY` (required for Mistral calls)
 
 ## Commands

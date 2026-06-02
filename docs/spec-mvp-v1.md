@@ -17,7 +17,8 @@ This principle governs the whole design:
 
 - **Every file is processed, without exception** — not only unnamed or obviously-misnamed ones. A file that already carries a name is processed too, because the name may be wrong or misleading.
 - **The existing filename is never a trusted input.** It is not used to name or to classify.
-- An AI **reads the file content**, and **from that reading** the system derives **both** the new name **and** the destination category.
+- An AI **reads the file content**, and **from that reading** the system derives the new name, the destination category, **and** a searchable content record.
+- **What the AI reads is remembered, not thrown away.** The summary, keywords, and key data extracted from each document are persisted in the catalog (§4.1), so a file is read once and never re-read for search or reorganization.
 - The extension is a **technical dispatch signal only**: it selects which capability reads the file (see §9). It never determines the name or the category.
 - The AI decides name and category; guardrails (§7) govern the file operations, and any uncertain AI outcome is sent to manual review.
 
@@ -57,11 +58,30 @@ The descriptive part comes from what the document *is*, established by reading i
 
 ## 4. Data Artifacts
 
-- `actions_log.jsonl` (append-only operational log)
-- `catalog.db` (SQLite source of truth)
-- `catalog_snapshot.json` (human-readable mirror of catalog)
+ProcraFiler keeps three artifacts in its application state directory:
 
-`catalog_snapshot.json` must stay synchronized with SQLite and be repaired on startup if a mismatch is detected.
+- `actions_log.jsonl` — append-only **operational log**: every move, trash, and processing step, recorded before/after.
+- `catalog.db` — SQLite, the **source of truth**. One record per document, holding **both** its filesystem identity/lifecycle **and** the content metadata read from it (see §4.1). For code and AI, this is the queryable form.
+- `catalog_snapshot.json` — a **human-readable JSON mirror** of `catalog.db`, kept synchronized and repaired on startup if a mismatch is detected.
+
+A read-only **HTML** view rendered from the JSON snapshot is planned for later; it is **not** part of this MVP.
+
+### 4.1 Catalog record (document fiche)
+
+The catalog is also the **content metadata store**. When a document is read, the understanding gained from that reading is persisted on its record, so the file never has to be re-read for search or reorganization. Each record holds:
+
+- **Identity / lifecycle:** `doc_id` (stable UUID — survives renames and moves), `sha256`, `current_filename`, `current_path`, `status` / `flow_state`, `updated_at_utc`.
+- **Content metadata** (produced by the analysis step, §9):
+  - `name` — the AI-derived descriptive stem used for the filename.
+  - `document_date` — the date found inside the content (or null).
+  - `category_path` — the chosen destination, plus the `alternatives` considered.
+  - `summary` — a short abstract of what the document is.
+  - `keywords` — terms for later search/sort.
+  - `entities` — structured key data, **extensible** (e.g. issuer, document type, amounts, references).
+  - `language` (optional).
+- **Provenance:** `read_via` (text / ocr / vision), `provider`, `model`, `analyzed_at`.
+
+`doc_id` is the stable key: search and `reorganize` operate on these records, **not** on the files themselves. When the analysis step cannot run (no chain, all providers failed), the identity/lifecycle fields are still written and the content-metadata fields are left empty.
 
 ## 5. Duplicate Policy
 
@@ -104,17 +124,17 @@ The descriptive part comes from what the document *is*, established by reading i
 
 ## 9. IA Architecture Policy
 
-Reading the content is the foundation: both the name and the category are derived from it. The extension and the destination category are two independent decisions and must never be conflated.
+Reading the content is the foundation: the name, the category, and all content metadata are derived from it. The extension and the destination category are two independent decisions and must never be conflated.
 
 - The file extension is a **technical dispatch signal only**: it selects which processing capability reads the file (PDF extraction, OCR, image analysis, plain-text reading). It never determines the name or the destination category.
-- Specialized AI capabilities **read the content** (OCR, extraction, image analysis). This step is the prerequisite for everything downstream — naming and classification both consume its output.
-- **AI naming derives the descriptive name from the content** — never from the original filename.
-- **AI classification determines the destination category from the content** — never from the extension.
+- Specialized **reading** capabilities turn the bytes into text: local text/PDF extraction, OCR for scanned PDFs, vision for images. This step is the prerequisite for everything downstream.
+- A **single analysis step** then consumes that text and returns the document's full fiche in **one AI call** — the descriptive **name**, the **document date**, the destination **category** (+ alternatives), a **summary**, **keywords**, and structured **entities** (§4.1). Naming and classification are **not** separate passes: one read, one analysis, one complete record. The catalog metadata thus **rides along** in the analysis response — no extra AI call is needed to make documents searchable.
+- The analysis derives everything **from the content** — never from the original filename or the extension.
 - An optional AI control pass (`SUPERVISOR`) reviews ambiguous outputs only.
 - Capability-level backend choice (local or API), with fallback and retries.
-- AI never performs irreversible actions; uncertain outcomes are sent to manual review.
+- AI never performs irreversible actions; uncertain outcomes are sent to the decisions queue or manual review (§10).
 
-Build order implication: the content-reading capabilities (OCR, PDF extraction, image analysis) come first, because naming and classification depend on the AI's understanding of the content.
+Build order implication: the content-reading capabilities (OCR, PDF extraction, image analysis) come first, because the analysis step depends on the text they produce.
 
 ## 10. Taxonomy Policy
 
@@ -147,30 +167,30 @@ MVP base branches include at least:
 - `Personnel/Archives`
 - `Revue_Manuelle`
 
-AI-assisted naming policy (MVP baseline):
+AI analysis policy (MVP baseline):
 
-- Expected model output is JSON with schema `{"stem":"..."}`.
+- The analysis step returns a **single JSON object** carrying the document fiche (§4.1), at least: `{"name": "...", "date": "YYYY-MM-DD"|null, "category_path": "...", "alternatives": ["..."], "summary": "...", "keywords": ["..."], "entities": {…}}`.
 - Parsing removes wrapper text before/after the JSON object when present.
-- Naming provider chain format is `provider:model,provider:model,...`.
+- Provider chain format is `provider:model,provider:model,...`.
 - Retry uses exponential backoff per provider attempt.
-- If all providers fail, deterministic fallback naming is mandatory.
+- If all providers fail: deterministic fallback naming is mandatory (filename stem), the file routes to manual review, and the content-metadata fields are left empty.
+- A confident `category_path` files the document; no confident path but plausible `alternatives` sends it to the decisions queue (§10, `DECISION_PENDING`); neither → plain manual review.
 - Sequential queue processing remains single-file-at-a-time.
 
 AI provider selection model (MVP):
 
 - AI choice is user-configured per task.
-- Each task has dedicated primary and fallback chain variables.
+- Each task has dedicated primary and fallback chain variables (e.g. `PROCRAFILER_AI_ANALYSIS_PRIMARY` / `_FALLBACK`).
 - No provider is forced by default by application templates.
 
 Task scopes include at least:
 
-- `NAMING`
 - `OCR`
 - `PDF`
 - `IMAGE`
 - `VIDEO`
+- `ANALYSIS` — unified naming + classification + content metadata in one call (replaces the former separate `NAMING` and `CLASSIFICATION` tasks).
 - `SUPERVISOR`
-- `CLASSIFICATION`
 
 ## 11. Runtime and Deployment
 

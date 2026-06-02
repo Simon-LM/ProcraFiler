@@ -1,34 +1,27 @@
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
+"""Shared AI provider plumbing (chains, HTTP calls, JSON extraction).
+
+This module is the low-level layer every AI task builds on: parsing the
+per-task provider chain from the environment, calling Mistral / Ollama with
+retry-able errors, and pulling a JSON object out of a noisy model reply. It is
+deliberately task-agnostic — the actual tasks live elsewhere (`ai_analysis` for
+the unified read→name→classify→summarize call, `ai_reader` for OCR/vision).
+
+The module keeps its historical name `ai_naming` only to avoid churning the
+imports of its several consumers; it no longer contains naming-specific logic.
+"""
 from __future__ import annotations
 
 import json
 import os
 import re
-import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from procrafiler.naming import sanitize_filename_stem
-
 MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-
-
-@dataclass(frozen=True)
-class AINameSuggestion:
-    stem: str
-    provider: str
-    model: str
-    raw_output: str
-    used_fallback: bool
-    reason: str | None
-    # The document's own date (YYYY-MM-DD) when the AI found one in the content,
-    # else None. Used by the pipeline to date the file by its content, not by
-    # the time it happened to be processed.
-    document_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,13 +39,12 @@ class ProviderCallError(RuntimeError):
 
 
 SUPPORTED_AI_TASKS: tuple[str, ...] = (
-    "NAMING",
+    "ANALYSIS",
     "OCR",
     "PDF",
     "IMAGE",
     "VIDEO",
     "SUPERVISOR",
-    "CLASSIFICATION",
 )
 
 
@@ -118,10 +110,6 @@ def _task_retries_from_env(task: str, default_value: int = 2) -> int:
             return parsed
 
     return default_value
-
-
-def default_chain_from_env() -> list[ChainEntry]:
-    return task_chain_from_env("NAMING")
 
 
 def _safe_json_loads(content: bytes) -> dict[str, Any]:
@@ -225,41 +213,6 @@ def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
     return str(content).strip()
 
 
-# Cap the document text sent to the model: a concise title needs the gist, not
-# the whole file. Keeps token cost and latency bounded on large documents.
-MAX_NAMING_CONTENT_CHARS = 6000
-
-
-def _build_naming_prompt(content: str) -> str:
-    snippet = content[:MAX_NAMING_CONTENT_CHARS]
-    return (
-        "Return JSON only with this exact schema: {\"stem\": \"...\", \"date\": \"...\"}.\n"
-        "- \"stem\": a concise French title (without extension) describing what the "
-        "document is, based on its content.\n"
-        "- \"date\": the document's own date as YYYY-MM-DD if one is clearly stated "
-        "in the content (e.g. a letter, invoice, or statement date); otherwise null.\n"
-        "Do not add any other keys or commentary.\n\n"
-        "Document content:\n"
-        f"{snippet}"
-    )
-
-
-def _extract_document_date(raw_output: str) -> str | None:
-    """Return the document's own date as YYYY-MM-DD if the model gave a valid one."""
-    payload = _extract_json_dict(raw_output)
-    if payload is None:
-        return None
-    value = payload.get("date")
-    if not isinstance(value, str):
-        return None
-    candidate = value.strip()
-    try:
-        datetime.strptime(candidate, "%Y-%m-%d")
-    except ValueError:
-        return None
-    return candidate
-
-
 def _extract_json_dict(raw_output: str) -> dict[str, Any] | None:
     text = raw_output.strip()
     if not text:
@@ -295,103 +248,3 @@ def _extract_json_dict(raw_output: str) -> dict[str, Any] | None:
             continue
 
     return None
-
-
-def _extract_suggested_stem(raw_output: str, fallback_stem: str) -> tuple[str, bool]:
-    payload = _extract_json_dict(raw_output)
-    if payload is None:
-        return sanitize_filename_stem(fallback_stem), False
-
-    stem_value = payload.get("stem")
-    if not isinstance(stem_value, str) or not stem_value.strip():
-        return sanitize_filename_stem(fallback_stem), False
-
-    candidate = stem_value.strip().strip("\"'")
-    return sanitize_filename_stem(candidate), True
-
-
-def suggest_stem_with_ai(
-    content: str,
-    *,
-    fallback_stem: str,
-    chain: list[ChainEntry] | None = None,
-    timeout_seconds: int | None = None,
-    retries: int | None = None,
-    sleep_fn: Any = time.sleep,
-) -> AINameSuggestion:
-    """Suggest a filename stem from the document CONTENT (never the filename).
-
-    `fallback_stem` is the deterministic last resort used only when the AI
-    can't run (no chain configured, no content available, or all providers
-    fail). Per the IA-first principle the original filename is not the basis
-    for naming; it survives solely as this fallback because something must be
-    written when reading isn't possible (those files go to manual review).
-    """
-    chain_entries = chain or default_chain_from_env()
-    if not chain_entries:
-        return AINameSuggestion(
-            stem=sanitize_filename_stem(fallback_stem),
-            provider="none",
-            model="none",
-            raw_output="",
-            used_fallback=True,
-            reason="chain_not_configured",
-        )
-    if not content.strip():
-        return AINameSuggestion(
-            stem=sanitize_filename_stem(fallback_stem),
-            provider="none",
-            model="none",
-            raw_output="",
-            used_fallback=True,
-            reason="no_content",
-        )
-
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("NAMING", default_value=60)
-    retry_count = retries if retries is not None else _task_retries_from_env("NAMING", default_value=2)
-    prompt = _build_naming_prompt(content)
-
-    last_error = "unknown"
-    for entry in chain_entries:
-        for attempt in range(retry_count + 1):
-            try:
-                if entry.provider == "mistral":
-                    raw_output = call_mistral_chat(
-                        prompt,
-                        entry.model,
-                        timeout=timeout,
-                        temperature=0.2,
-                        top_p=0.9,
-                    )
-                elif entry.provider == "ollama":
-                    raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout)
-                else:
-                    raise ProviderCallError(f"unsupported_provider:{entry.provider}")
-
-                stem, is_valid_json = _extract_suggested_stem(raw_output, fallback_stem)
-                if not is_valid_json:
-                    raise ProviderCallError("INVALID_JSON_RESPONSE")
-                return AINameSuggestion(
-                    stem=stem,
-                    provider=entry.provider,
-                    model=entry.model,
-                    raw_output=raw_output,
-                    used_fallback=False,
-                    reason=None,
-                    document_date=_extract_document_date(raw_output),
-                )
-            except (RateLimitedError, ProviderCallError) as exc:
-                last_error = str(exc)
-                if attempt < retry_count:
-                    sleep_fn(2**attempt)
-                    continue
-                break
-
-    return AINameSuggestion(
-        stem=sanitize_filename_stem(fallback_stem),
-        provider="fallback",
-        model="fallback",
-        raw_output="",
-        used_fallback=True,
-        reason=last_error,
-    )
