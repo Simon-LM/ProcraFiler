@@ -30,12 +30,12 @@ class TestConfigLayout(unittest.TestCase):
             self.assertTrue(paths.catalog_db_file.exists())
             self.assertTrue(paths.catalog_snapshot_file.exists())
 
-            self.assertTrue((paths.library_root / "Personnel" / "Documents").exists())
-            self.assertTrue((paths.library_root / "Professionnel" / "Documents").exists())
-            self.assertTrue((paths.library_root / "Administratif").exists())
-            self.assertTrue((paths.library_root / "Banque").exists())
-            self.assertTrue((paths.library_root / "Telephonie").exists())
-            self.assertTrue((paths.library_root / "Revue_Manuelle").exists())
+            self.assertTrue((paths.library_root / "Personal" / "Administrative").exists())
+            self.assertTrue((paths.library_root / "Personal" / "Administrative" / "Taxes").exists())
+            self.assertTrue((paths.library_root / "Personal" / "Hobbies").exists())
+            self.assertTrue((paths.library_root / "Work" / "Employment" / "Payslips").exists())
+            self.assertTrue((paths.library_root / "Work" / "Business" / "Clients").exists())
+            self.assertTrue((paths.library_root / "Manual_Review").exists())
 
 
 if __name__ == "__main__":

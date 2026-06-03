@@ -86,7 +86,7 @@ class TestDocumentDatePipeline(unittest.TestCase):
 
         with patch(
             "procrafiler.ai_analysis.call_mistral_chat",
-            return_value='{"name":"Facture EDF","category_path":"Administratif","date":"2026-04-30"}',
+            return_value='{"name":"Facture EDF","category_path":"Personal/Administrative","date":"2026-04-30"}',
         ):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
 

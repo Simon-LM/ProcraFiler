@@ -47,12 +47,12 @@ class TestProgress(unittest.TestCase):
         lines: list[str] = []
         with patch(
             "procrafiler.ai_analysis.call_mistral_chat",
-            return_value='{"name": "Releve", "category_path": "Banque"}',
+            return_value='{"name": "Releve", "category_path": "Personal/Administrative/Banking"}',
         ):
             process_all_inbox_files(self.paths, now_utc=self.now, progress=lines.append)
         joined = "\n".join(lines)
-        self.assertIn("classified → Banque", joined)
-        self.assertIn("filed → Banque/", joined)
+        self.assertIn("classified → Personal/Administrative/Banking", joined)
+        self.assertIn("filed → Personal/Administrative/Banking/", joined)
 
     def test_no_callback_is_safe(self) -> None:
         (self.paths.inbox_dir / "x.txt").write_bytes(b"x")

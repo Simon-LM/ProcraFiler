@@ -20,34 +20,46 @@ from procrafiler.taxonomy import (
 
 class TestNormalizeCategoryPath(unittest.TestCase):
     def test_flat_base(self) -> None:
-        self.assertEqual(normalize_category_path("Banque", 10), ("Banque",))
+        self.assertEqual(normalize_category_path("Work", 10), ("Work",))
 
     def test_subfolder_under_base(self) -> None:
-        self.assertEqual(normalize_category_path("Administratif/Impots", 10), ("Administratif", "Impots"))
+        # base "Personal/Hobbies" + a new subfolder "Photography".
+        self.assertEqual(
+            normalize_category_path("Personal/Hobbies/Photography", 10),
+            ("Personal", "Hobbies", "Photography"),
+        )
 
     def test_subfolder_name_is_normalized(self) -> None:
-        # accents/spaces collapse so Impôts / impots / "Impôts 2026" don't fork.
-        self.assertEqual(normalize_category_path("Administratif/Impôts 2026", 10), ("Administratif", "Impots-2026"))
-
-    def test_multi_segment_base(self) -> None:
+        # accents/spaces collapse so "Jeux Vidéo" / "jeux video" don't fork.
         self.assertEqual(
-            normalize_category_path("Personnel/Documents/Contrats", 10),
-            ("Personnel", "Documents", "Contrats"),
+            normalize_category_path("Personal/Hobbies/Jeux Vidéo", 10),
+            ("Personal", "Hobbies", "Jeux-Video"),
+        )
+
+    def test_longest_base_prefix_wins(self) -> None:
+        # "Personal" and "Personal/Administrative/Taxes" are both bases; the
+        # longest matching prefix is chosen, the rest become subfolders.
+        self.assertEqual(
+            normalize_category_path("Personal/Administrative/Taxes/2026", 10),
+            ("Personal", "Administrative", "Taxes", "2026"),
         )
 
     def test_unknown_base_is_rejected(self) -> None:
-        self.assertIsNone(normalize_category_path("Loisirs/Audio", 10))
+        self.assertIsNone(normalize_category_path("Music/Jazz", 10))
 
     def test_empty_is_rejected(self) -> None:
         self.assertIsNone(normalize_category_path("   ", 10))
 
     def test_depth_cap_truncates(self) -> None:
-        self.assertEqual(normalize_category_path("Administratif/a/b/c", 2), ("Administratif", "a"))
+        self.assertEqual(
+            normalize_category_path("Work/Business/Clients/a/b", 4),
+            ("Work", "Business", "Clients", "a"),
+        )
 
     def test_zero_means_uncapped(self) -> None:
         self.assertEqual(
-            normalize_category_path("Administratif/a/b/c", 0),
-            ("Administratif", "a", "b", "c"),
+            normalize_category_path("Work/Business/Clients/a/b", 0),
+            ("Work", "Business", "Clients", "a", "b"),
         )
 
 
@@ -56,12 +68,16 @@ class TestExistingCategoryPaths(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lib = Path(tmp)
             ensure_base_library_directories(lib)
-            (lib / "Administratif" / "Impots").mkdir(parents=True)
+            (lib / "Personal" / "Hobbies" / "Photography").mkdir(parents=True)
             paths = existing_category_paths(lib)
-            self.assertIn("Banque", paths)
-            self.assertIn("Administratif", paths)
-            self.assertIn("Administratif/Impots", paths)
-            self.assertNotIn("Revue_Manuelle", paths)
+            self.assertIn("Work", paths)
+            self.assertIn("Personal/Administrative", paths)
+            self.assertIn("Personal/Administrative/Taxes", paths)
+            self.assertIn("Personal/Hobbies/Photography", paths)
+            self.assertNotIn("Manual_Review", paths)
+            # De-duplicated even though the tree is nested (Personal/Administrative
+            # is reachable both as a base and as a child of Personal).
+            self.assertEqual(len(paths), len(set(paths)))
 
 
 class TestSubfolderPipeline(unittest.TestCase):
@@ -95,30 +111,32 @@ class TestSubfolderPipeline(unittest.TestCase):
 
     def test_creates_subfolder(self) -> None:
         (self.paths.inbox_dir / "a.txt").write_bytes(b"avis d'imposition 2026")
-        self._run("Administratif/Impots")
-        self.assertEqual(len(self._files_under("Administratif", "Impots")), 1)
+        self._run("Personal/Administrative/Taxes/2026")
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Taxes", "2026")), 1)
 
     def test_flat_base_when_ai_returns_base_only(self) -> None:
-        (self.paths.inbox_dir / "b.txt").write_bytes(b"document administratif")
-        self._run("Administratif")
-        # Filed directly under the base, no subfolder.
-        self.assertEqual(len(self._files_under("Administratif")), 1)
-        self.assertFalse((self.paths.library_root / "Administratif" / "Impots").exists())
+        (self.paths.inbox_dir / "b.txt").write_bytes(b"document de travail")
+        self._run("Work")
+        # Filed directly under the base, not in a subfolder.
+        files = self._files_under("Work")
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].parent, self.paths.library_root / "Work")
 
     def test_unknown_base_goes_to_manual_review(self) -> None:
         (self.paths.inbox_dir / "c.txt").write_bytes(b"un truc inclassable")
-        self._run("Loisirs/Audio")  # not an existing base -> rejected
-        self.assertEqual(len(self._files_under("Revue_Manuelle")), 1)
-        self.assertFalse((self.paths.library_root / "Loisirs").exists())
+        self._run("Music/Jazz")  # not an existing base -> rejected
+        self.assertEqual(len(self._files_under("Manual_Review")), 1)
+        self.assertFalse((self.paths.library_root / "Music").exists())
 
     def test_reuses_existing_subfolder(self) -> None:
-        (self.paths.library_root / "Administratif" / "Impots").mkdir(parents=True)
+        (self.paths.library_root / "Personal" / "Administrative" / "Taxes" / "2026").mkdir(parents=True)
         (self.paths.inbox_dir / "d.txt").write_bytes(b"avis d'imposition")
-        self._run("Administratif/Impots")
+        self._run("Personal/Administrative/Taxes/2026")
         # Lands in the SAME folder (no near-duplicate created).
-        subdirs = [p for p in (self.paths.library_root / "Administratif").iterdir() if p.is_dir()]
-        self.assertEqual([p.name for p in subdirs], ["Impots"])
-        self.assertEqual(len(self._files_under("Administratif", "Impots")), 1)
+        taxes = self.paths.library_root / "Personal" / "Administrative" / "Taxes"
+        subdirs = [p.name for p in taxes.iterdir() if p.is_dir()]
+        self.assertEqual(subdirs, ["2026"])
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Taxes", "2026")), 1)
 
 
 if __name__ == "__main__":

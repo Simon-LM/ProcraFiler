@@ -88,13 +88,13 @@ class TestLibraryTrash(unittest.TestCase):
         self.assertIn("not under library_root", str(ctx.exception))
 
     def test_refuses_nonexistent_file(self) -> None:
-        ghost = self.paths.library_root / "Personnel" / "Documents" / "ghost.pdf"
+        ghost = self.paths.library_root / "Personal" / "Administrative" / "ghost.pdf"
         with self.assertRaises(LibraryTrashError) as ctx:
             move_library_file_to_trash(self.paths, ghost, now_utc=self.now)
         self.assertIn("missing", str(ctx.exception))
 
     def test_refuses_uncatalogued_library_file(self) -> None:
-        stray = self.paths.library_root / "Personnel" / "Documents" / "stray.pdf"
+        stray = self.paths.library_root / "Personal" / "Administrative" / "stray.pdf"
         stray.parent.mkdir(parents=True, exist_ok=True)
         stray.write_bytes(b"hand-placed")
         with self.assertRaises(LibraryTrashError) as ctx:

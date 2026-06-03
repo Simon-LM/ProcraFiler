@@ -33,7 +33,7 @@ class TestCatalog(unittest.TestCase):
                 doc_id="settled",
                 sha256="aaa",
                 current_filename="a.pdf",
-                current_path="/library/Banque/a.pdf",
+                current_path="/library/Personal/Administrative/Banking/a.pdf",
                 status="LIBRARY_STORED",
                 updated_at_utc="2026-04-01T10:00:00Z",
             )
@@ -41,22 +41,22 @@ class TestCatalog(unittest.TestCase):
                 doc_id="parked",
                 sha256="bbb",
                 current_filename="b.pdf",
-                current_path="/library/Revue_Manuelle/b.pdf",
+                current_path="/library/Manual_Review/b.pdf",
                 status="DECISION_PENDING",
                 updated_at_utc="2026-04-01T11:00:00Z",
-                pending_decision='{"options": ["Banque", "Administratif"]}',
+                pending_decision='{"options": ["Personal/Administrative/Banking", "Personal/Administrative"]}',
             )
 
             pending = repo.list_pending_decisions()
             self.assertEqual([row["doc_id"] for row in pending], ["parked"])
-            self.assertEqual(pending[0]["pending_decision"], '{"options": ["Banque", "Administratif"]}')
+            self.assertEqual(pending[0]["pending_decision"], '{"options": ["Personal/Administrative/Banking", "Personal/Administrative"]}')
 
             # Resolving clears the flag and drops it out of the queue.
             repo.upsert_document(
                 doc_id="parked",
                 sha256="bbb",
                 current_filename="b.pdf",
-                current_path="/library/Banque/b.pdf",
+                current_path="/library/Personal/Administrative/Banking/b.pdf",
                 status="LIBRARY_STORED",
                 updated_at_utc="2026-04-01T12:00:00Z",
                 pending_decision=None,

@@ -43,26 +43,26 @@ class TestClassificationPipeline(unittest.TestCase):
 
         with patch(
             "procrafiler.ai_analysis.call_mistral_chat",
-            return_value='{"name": "Releve BNP", "category_path": "Banque", "summary": "Releve.", "keywords": ["bnp"]}',
+            return_value='{"name": "Releve BNP", "category_path": "Personal/Administrative/Banking", "summary": "Releve.", "keywords": ["bnp"]}',
         ):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        # The file landed in the real AI-decided category, not Revue_Manuelle.
-        banque_files = [p for p in (self.paths.library_root / "Banque").rglob("*") if p.is_file()]
+        # The file landed in the real AI-decided category, not Manual_Review.
+        banque_files = [p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*") if p.is_file()]
         self.assertEqual(len(banque_files), 1)
-        self.assertEqual(list((self.paths.library_root / "Revue_Manuelle").iterdir()), [])
+        self.assertEqual(list((self.paths.library_root / "Manual_Review").iterdir()), [])
 
         events = self._events()
-        self.assertTrue(any(e["action"] == "analysis_success" and e["category"] == "Banque" for e in events))
+        self.assertTrue(any(e["action"] == "analysis_success" and e["category"] == "Personal/Administrative/Banking" for e in events))
 
     def test_text_file_without_chain_goes_to_manual_review(self) -> None:
-        # No ANALYSIS chain configured -> fallback -> Revue_Manuelle.
+        # No ANALYSIS chain configured -> fallback -> Manual_Review.
         (self.paths.inbox_dir / "doc.txt").write_bytes(b"some readable content")
         status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        review_files = [p for p in (self.paths.library_root / "Revue_Manuelle").rglob("*") if p.is_file()]
+        review_files = [p for p in (self.paths.library_root / "Manual_Review").rglob("*") if p.is_file()]
         self.assertEqual(len(review_files), 1)
         events = self._events()
         self.assertTrue(any(e["action"] == "analysis_manual_review" for e in events))
@@ -78,7 +78,7 @@ class TestClassificationPipeline(unittest.TestCase):
             status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        review_files = [p for p in (self.paths.library_root / "Revue_Manuelle").rglob("*") if p.is_file()]
+        review_files = [p for p in (self.paths.library_root / "Manual_Review").rglob("*") if p.is_file()]
         self.assertEqual(len(review_files), 1)
 
     def test_fiche_is_persisted_in_catalog_and_snapshot(self) -> None:
@@ -89,8 +89,8 @@ class TestClassificationPipeline(unittest.TestCase):
         fiche = {
             "name": "Releve BNP avril 2026",
             "date": "2026-04-30",
-            "category_path": "Banque",
-            "alternatives": ["Administratif"],
+            "category_path": "Personal/Administrative/Banking",
+            "alternatives": ["Personal/Administrative"],
             "summary": "Relevé de compte BNP pour avril 2026.",
             "keywords": ["banque", "bnp", "releve"],
             "entities": {"issuer": "BNP Paribas", "doc_type": "releve"},
@@ -107,7 +107,7 @@ class TestClassificationPipeline(unittest.TestCase):
         stored = json.loads(docs[0]["content_json"])
         self.assertEqual(stored["summary"], "Relevé de compte BNP pour avril 2026.")
         self.assertEqual(stored["keywords"], ["banque", "bnp", "releve"])
-        self.assertEqual(stored["category_path"], "Banque")
+        self.assertEqual(stored["category_path"], "Personal/Administrative/Banking")
         self.assertEqual(stored["entities"]["issuer"], "BNP Paribas")
         self.assertEqual(stored["read_via"], "text")
 

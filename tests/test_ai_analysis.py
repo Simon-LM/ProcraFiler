@@ -7,7 +7,7 @@ from unittest.mock import patch
 from procrafiler.ai_analysis import AnalysisResult, analyze_content
 from procrafiler.ai_naming import ChainEntry, ProviderCallError
 
-BASES = ["Personnel/Documents", "Professionnel/Documents", "Administratif", "Banque"]
+BASES = ["Personal", "Work", "Personal/Administrative", "Personal/Administrative/Banking"]
 
 
 def _analyze(content: str, **kw):  # noqa: ANN003, ANN201
@@ -18,8 +18,8 @@ def _full(**overrides: object) -> str:
     payload = {
         "name": "Releve BNP avril 2026",
         "date": "2026-04-30",
-        "category_path": "Banque",
-        "alternatives": ["Administratif"],
+        "category_path": "Personal/Administrative/Banking",
+        "alternatives": ["Personal/Administrative"],
         "summary": "Relevé de compte BNP pour avril 2026.",
         "keywords": ["banque", "bnp", "relevé"],
         "entities": {"issuer": "BNP Paribas", "doc_type": "relevé"},
@@ -54,8 +54,8 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIsInstance(result, AnalysisResult)
         self.assertEqual(result.name, "Releve-BNP-avril-2026")  # sanitized stem
         self.assertEqual(result.document_date, "2026-04-30")
-        self.assertEqual(result.category_path, "Banque")
-        self.assertEqual(result.alternatives, ["Administratif"])
+        self.assertEqual(result.category_path, "Personal/Administrative/Banking")
+        self.assertEqual(result.alternatives, ["Personal/Administrative"])
         self.assertEqual(result.summary, "Relevé de compte BNP pour avril 2026.")
         self.assertEqual(result.keywords, ["banque", "bnp", "relevé"])
         self.assertEqual(result.entities["issuer"], "BNP Paribas")
@@ -78,12 +78,12 @@ class TestAnalyzeContent(unittest.TestCase):
         # The AI declined to pick a category but produced a fiche + options. That
         # is a valid result (used_fallback False); routing is the caller's call.
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
-        raw = _full(category_path=None, alternatives=["Banque", "Administratif"])
+        raw = _full(category_path=None, alternatives=["Personal/Administrative/Banking", "Personal/Administrative"])
         with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=raw):
             result = _analyze("ambiguous", chain=chain, retries=0)
         self.assertFalse(result.used_fallback)
         self.assertIsNone(result.category_path)
-        self.assertEqual(result.alternatives, ["Banque", "Administratif"])
+        self.assertEqual(result.alternatives, ["Personal/Administrative/Banking", "Personal/Administrative"])
         self.assertIsNotNone(result.summary)  # metadata still captured
 
     def test_bad_date_and_missing_fields_degrade_gracefully(self) -> None:
@@ -103,11 +103,11 @@ class TestAnalyzeContent(unittest.TestCase):
             ChainEntry(provider="ollama", model="mistral"),
         ]
         with patch("procrafiler.ai_analysis.call_mistral_chat", return_value="no json here"):
-            with patch("procrafiler.ai_analysis.call_ollama_chat", return_value=_full(category_path="Administratif")):
+            with patch("procrafiler.ai_analysis.call_ollama_chat", return_value=_full(category_path="Personal/Administrative")):
                 result = _analyze("x", chain=chain, retries=0)
         self.assertFalse(result.used_fallback)
         self.assertEqual(result.provider, "ollama")
-        self.assertEqual(result.category_path, "Administratif")
+        self.assertEqual(result.category_path, "Personal/Administrative")
 
     def test_retries_then_fallback(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
@@ -120,10 +120,10 @@ class TestAnalyzeContent(unittest.TestCase):
 
     def test_noisy_json_is_parsed(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
-        noisy = "Voici:\n" + _full(category_path="Banque") + "\nVoilà."
+        noisy = "Voici:\n" + _full(category_path="Personal/Administrative/Banking") + "\nVoilà."
         with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=noisy):
             result = _analyze("contenu", chain=chain, retries=0)
-        self.assertEqual(result.category_path, "Banque")
+        self.assertEqual(result.category_path, "Personal/Administrative/Banking")
 
 
 if __name__ == "__main__":

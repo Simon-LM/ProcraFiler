@@ -426,7 +426,7 @@ class ProcessResult:
     mirror sync was attempted and failed — never when it was skipped because
     the mirror_sync feature is off. `pending` is True when the file was parked
     in the decisions queue (the AI was unsure and offered options): it is
-    physically in Revue_Manuelle with flow_state LIBRARY_STORED, but awaits
+    physically in Manual_Review with flow_state LIBRARY_STORED, but awaits
     `review`, so the batch loop counts it separately from a settled placement.
     The batch loop tallies these inline instead of re-reading the action log
     after every file.
@@ -794,7 +794,7 @@ def _process_next_inbox_file(
             # a genuine decision-with-options → park it in the decisions queue for
             # `review`. If none survive (AI unconfigured, hard failure, or all
             # options invalid), fall back to plain manual review as before: a
-            # settled placement in Revue_Manuelle that IS mirrored.
+            # settled placement in Manual_Review that IS mirrored.
             options: list[str] = []
             for alt in analysis.alternatives:
                 normalized = normalize_category_path(alt, max_depth)
@@ -886,7 +886,7 @@ def _process_next_inbox_file(
     }
     content_json = json.dumps(fiche, ensure_ascii=True)
 
-    # A parked file is physically in Revue_Manuelle but NOT a settled placement:
+    # A parked file is physically in Manual_Review but NOT a settled placement:
     # its status is DECISION_PENDING and it carries the AI's options for `review`.
     # We deliberately do NOT mirror it — the mirror holds the durable library, and
     # the destination will change once the user resolves the decision.
@@ -1100,7 +1100,7 @@ def resolve_pending_decision(
     `record` is a row from `list_pending_decisions()`. `chosen_label` is the
     user's pick — an existing option, an existing folder, or a brand-new path
     (a new subfolder, or a new root category, which is allowed ONLY here). The
-    file moves out of Revue_Manuelle into the chosen category, the catalog entry
+    file moves out of Manual_Review into the chosen category, the catalog entry
     becomes LIBRARY_STORED with its pending decision cleared, and only now is the
     file mirrored (it is finally a settled placement).
     """
