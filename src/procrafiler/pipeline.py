@@ -123,15 +123,64 @@ def _prune_empty_inbox_dirs(inbox_dir: Path) -> int:
     return removed
 
 
-def _resolve_document_date(ai_date: str | None, source_path: Path, now_utc: datetime | None) -> datetime:
+def _exif_capture_datetime(path: Path) -> datetime | None:
+    """The photo's own capture date from EXIF (DateTimeOriginal), or None.
+
+    A hard metadata fact, and far more reliable than a vision model reading a
+    date off the image (which can hallucinate). EXIF carries no timezone, so the
+    naive value is treated as UTC for consistency with the rest of the pipeline.
+    Any problem (no Pillow, no EXIF, unparseable) yields None — the caller then
+    falls through the cascade.
+    """
+    try:
+        from PIL import Image  # optional dep; absence just disables EXIF dating
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+            if not exif:
+                return None
+            raw = None
+            try:
+                # DateTimeOriginal (36867) lives in the Exif sub-IFD (0x8769).
+                raw = exif.get_ifd(0x8769).get(36867)
+            except Exception:
+                raw = None
+            if not isinstance(raw, str) or not raw.strip():
+                raw = exif.get(306)  # DateTime (fallback)
+            if not isinstance(raw, str) or not raw.strip():
+                return None
+            return datetime.strptime(raw.strip(), "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _resolve_document_date(
+    ai_date: str | None,
+    source_path: Path,
+    now_utc: datetime | None,
+    *,
+    media_type: str | None = None,
+) -> datetime:
     """Pick the date used to prefix the stored filename.
 
-    Cascade: the date the AI found inside the document content (at midnight UTC —
-    a document states a day, not a time, and midnight keeps same-day files
-    grouped instead of scattered by processing seconds) → the file's
-    modification time → the processing time. This only affects the FILENAME
-    prefix; action-log and catalog timestamps keep the real processing time.
+    Cascade:
+    1. For images, the EXIF capture date (DateTimeOriginal) — real metadata, and
+       it sidesteps vision date-hallucination; it also makes photos taken the
+       same day group naturally.
+    2. else the date the AI found inside the document content (at midnight UTC —
+       a document states a day, not a time, and midnight keeps same-day files
+       grouped instead of scattered by processing seconds).
+    3. else the file's modification time.
+    4. else the processing time.
+    This only affects the FILENAME prefix; action-log and catalog timestamps keep
+    the real processing time.
     """
+    if media_type == "image":
+        exif_dt = _exif_capture_datetime(source_path)
+        if exif_dt is not None:
+            return exif_dt
     if ai_date:
         try:
             return datetime.strptime(ai_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -463,6 +512,15 @@ def _process_next_inbox_file(
     operation_id = str(uuid4())
     source = candidates[0]
     current_state = INITIAL_STATE
+    # The Inbox-relative folder the file was dropped in (e.g. "Water-Damage" for
+    # Inbox/Water-Damage/photo.jpg; "" at the Inbox root). Recorded on the fiche
+    # as a grouping signal for the future organize phase — files dropped together
+    # in a folder are a candidate set. The folder is a hint, not ground truth.
+    try:
+        relative_dir = source.parent.relative_to(paths.inbox_dir)
+        source_folder = "" if relative_dir == Path(".") else str(relative_dir)
+    except ValueError:
+        source_folder = ""
     try:
         display_name = str(source.relative_to(paths.inbox_dir))
     except ValueError:
@@ -856,10 +914,10 @@ def _process_next_inbox_file(
     document_date = analysis.document_date if analysis is not None else None
 
     candidate_name = f"{stem}{queued_target.suffix}"
-    # Date the file by its CONTENT (the date the AI found in it), falling back to
-    # the file's mtime, then the processing time. Only the filename prefix uses
-    # this; logs/catalog keep the real processing time (now_utc).
-    document_dt = _resolve_document_date(document_date, queued_target, now_utc)
+    # Date the file by its real date: EXIF capture date for photos, else the date
+    # the AI found in the content, else the file's mtime, else the processing time.
+    # Only the filename prefix uses this; logs/catalog keep the real processing time.
+    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=dispatch.media_type)
     final_name = build_timestamped_filename(candidate_name, now_utc=document_dt)
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
@@ -879,6 +937,10 @@ def _process_next_inbox_file(
         "keywords": analysis.keywords if analysis is not None else [],
         "entities": analysis.entities if analysis is not None else {},
         "language": analysis.language if analysis is not None else None,
+        # The Inbox subfolder the file came from (grouping signal for `organize`),
+        # and the real date it was filed under (EXIF/content/mtime cascade).
+        "source_folder": source_folder or None,
+        "effective_date": document_dt.strftime("%Y-%m-%d"),
         "read_via": read_via,
         "provider": analysis.provider if analysis is not None else None,
         "model": analysis.model if analysis is not None else None,

@@ -79,6 +79,9 @@ The catalog is also the **content metadata store**. When a document is read, the
   - `keywords` — terms for later search/sort.
   - `entities` — structured key data, **extensible** (e.g. issuer, document type, amounts, references).
   - `language` (optional).
+- **Grouping / dating signals:**
+  - `source_folder` — the Inbox subfolder the file was dropped in (e.g. `Water-Damage`; null at the Inbox root). A signal for the organize phase: files dropped together are a candidate set — a hint, not ground truth.
+  - `effective_date` — the real date the file was filed under (`YYYY-MM-DD`), from the date cascade: **EXIF capture date for photos** → the AI's content date → the file's mtime → processing time. EXIF comes first for images because it is hard metadata and sidesteps vision date-hallucination, and it makes photos taken the same day group naturally.
 - **Provenance:** `read_via` (text / ocr / vision), `provider`, `model`, `analyzed_at`.
 
 `doc_id` is the stable key: search and `reorganize` operate on these records, **not** on the files themselves. When the analysis step cannot run (no chain, all providers failed), the identity/lifecycle fields are still written and the content-metadata fields are left empty.

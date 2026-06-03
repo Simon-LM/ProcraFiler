@@ -8,9 +8,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from procrafiler.ai_analysis import _extract_document_date
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
-from procrafiler.pipeline import _resolve_document_date, process_next_inbox_file
+from procrafiler.pipeline import _exif_capture_datetime, _resolve_document_date, process_next_inbox_file
+
+
+def _make_jpeg_with_exif(path: Path, dt_str: str | None) -> None:
+    """Write a tiny JPEG, optionally with an EXIF DateTimeOriginal (YYYY:MM:DD HH:MM:SS)."""
+    image = Image.new("RGB", (4, 4), color="red")
+    if dt_str is None:
+        image.save(path)
+        return
+    exif = image.getexif()
+    exif[0x8769] = {36867: dt_str}  # Exif sub-IFD with DateTimeOriginal
+    image.save(path, exif=exif)
 
 
 class TestExtractDocumentDate(unittest.TestCase):
@@ -60,6 +73,56 @@ class TestResolveDocumentDate(unittest.TestCase):
     def test_missing_file_falls_back_to_now(self) -> None:
         dt = _resolve_document_date(None, Path(self.tmp.name) / "nope.txt", self.now)
         self.assertEqual(dt, self.now)
+
+
+class TestExifDates(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.now = datetime(2026, 5, 1, 8, 0, 0, tzinfo=timezone.utc)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_reads_datetimeoriginal(self) -> None:
+        photo = self.dir / "p.jpg"
+        _make_jpeg_with_exif(photo, "2025:08:01 20:39:18")
+        self.assertEqual(
+            _exif_capture_datetime(photo),
+            datetime(2025, 8, 1, 20, 39, 18, tzinfo=timezone.utc),
+        )
+
+    def test_none_when_no_exif(self) -> None:
+        photo = self.dir / "noexif.jpg"
+        _make_jpeg_with_exif(photo, None)
+        self.assertIsNone(_exif_capture_datetime(photo))
+
+    def test_none_for_non_image(self) -> None:
+        txt = self.dir / "doc.txt"
+        txt.write_bytes(b"not an image")
+        self.assertIsNone(_exif_capture_datetime(txt))
+
+    def test_exif_beats_ai_date_and_mtime_for_images(self) -> None:
+        photo = self.dir / "p.jpg"
+        _make_jpeg_with_exif(photo, "2025:08:01 20:39:18")
+        # Set an mtime far from the EXIF date; pass a (wrong) AI date too.
+        mtime = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp()
+        os.utime(photo, (mtime, mtime))
+        dt = _resolve_document_date("2015-08-04", photo, self.now, media_type="image")
+        self.assertEqual(dt, datetime(2025, 8, 1, 20, 39, 18, tzinfo=timezone.utc))
+
+    def test_exif_ignored_for_non_image_media(self) -> None:
+        # A PDF with an AI date: EXIF is not even consulted; the AI date wins.
+        pdf = self.dir / "doc.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
+        dt = _resolve_document_date("2026-04-30", pdf, self.now, media_type="pdf")
+        self.assertEqual(dt, datetime(2026, 4, 30, 0, 0, 0, tzinfo=timezone.utc))
+
+    def test_image_without_exif_falls_back_to_ai_date(self) -> None:
+        photo = self.dir / "noexif.jpg"
+        _make_jpeg_with_exif(photo, None)
+        dt = _resolve_document_date("2026-04-30", photo, self.now, media_type="image")
+        self.assertEqual(dt, datetime(2026, 4, 30, 0, 0, 0, tzinfo=timezone.utc))
 
 
 class TestDocumentDatePipeline(unittest.TestCase):

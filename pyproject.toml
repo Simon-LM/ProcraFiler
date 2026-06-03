@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
   "pypdf>=6,<7",
+  "Pillow>=10,<12",
 ]
 
 [project.urls]
