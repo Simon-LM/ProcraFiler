@@ -126,7 +126,7 @@ class TestCliReview(unittest.TestCase):
         now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
         with patch(
             "procrafiler.ai_analysis.call_mistral_chat",
-            return_value=json.dumps({"category_path": None, "alternatives": ["Banque", "Administratif/Impots"]}),
+            return_value=json.dumps({"category_path": None, "alternatives": ["Personal/Administrative/Banking", "Personal/Administrative/Taxes"]}),
         ):
             process_next_inbox_file(self.paths, now_utc=now)
 
@@ -144,7 +144,7 @@ class TestCliReview(unittest.TestCase):
             code = main(["review"])
         self.assertEqual(code, 0)
         self.assertIn("resolved 1", out.getvalue())
-        filed = [p for p in (self.paths.library_root / "Banque").rglob("*") if p.is_file()]
+        filed = [p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*") if p.is_file()]
         self.assertEqual(len(filed), 1)
 
 

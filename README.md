@@ -90,21 +90,20 @@ Every file is read by an AI; its name and category are **outputs of that reading
 - A scanned receipt saved as `.jpg` is an administrative document, not a media image — only the content can tell.
 - When the AI is uncertain, the file goes to manual review. The AI never performs an irreversible action.
 
-Base folders are semantic categories (every destination is AI-decided from content, never reached by an extension rule):
+The base library tree is organized by life **context** (Personal / Work) and then by **subject** — never by file format. Names are English (the universal architecture); your own inbox folder names stay in your language and are only a hint. The AI files into these and creates anything finer itself (e.g. `Clients/<name>`, `Insurance/Water-Damage-2025`, `Personal/Trip-Spain-2025`).
 
-- `Personnel/Documents`
-- `Professionnel/Documents`
-- `Administratif`
-- `Banque`
-- `Telephonie`
-- `Internet`
-- `Personnel/Medias/Images`
-- `Personnel/Medias/Videos`
-- `Personnel/Medias/Audio`
-- `Personnel/Archives`
-- `Revue_Manuelle`
+```text
+Personal/
+    Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Telecom  Vehicle
+    Education/
+    Hobbies/
+Work/
+    Employment/   Administrative  Payslips
+    Business/     Administrative  Invoices  Expenses  Clients
+Manual_Review/    # safe catch-all (uncertain / unreadable)
+```
 
-The media folders (`Personnel/Medias/...`) are themselves content-decided destinations: a file being an image by extension does not by itself send it there — a photographed document is classified by what it contains.
+There are **no format buckets**: a photographed receipt saved as `.jpg` is classified by what it *contains* (→ `Personal/Administrative/...`), while a holiday photo goes to its event (`Personal/Trip-Spain-2025`). The format only decides which reader extracts the content, never the destination. Cross-cutting views ("all my bills") come from the catalog fiche (keywords/entities) and soft-links, not by duplicating folders. The taxonomy is a sane default you can adapt.
 
 ## AI Analysis (MVP)
 
@@ -153,7 +152,7 @@ procrafiler process-all --dry-run
 procrafiler review                  # resolve files the AI was unsure about (the decisions queue)
 ```
 
-When the AI cannot confidently place a file but has plausible candidates, it does not guess: the file is parked in the **decisions queue** (`Revue_Manuelle`, status `DECISION_PENDING`) and `process-all` tells you how many are waiting. `procrafiler review` walks them one by one, showing the AI's options — you pick one, type a custom path (a new subfolder, or a brand-new top-level category, which is allowed only here), or skip. Only once you resolve a file is it re-filed and mirrored.
+When the AI cannot confidently place a file but has plausible candidates, it does not guess: the file is parked in the **decisions queue** (`Manual_Review`, status `DECISION_PENDING`) and `process-all` tells you how many are waiting. `procrafiler review` walks them one by one, showing the AI's options — you pick one, type a custom path (a new subfolder, or a brand-new top-level category, which is allowed only here), or skip. Only once you resolve a file is it re-filed and mirrored.
 
 Diagnostics and maintenance:
 
@@ -286,7 +285,7 @@ The IA-first core is implemented end to end:
 
 - **Reading** — every file is read for its content: text files and readable PDFs locally (via `pypdf`), scanned PDFs via Mistral OCR, images via a Mistral vision model.
 - **Naming** — the new filename is derived from that content.
-- **Classification** — the destination category is decided by AI from that content, never a guessed category. When the AI is unsure but has candidates, the file enters the **decisions queue** for you to resolve with `procrafiler review`; truly unreadable or optionless files go to plain manual review (`Revue_Manuelle`).
+- **Classification** — the destination category is decided by AI from that content, never a guessed category. When the AI is unsure but has candidates, the file enters the **decisions queue** for you to resolve with `procrafiler review`; truly unreadable or optionless files go to plain manual review (`Manual_Review`).
 - **Safety** — the app never deletes your files: duplicates and removals are *moved* to dedicated trash folders for you to empty manually; the only deletion is the explicit `purge-mirror-trash` command, scoped to old mirror backups in `Mirror_Trash`.
 
 Every AI task is configured per the env variables above (provider/model never hardcoded); with no chain configured, files simply route to manual review.

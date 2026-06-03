@@ -51,25 +51,25 @@ class TestOcrPipeline(unittest.TestCase):
         with patch("procrafiler.ai_reader.call_mistral_ocr", return_value="Releve de compte BNP avril 2026"):
             with patch(
                 "procrafiler.ai_analysis.call_mistral_chat",
-                return_value='{"name": "Releve BNP", "category_path": "Banque"}',
+                return_value='{"name": "Releve BNP", "category_path": "Personal/Administrative/Banking"}',
             ):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        banque_files = [p for p in (self.paths.library_root / "Banque").rglob("*") if p.is_file()]
+        banque_files = [p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*") if p.is_file()]
         self.assertEqual(len(banque_files), 1)
 
         events = self._events()
         self.assertTrue(any(e["action"] == "ocr_read_success" for e in events))
-        self.assertTrue(any(e["action"] == "analysis_success" and e["category"] == "Banque" for e in events))
+        self.assertTrue(any(e["action"] == "analysis_success" and e["category"] == "Personal/Administrative/Banking" for e in events))
 
     def test_scanned_pdf_without_ocr_chain_goes_to_manual_review(self) -> None:
-        # No OCR chain configured -> OCR unavailable -> Revue_Manuelle.
+        # No OCR chain configured -> OCR unavailable -> Manual_Review.
         (self.paths.inbox_dir / "scan.pdf").write_bytes(b"%PDF-1.4 scanned, no text layer")
         status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        review_files = [p for p in (self.paths.library_root / "Revue_Manuelle").rglob("*") if p.is_file()]
+        review_files = [p for p in (self.paths.library_root / "Manual_Review").rglob("*") if p.is_file()]
         self.assertEqual(len(review_files), 1)
         events = self._events()
         self.assertTrue(any(e["action"] == "ocr_read_unavailable" for e in events))
@@ -82,12 +82,12 @@ class TestOcrPipeline(unittest.TestCase):
         with patch("procrafiler.ai_reader.call_mistral_vision", return_value="Recu de carte bancaire, total 42 EUR"):
             with patch(
                 "procrafiler.ai_analysis.call_mistral_chat",
-                return_value='{"name": "Recu carte", "category_path": "Banque"}',
+                return_value='{"name": "Recu carte", "category_path": "Personal/Administrative/Banking"}',
             ):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        banque_files = [p for p in (self.paths.library_root / "Banque").rglob("*") if p.is_file()]
+        banque_files = [p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*") if p.is_file()]
         self.assertEqual(len(banque_files), 1)
         events = self._events()
         self.assertTrue(any(e["action"] == "vision_read_success" for e in events))
@@ -97,7 +97,7 @@ class TestOcrPipeline(unittest.TestCase):
         status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        review_files = [p for p in (self.paths.library_root / "Revue_Manuelle").rglob("*") if p.is_file()]
+        review_files = [p for p in (self.paths.library_root / "Manual_Review").rglob("*") if p.is_file()]
         self.assertEqual(len(review_files), 1)
         events = self._events()
         self.assertTrue(any(e["action"] == "vision_read_unavailable" for e in events))

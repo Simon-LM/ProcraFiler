@@ -6,30 +6,44 @@ from pathlib import Path
 from procrafiler.naming import sanitize_filename_stem
 
 
+# The base library tree shipped with the app (spec §10). It is organized by life
+# CONTEXT (Personal / Work) and then by SUBJECT — never by file format. Names are
+# English (the universal business architecture); a user's own inbox folder names
+# stay in their language and are only a hint. The AI files into these and creates
+# anything finer itself (e.g. Clients/<name>, Insurance/Water-Damage-2025,
+# Personal/Trip-Spain-2025) — those instances are NOT part of the base tree.
 BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
-    ("Personnel", "Documents"),
-    ("Professionnel", "Documents"),
-    ("Administratif",),
-    ("Banque",),
-    ("Telephonie",),
-    ("Internet",),
-    ("Personnel", "Medias", "Images"),
-    ("Personnel", "Medias", "Videos"),
-    ("Personnel", "Medias", "Audio"),
-    ("Personnel", "Archives"),
-    ("Revue_Manuelle",),
+    ("Personal",),
+    ("Personal", "Administrative"),
+    ("Personal", "Administrative", "Identity"),
+    ("Personal", "Administrative", "Taxes"),
+    ("Personal", "Administrative", "Banking"),
+    ("Personal", "Administrative", "Insurance"),
+    ("Personal", "Administrative", "Health"),
+    ("Personal", "Administrative", "Housing"),
+    ("Personal", "Administrative", "Telecom"),
+    ("Personal", "Administrative", "Vehicle"),
+    ("Personal", "Education"),
+    ("Personal", "Hobbies"),
+    ("Work",),
+    ("Work", "Employment"),
+    ("Work", "Employment", "Administrative"),
+    ("Work", "Employment", "Payslips"),
+    ("Work", "Business"),
+    ("Work", "Business", "Administrative"),
+    ("Work", "Business", "Invoices"),
+    ("Work", "Business", "Expenses"),
+    ("Work", "Business", "Clients"),
+    ("Manual_Review",),
 )
 
 
-# Interim destination used while there is no AI classifier yet.
-#
-# The extension only tells us *how to read* a file (its media type), never
-# *where it belongs* (its category). The category is the job of AI
-# classification from the file content, which is not implemented yet. Until
-# then, every readable file lands here for a human (or, later, the AI) to
-# categorize. This is NOT an extension->category mapping — it is the explicit
-# absence of a category decision.
-INTERIM_LIBRARY_DIR: tuple[str, ...] = ("Revue_Manuelle",)
+# The safe catch-all destination. A file lands here when its content can't be
+# read at all (unreadable/unsupported) or when the AI is genuinely uncertain —
+# never a guessed category. It is the explicit ABSENCE of a category decision,
+# not an extension->category mapping. (Photos that ARE classifiable go to their
+# subject folder like any document; the format only tells us how to read them.)
+INTERIM_LIBRARY_DIR: tuple[str, ...] = ("Manual_Review",)
 
 
 # Extension -> media type. This is a TECHNICAL DISPATCH only: it decides which
@@ -123,7 +137,7 @@ def ensure_base_library_directories(library_root: Path) -> None:
 
 
 def category_label(relative_dir: tuple[str, ...]) -> str:
-    """Render a category path as a single label (e.g. ('Personnel','Documents') -> 'Personnel/Documents')."""
+    """Render a category path as a single label (e.g. ('Personal','Administrative') -> 'Personal/Administrative')."""
     return "/".join(relative_dir)
 
 
@@ -146,16 +160,17 @@ def existing_category_paths(library_root: Path) -> list[str]:
 
     Shown to the AI so it can REUSE an existing folder instead of inventing a
     near-duplicate. The base categories themselves are included; the interim
-    review bucket is not (it is not a real category)."""
-    paths: list[str] = []
+    review bucket is not (it is not a real category). De-duplicated and sorted —
+    the base tree is nested, so a directory can be reached via several bases."""
+    labels: set[str] = set()
     for base in classifiable_categories():
         base_dir = library_root / Path(*base)
         if not base_dir.exists():
             continue
-        paths.append(category_label(base))
-        for directory in sorted(p for p in base_dir.rglob("*") if p.is_dir()):
-            paths.append("/".join(directory.relative_to(library_root).parts))
-    return paths
+        labels.add(category_label(base))
+        for directory in (p for p in base_dir.rglob("*") if p.is_dir()):
+            labels.add("/".join(directory.relative_to(library_root).parts))
+    return sorted(labels)
 
 
 def normalize_category_path(label: str, max_depth: int) -> tuple[str, ...] | None:

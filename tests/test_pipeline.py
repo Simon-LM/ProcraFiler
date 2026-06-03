@@ -31,7 +31,7 @@ class TestPipeline(unittest.TestCase):
 
     def test_process_new_file_to_interim_review(self) -> None:
         # Until AI classification exists, a readable file (known extension) is
-        # ingested into the interim review directory (Revue_Manuelle) rather
+        # ingested into the interim review directory (Manual_Review) rather
         # than a wrongly extension-derived category. The extension only told us
         # how to read it, not where it belongs.
         source = self.paths.inbox_dir / "my doc.pdf"
@@ -46,17 +46,23 @@ class TestPipeline(unittest.TestCase):
         )
         self.assertEqual(status, "LIBRARY_STORED")
 
-        # The file must NOT land in an extension-derived semantic category.
-        self.assertFalse((self.paths.library_root / "Personnel" / "Documents").exists()
-                         and list((self.paths.library_root / "Personnel" / "Documents").iterdir()))
+        # The file must NOT land in a real (extension-derived) category — being
+        # unreadable, it goes to Manual_Review. No file under Personal / Work.
+        filed_in_real_category = [
+            p
+            for top in ("Personal", "Work")
+            for p in (self.paths.library_root / top).rglob("*")
+            if p.is_file()
+        ]
+        self.assertEqual(filed_in_real_category, [])
 
-        target_dir = self.paths.library_root / "Revue_Manuelle"
+        target_dir = self.paths.library_root / "Manual_Review"
         self.assertTrue(target_dir.exists())
         files = list(target_dir.iterdir())
         self.assertEqual(len(files), 1)
         self.assertTrue(files[0].name.startswith("2026-04-02_10-11-12__"))
 
-        mirror_target_dir = self.paths.mirror_root / "Revue_Manuelle"
+        mirror_target_dir = self.paths.mirror_root / "Manual_Review"
         self.assertTrue(mirror_target_dir.exists())
         mirror_files = list(mirror_target_dir.iterdir())
         self.assertEqual(len(mirror_files), 1)
@@ -83,7 +89,7 @@ class TestPipeline(unittest.TestCase):
         move_events = [e for e in events if e["action"] == "move_to_library"]
         self.assertEqual(len(move_events), 1)
         self.assertEqual(move_events[0]["media_type"], "pdf")
-        self.assertEqual(move_events[0]["target_route"], "Revue_Manuelle")
+        self.assertEqual(move_events[0]["target_route"], "Manual_Review")
         # The pipeline now reads the content locally before storing. The fake
         # PDF bytes here have no valid text layer, so the reader flags OCR.
         content_events = [e for e in events if e["action"] == "content_read"]

@@ -140,7 +140,7 @@ Build order implication: the content-reading capabilities (OCR, PDF extraction, 
 
 - Most folder architecture is predefined as a policy, even if not materialized on disk yet.
 - Folder structure is materialized lazily when first used.
-- Maximum depth is 6 levels under each root.
+- Total depth is bounded by a configurable safety cap (policy `taxonomy.max_depth`).
 - Folder move/rename operations require user confirmation.
 - New root branch creation requires user confirmation.
 
@@ -153,19 +153,21 @@ Extension dispatch vs. classification:
 - New root branch creation is performed by the user during `review` (the AI may never create a top-level category).
 - Filename conflicts are resolved with deterministic numeric suffixes.
 
-MVP base branches include at least:
+The base tree is organized by life **context** (Personal / Work), then by **subject** — never by file format. Names are English (the universal architecture); a user's own inbox folder names stay in their language and are only a hint. Few top-level entries + a clear binary at each level keep it navigable for screen-reader / ADHD users and legible for the AI. Cross-cutting axes (theme, admin-type, work/personal) live in the fiche (§4.1) + soft-links, not by duplicating folders. The base tree (the AI creates anything finer — `Clients/<name>`, `Insurance/Water-Damage-2025`, `Personal/Trip-Spain-2025` — which is NOT base):
 
-- `Personnel/Documents`
-- `Professionnel/Documents`
-- `Administratif`
-- `Banque`
-- `Telephonie`
-- `Internet`
-- `Personnel/Medias/Images`
-- `Personnel/Medias/Videos`
-- `Personnel/Medias/Audio`
-- `Personnel/Archives`
-- `Revue_Manuelle`
+```text
+Personal/
+    Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Telecom  Vehicle
+    Education/
+    Hobbies/
+Work/
+    Employment/   Administrative  Payslips
+    Business/     Administrative  Invoices  Expenses  Clients
+Manual_Review/
+```
+
+- No format buckets: a sinistre photo → its subject (Insurance evidence); a holiday photo → its event (`Personal/Trip-Spain-2025`). The format only selects the reader.
+- `Manual_Review` is the safe catch-all (uncertain / unreadable). The taxonomy is a sane default; making it user-editable is a planned enhancement.
 
 AI analysis policy (MVP baseline):
 

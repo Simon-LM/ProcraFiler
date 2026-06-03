@@ -22,18 +22,21 @@ from procrafiler.taxonomy import normalize_review_path
 
 class TestNormalizeReviewPath(unittest.TestCase):
     def test_existing_base_kept(self) -> None:
-        self.assertEqual(normalize_review_path("Banque", 10), ("Banque",))
+        self.assertEqual(normalize_review_path("Work", 10), ("Work",))
 
     def test_subfolder_under_existing_base(self) -> None:
-        self.assertEqual(normalize_review_path("Administratif/Impots", 10), ("Administratif", "Impots"))
+        self.assertEqual(
+            normalize_review_path("Personal/Hobbies/Photography", 10),
+            ("Personal", "Hobbies", "Photography"),
+        )
 
     def test_new_root_is_allowed_here(self) -> None:
         # Unlike the AI path (normalize_category_path), review may create a new root.
         self.assertEqual(normalize_review_path("Sante/Ordonnances", 10), ("Sante", "Ordonnances"))
 
     def test_case_insensitive_snaps_onto_existing_base(self) -> None:
-        # Typing "banque" must not fork a lowercase duplicate of "Banque".
-        self.assertEqual(normalize_review_path("banque/releves", 10), ("Banque", "releves"))
+        # Typing "work" must not fork a lowercase duplicate of "Work".
+        self.assertEqual(normalize_review_path("work/projects", 10), ("Work", "projects"))
 
     def test_segments_are_slugified(self) -> None:
         self.assertEqual(normalize_review_path("Santé/Ordonnances 2026", 10), ("Sante", "Ordonnances-2026"))
@@ -86,40 +89,46 @@ class _PipelineTestCase(unittest.TestCase):
 
 class TestParking(_PipelineTestCase):
     def test_uncertain_with_options_is_parked(self) -> None:
-        state = self._process({"category_path": None, "alternatives": ["Banque", "Administratif/Impots"]})
+        state = self._process(
+            {"category_path": None, "alternatives": ["Personal/Administrative/Banking", "Personal/Administrative/Taxes"]}
+        )
         # Physically stored (flow state) but parked for review (catalog status).
         self.assertEqual(state, "LIBRARY_STORED")
-        self.assertEqual(len(self._files_under("Revue_Manuelle")), 1)
+        self.assertEqual(len(self._files_under("Manual_Review")), 1)
 
         pending = self._repo().list_pending_decisions()
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0]["status"], "DECISION_PENDING")
         blob = json.loads(pending[0]["pending_decision"])
-        self.assertEqual(blob["options"], ["Banque", "Administratif/Impots"])
+        self.assertEqual(blob["options"], ["Personal/Administrative/Banking", "Personal/Administrative/Taxes"])
 
         # A parked file is NOT mirrored: its placement is not settled yet.
         self.assertEqual(self._mirror_files(), [])
 
     def test_invalid_options_fall_back_to_plain_manual_review(self) -> None:
         # Options that don't map to any base survive validation as none → this is
-        # ordinary manual review (settled in Revue_Manuelle, and mirrored).
-        state = self._process({"category_path": None, "alternatives": ["Loisirs/Audio", "Inexistant"]})
+        # ordinary manual review (settled in Manual_Review, and mirrored).
+        state = self._process({"category_path": None, "alternatives": ["Music/Jazz", "Nonexistent"]})
         self.assertEqual(state, "LIBRARY_STORED")
         self.assertEqual(self._repo().list_pending_decisions(), [])
-        self.assertEqual(len(self._files_under("Revue_Manuelle")), 1)
+        self.assertEqual(len(self._files_under("Manual_Review")), 1)
         self.assertEqual(len(self._mirror_files()), 1)  # settled → mirrored
 
     def test_confident_path_is_not_parked(self) -> None:
-        state = self._process({"category_path": "Banque", "alternatives": ["Administratif"]})
+        state = self._process(
+            {"category_path": "Personal/Administrative/Banking", "alternatives": ["Personal/Administrative"]}
+        )
         self.assertEqual(state, "LIBRARY_STORED")
         self.assertEqual(self._repo().list_pending_decisions(), [])
-        self.assertEqual(len(self._files_under("Banque")), 1)
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Banking")), 1)
         self.assertEqual(len(self._mirror_files()), 1)
 
 
 class TestRunReview(_PipelineTestCase):
     def _park_one(self) -> None:
-        self._process({"category_path": None, "alternatives": ["Banque", "Administratif/Impots"]})
+        self._process(
+            {"category_path": None, "alternatives": ["Personal/Administrative/Banking", "Personal/Administrative/Taxes"]}
+        )
 
     def _review(self, answers: list[str]) -> tuple[dict[str, int], list[str]]:
         out: list[str] = []
@@ -139,16 +148,16 @@ class TestRunReview(_PipelineTestCase):
 
     def test_resolve_by_picking_an_option(self) -> None:
         self._park_one()
-        summary, _ = self._review(["1"])  # pick "Banque"
+        summary, _ = self._review(["1"])  # pick "Personal/Administrative/Banking"
         self.assertEqual(summary["resolved"], 1)
-        self.assertEqual(len(self._files_under("Banque")), 1)
-        self.assertEqual(self._files_under("Revue_Manuelle"), [])
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Banking")), 1)
+        self.assertEqual(self._files_under("Manual_Review"), [])
         # Settled now → mirrored, and the queue is empty.
         self.assertEqual(len(self._mirror_files()), 1)
         self.assertEqual(self._repo().list_pending_decisions(), [])
         # The fiche is kept and its category_path now reflects the user's choice.
         doc = self._repo().list_documents()[0]
-        self.assertEqual(json.loads(doc["content_json"])["category_path"], "Banque")
+        self.assertEqual(json.loads(doc["content_json"])["category_path"], "Personal/Administrative/Banking")
 
     def test_resolve_with_custom_new_root(self) -> None:
         self._park_one()
@@ -162,13 +171,13 @@ class TestRunReview(_PipelineTestCase):
         summary, _ = self._review(["s"])
         self.assertEqual(summary["skipped"], 1)
         self.assertEqual(summary["resolved"], 0)
-        self.assertEqual(len(self._files_under("Revue_Manuelle")), 1)
+        self.assertEqual(len(self._files_under("Manual_Review")), 1)
         self.assertEqual(len(self._repo().list_pending_decisions()), 1)
 
 
 class TestResolveDirect(_PipelineTestCase):
     def test_invalid_label_raises(self) -> None:
-        self._process({"category_path": None, "alternatives": ["Banque"]})
+        self._process({"category_path": None, "alternatives": ["Personal/Administrative/Banking"]})
         record = self._repo().list_pending_decisions()[0]
         with self.assertRaises(PendingDecisionError):
             resolve_pending_decision(self.paths, record, "   ", now_utc=self.now)
@@ -176,11 +185,11 @@ class TestResolveDirect(_PipelineTestCase):
         self.assertEqual(len(self._repo().list_pending_decisions()), 1)
 
     def test_missing_source_raises(self) -> None:
-        self._process({"category_path": None, "alternatives": ["Banque"]})
+        self._process({"category_path": None, "alternatives": ["Personal/Administrative/Banking"]})
         record = dict(self._repo().list_pending_decisions()[0])
-        record["current_path"] = str(self.paths.library_root / "Revue_Manuelle" / "gone.txt")
+        record["current_path"] = str(self.paths.library_root / "Manual_Review" / "gone.txt")
         with self.assertRaises(PendingDecisionError):
-            resolve_pending_decision(self.paths, record, "Banque", now_utc=self.now)
+            resolve_pending_decision(self.paths, record, "Personal/Administrative/Banking", now_utc=self.now)
 
 
 if __name__ == "__main__":
