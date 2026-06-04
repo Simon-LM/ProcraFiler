@@ -72,7 +72,7 @@ The catalog is also the **content metadata store**. When a document is read, the
 
 - **Identity / lifecycle:** `doc_id` (stable UUID — survives renames and moves), `sha256`, `current_filename`, `current_path`, `status` / `flow_state`, `updated_at_utc`.
 - **Content metadata** (produced by the analysis step, §9):
-  - `name` — the AI-derived descriptive stem used for the filename.
+  - `name` — the AI-derived descriptive stem used for the filename. A generalist rule (no per-type hardcoding): name by the document's most distinctive **entity** (person, organization, subject) — a CV by the person's name, a bill by the issuer — never by its file type or format.
   - `document_date` — the date found inside the content (or null).
   - `category_path` — the chosen destination, plus the `alternatives` considered.
   - `summary` — a short abstract of what the document is.
