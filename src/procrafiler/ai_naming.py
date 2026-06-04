@@ -40,6 +40,7 @@ class ProviderCallError(RuntimeError):
 
 SUPPORTED_AI_TASKS: tuple[str, ...] = (
     "ANALYSIS",
+    "ORGANIZE",
     "OCR",
     "PDF",
     "IMAGE",
