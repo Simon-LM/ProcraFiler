@@ -239,6 +239,7 @@ def cmd_process_all(dry_run: bool = False) -> int:
         f"duplicates: {summary['duplicates']}, "
         f"manual_reviews: {summary['manual_reviews']}, "
         f"pending_decisions: {summary['pending_decisions']}, "
+        f"organized: {summary.get('organized', 0)}, "
         f"errors: {summary['errors']}, "
         f"mirror_failures: {summary['mirror_failures']}"
     )
