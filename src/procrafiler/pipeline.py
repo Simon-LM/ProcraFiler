@@ -20,6 +20,8 @@ ProgressFn = Callable[[str], None]
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings, load_runtime_policy
 from procrafiler.ai_analysis import analyze_content  # type: ignore[reportMissingImports]
+from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
+from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
@@ -484,6 +486,9 @@ class ProcessResult:
     flow_state: str
     mirror_failed: bool
     pending: bool = False
+    # The catalog doc_id when the file was stored in the library (LIBRARY_STORED,
+    # not pending). The batch then hands these to the organize pass for grouping.
+    doc_id: str | None = None
 
 
 def _process_next_inbox_file(
@@ -966,8 +971,9 @@ def _process_next_inbox_file(
         pending_blob = None
         catalog_status = "LIBRARY_STORED"
 
+    doc_id = str(uuid4())
     repo.upsert_document(
-        doc_id=str(uuid4()),
+        doc_id=doc_id,
         sha256=sha256,
         current_filename=library_target.name,
         current_path=str(library_target),
@@ -1008,7 +1014,7 @@ def _process_next_inbox_file(
         features=features,
     )
 
-    return ProcessResult(current_state, mirror_failed=mirror_status == MIRROR_FAILED)
+    return ProcessResult(current_state, mirror_failed=mirror_status == MIRROR_FAILED, doc_id=doc_id)
 
 
 def process_next_inbox_file(
@@ -1318,6 +1324,135 @@ def run_review(
     return summary
 
 
+def _move_mirror_copy(paths: RuntimePaths, old_library_path: Path, new_library_path: Path) -> None:
+    """Move a file's mirror copy to follow it when the library file is moved,
+    keeping the mirror consistent. No-op if the mirror copy isn't there."""
+    try:
+        old_rel = old_library_path.resolve().relative_to(paths.library_root.resolve())
+        new_rel = new_library_path.resolve().relative_to(paths.library_root.resolve())
+    except (OSError, ValueError):
+        return
+    old_mirror = paths.mirror_root / old_rel
+    new_mirror = paths.mirror_root / new_rel
+    if not old_mirror.exists() or new_mirror.exists():
+        return
+    new_mirror.parent.mkdir(parents=True, exist_ok=True)
+    move(str(old_mirror), str(new_mirror))
+
+
+def _organize_ingested(
+    paths: RuntimePaths,
+    ingested_doc_ids: list[str],
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    progress: ProgressFn | None,
+) -> int:
+    """Second pass: group the files just ingested into dated affair/series folders.
+
+    Files dropped together in one Inbox subfolder form a SET; the set-aware
+    `organize_set` (Mistral medium) looks at their fiches together and proposes a
+    final folder for each, creating dated affair/series subfolders. Only the
+    documents ingested in THIS run are touched — never the rest of the library
+    (re-sorting the existing library is the separate, deferred `reorganize`).
+    A no-op when no ORGANIZE chain is configured. Returns the number moved.
+    """
+    emit: ProgressFn = progress or (lambda _message: None)
+    if not ingested_doc_ids or not task_chain_from_env("ORGANIZE"):
+        return 0
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    by_id = {str(d["doc_id"]): d for d in repo.list_documents()}
+
+    # Group by the TOP-LEVEL Inbox subfolder the file came from (the set
+    # boundary). Files with no source folder are grouped together as loose drops.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for doc_id in ingested_doc_ids:
+        row = by_id.get(doc_id)
+        if row is None or row.get("status") != "LIBRARY_STORED":
+            continue
+        raw = row.get("content_json")
+        try:
+            fiche = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            fiche = {}
+        if not isinstance(fiche, dict) or not fiche.get("category_path"):
+            continue  # manual-review / no category → nothing to group
+        source_folder = str(fiche.get("source_folder") or "")
+        top = source_folder.split("/")[0] if source_folder else ""
+        groups.setdefault(top, []).append({"doc_id": doc_id, "row": row, "fiche": fiche, "source_folder": source_folder})
+
+    if not groups:
+        return 0
+
+    max_depth = load_runtime_policy(paths).taxonomy_max_depth
+    base_categories = [category_label(c) for c in classifiable_categories()]
+    moved = 0
+
+    for top, members in groups.items():
+        documents = [
+            {
+                "name": m["fiche"].get("name"),
+                "summary": m["fiche"].get("summary"),
+                "document_date": m["fiche"].get("effective_date") or m["fiche"].get("document_date"),
+                "category_path": m["fiche"].get("category_path"),
+            }
+            for m in members
+        ]
+        result = organize_set(
+            documents,
+            base_categories=base_categories,
+            existing_paths=existing_category_paths(paths.library_root),
+            source_folder=(top or None),
+        )
+        for index, member in enumerate(members):
+            proposed = result.placements.get(index)
+            validated = normalize_category_path(proposed, max_depth) if proposed else None
+            if validated is None:
+                continue
+            current_path = Path(str(member["row"]["current_path"]))
+            new_dir = paths.library_root / Path(*validated)
+            if not current_path.exists() or new_dir.resolve() == current_path.parent.resolve():
+                continue  # gone, or already in the proposed folder
+
+            new_target = _ensure_unique_path(new_dir / current_path.name)
+            new_target.parent.mkdir(parents=True, exist_ok=True)
+            move(str(current_path), str(new_target))
+            _move_mirror_copy(paths, current_path, new_target)
+
+            fiche = member["fiche"]
+            fiche["category_path"] = "/".join(validated)
+            repo.upsert_document(
+                doc_id=member["doc_id"],
+                sha256=str(member["row"]["sha256"]),
+                current_filename=new_target.name,
+                current_path=str(new_target),
+                status="LIBRARY_STORED",
+                updated_at_utc=_utc_iso(now_utc),
+                flow_state="LIBRARY_STORED",
+                content_json=json.dumps(fiche, ensure_ascii=True),
+            )
+            _append_action_log(
+                paths,
+                operation_id=str(uuid4()),
+                action="organize_grouped",
+                status="success",
+                message="Grouped into an affair/series folder",
+                now_utc=now_utc,
+                path_before=str(current_path),
+                path_after=str(new_target),
+                extra_fields={"folder": "/".join(validated), "source_folder": member["source_folder"]},
+                features=features,
+            )
+            emit(f"   grouped → {'/'.join(validated)}/{new_target.name}")
+            moved += 1
+
+    if moved:
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
+    return moved
+
+
 def process_all_inbox_files(
     paths: RuntimePaths,
     now_utc: datetime | None = None,
@@ -1332,6 +1467,7 @@ def process_all_inbox_files(
         "duplicates": 0,
         "manual_reviews": 0,
         "pending_decisions": 0,
+        "organized": 0,
         "errors": 0,
         "mirror_failures": 0,
         "total": 0,
@@ -1377,6 +1513,7 @@ def process_all_inbox_files(
     # the Inbox — stop rather than spin forever.
     iteration_budget = len(_iter_inbox_files(paths.inbox_dir)) * 2 + 10
     iterations = 0
+    ingested_doc_ids: list[str] = []
     while True:
         iterations += 1
         if iterations > iteration_budget:
@@ -1413,6 +1550,8 @@ def process_all_inbox_files(
             summary["pending_decisions"] += 1
         elif result.flow_state == "LIBRARY_STORED":
             summary["processed"] += 1
+            if result.doc_id:
+                ingested_doc_ids.append(result.doc_id)
         elif result.flow_state == "INBOX_TRASH_PENDING_MANUAL":
             summary["duplicates"] += 1
         elif result.flow_state == "USER_CONFIRMATION_REQUIRED":
@@ -1422,6 +1561,13 @@ def process_all_inbox_files(
 
         if result.mirror_failed:
             summary["mirror_failures"] += 1
+
+    # Second pass — set-aware organization: group the files just ingested into
+    # dated affair/series folders (the per-file analysis couldn't see they form a
+    # set). Only this run's files, never the rest of the library.
+    summary["organized"] = _organize_ingested(
+        paths, ingested_doc_ids, now_utc=now_utc, features=features, progress=progress
+    )
 
     # Tidy up: drop the now-empty Inbox subfolders the processed files left behind.
     _prune_empty_inbox_dirs(paths.inbox_dir)
@@ -1435,7 +1581,8 @@ def process_all_inbox_files(
             "Batch completed: "
             f"processed={summary['processed']}, duplicates={summary['duplicates']}, "
             f"manual_reviews={summary['manual_reviews']}, pending_decisions={summary['pending_decisions']}, "
-            f"errors={summary['errors']}, mirror_failures={summary['mirror_failures']}"
+            f"organized={summary['organized']}, errors={summary['errors']}, "
+            f"mirror_failures={summary['mirror_failures']}"
         ),
         now_utc=now_utc,
         extra_fields={"dry_run": False},
