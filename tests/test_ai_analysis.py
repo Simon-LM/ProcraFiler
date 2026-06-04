@@ -4,7 +4,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from procrafiler.ai_analysis import AnalysisResult, analyze_content
+from procrafiler.ai_analysis import AnalysisResult, _build_analysis_prompt, analyze_content
 from procrafiler.ai_naming import ChainEntry, ProviderCallError
 
 BASES = ["Personal", "Work", "Personal/Administrative", "Personal/Administrative/Banking"]
@@ -117,6 +117,14 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertTrue(result.used_fallback)
         self.assertEqual(result.provider, "fallback")
         self.assertEqual(sleeps, [1, 2])
+
+    def test_prompt_names_by_salient_entity_not_type(self) -> None:
+        # Generalist naming rule (no per-type hardcoding): name by the
+        # distinctive entity (who/what), never by file type/format.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        lowered = prompt.lower()
+        self.assertIn("most distinctive entity", lowered)
+        self.assertIn("do not name it by its file type or format", lowered)
 
     def test_noisy_json_is_parsed(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
