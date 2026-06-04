@@ -17,7 +17,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, cast
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
@@ -156,7 +156,11 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
             return resp.status, resp.read()
     except HTTPError as err:
         return err.code, err.read()
-    except URLError as err:
+    except OSError as err:
+        # Any network-level failure — URLError, a socket read/connect TimeoutError
+        # (a slow vision/OCR call), connection reset, etc. — becomes a retryable
+        # provider error so the caller's retry + failover handles it gracefully
+        # instead of letting it crash the whole batch.
         raise ProviderCallError(f"NETWORK_ERROR: {err}") from err
 
 

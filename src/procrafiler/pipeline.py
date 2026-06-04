@@ -1372,8 +1372,39 @@ def process_all_inbox_files(
         )
         return summary
 
+    # Safety bound: a healthy batch does one iteration per Inbox file (+1 NOOP).
+    # If we ever loop well past that — e.g. a file that fails *before* it leaves
+    # the Inbox — stop rather than spin forever.
+    iteration_budget = len(_iter_inbox_files(paths.inbox_dir)) * 2 + 10
+    iterations = 0
     while True:
-        result = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=False, progress=progress)
+        iterations += 1
+        if iterations > iteration_budget:
+            if progress is not None:
+                progress("   ✗ stopping batch: too many iterations (a file may be stuck)")
+            break
+
+        try:
+            result = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=False, progress=progress)
+        except Exception as exc:  # noqa: BLE001 — one bad file must never abort the whole batch
+            # The risky steps (reading, AI calls) all run after the file has been
+            # moved out of the Inbox, so the offending file is already consumed and
+            # the next iteration picks a different one. Log it, count it, continue.
+            summary["total"] += 1
+            summary["errors"] += 1
+            _append_action_log(
+                paths,
+                operation_id=str(uuid4()),
+                action="process_error",
+                status="error",
+                message=f"Unexpected error processing a file, skipping: {exc}",
+                now_utc=now_utc,
+                features=features,
+            )
+            if progress is not None:
+                progress(f"   ✗ error, skipping: {exc}")
+            continue
+
         if result.flow_state == "NOOP":
             break
 
