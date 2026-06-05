@@ -828,7 +828,11 @@ def _process_next_inbox_file(
         base_categories = [category_label(c) for c in classifiable_categories()]
         existing_paths = existing_category_paths(paths.library_root)
         analysis = analyze_content(
-            content_text, base_categories=base_categories, existing_paths=existing_paths
+            content_text,
+            base_categories=base_categories,
+            existing_paths=existing_paths,
+            original_filename=source.name,
+            source_folder=source_folder or None,
         )
         max_depth = load_runtime_policy(paths).taxonomy_max_depth
         validated = normalize_category_path(analysis.category_path, max_depth) if analysis.category_path else None
@@ -943,8 +947,10 @@ def _process_next_inbox_file(
         "entities": analysis.entities if analysis is not None else {},
         "language": analysis.language if analysis is not None else None,
         # The Inbox subfolder the file came from (grouping signal for `organize`),
-        # and the real date it was filed under (EXIF/content/mtime cascade).
+        # the user's original filename (kept as an aid for naming/search — never
+        # trusted, only a hint), and the real date it was filed under.
         "source_folder": source_folder or None,
+        "original_filename": source.name,
         "effective_date": document_dt.strftime("%Y-%m-%d"),
         "read_via": read_via,
         "provider": analysis.provider if analysis is not None else None,

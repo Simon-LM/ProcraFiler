@@ -83,10 +83,28 @@ def _empty_result(*, provider: str, model: str, reason: str, raw_output: str = "
     )
 
 
-def _build_analysis_prompt(text: str, base_categories: list[str], existing_paths: list[str]) -> str:
+def _build_analysis_prompt(
+    text: str,
+    base_categories: list[str],
+    existing_paths: list[str],
+    original_filename: str | None = None,
+    source_folder: str | None = None,
+) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
     snippet = text[:MAX_CONTENT_CHARS]
+    # The original filename and the folder the user dropped it in are HINTS, not
+    # ground truth: the content stays authoritative, but these help when the
+    # content is ambiguous (e.g. a file literally named "CV ...", or a photo in a
+    # folder named "Water-Damage"). Generalist — no per-type rules.
+    hints = ""
+    if original_filename or source_folder:
+        lines = ["\nHints (indicators, NOT ground truth — the content is authoritative; use these only to disambiguate):"]
+        if original_filename:
+            lines.append(f"- the user's original filename was: {original_filename}")
+        if source_folder:
+            lines.append(f"- it was dropped in a folder named: {source_folder}")
+        hints = "\n".join(lines) + "\n"
     return (
         "Read this document and file it. Return JSON only, with this exact schema:\n"
         "{\"name\": \"...\", \"date\": \"YYYY-MM-DD\"|null, \"category_path\": \"...\"|null, "
@@ -115,7 +133,8 @@ def _build_analysis_prompt(text: str, base_categories: list[str], existing_paths
         "- \"language\": the document's main language code (e.g. \"fr\", \"en\").\n"
         "Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"
-        f"{tree}\n\n"
+        f"{tree}\n"
+        f"{hints}\n"
         "Document content:\n"
         f"{snippet}"
     )
@@ -174,6 +193,8 @@ def analyze_content(
     *,
     base_categories: list[str],
     existing_paths: list[str],
+    original_filename: str | None = None,
+    source_folder: str | None = None,
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
@@ -195,7 +216,7 @@ def analyze_content(
 
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
-    prompt = _build_analysis_prompt(text, base_categories, existing_paths)
+    prompt = _build_analysis_prompt(text, base_categories, existing_paths, original_filename, source_folder)
 
     last_error = "unknown"
     for entry in chain_entries:

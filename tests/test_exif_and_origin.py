@@ -84,6 +84,12 @@ class TestExifAndOrigin(unittest.TestCase):
         process_next_inbox_file(self.paths, now_utc=self.now)
         self.assertIsNone(self._only_fiche()["source_folder"])
 
+    def test_original_filename_is_kept_in_the_fiche(self) -> None:
+        # Kept as an aid for naming/search (the user's name, before renaming).
+        (self.paths.inbox_dir / "CV_Simon-LOUVEL 2026.txt").write_bytes(b"contenu d'un cv")
+        process_next_inbox_file(self.paths, now_utc=self.now)
+        self.assertEqual(self._only_fiche()["original_filename"], "CV_Simon-LOUVEL 2026.txt")
+
 
 if __name__ == "__main__":
     unittest.main()
