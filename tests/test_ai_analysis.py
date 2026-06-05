@@ -126,6 +126,15 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("most distinctive entity", lowered)
         self.assertIn("do not name it by its file type or format", lowered)
 
+    def test_prompt_carries_filename_and_folder_as_hints(self) -> None:
+        prompt = _build_analysis_prompt("x", BASES, [], original_filename="CV_Simon-LOUVEL.odt", source_folder="Dégats_eaux")
+        self.assertIn("CV_Simon-LOUVEL.odt", prompt)
+        self.assertIn("Dégats_eaux", prompt)
+        self.assertIn("NOT ground truth", prompt)  # framed as a hint, not authority
+
+    def test_prompt_has_no_hints_block_when_none_given(self) -> None:
+        self.assertNotIn("Hints", _build_analysis_prompt("x", BASES, []))
+
     def test_noisy_json_is_parsed(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
         noisy = "Voici:\n" + _full(category_path="Personal/Administrative/Banking") + "\nVoilà."
