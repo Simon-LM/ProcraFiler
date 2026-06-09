@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from procrafiler import pipeline
 from procrafiler.ai_naming import ProviderCallError, call_mistral_chat
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
-from procrafiler.pipeline import ProcessResult, process_all_inbox_files
+from procrafiler.pipeline import process_all_inbox_files
 
 
 class TestNetworkErrorsAreRetryable(unittest.TestCase):
@@ -52,25 +53,32 @@ class TestBatchSurvivesAFailingFile(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_one_files_exception_does_not_abort_the_batch(self) -> None:
-        # First file blows up unexpectedly; the batch must log + count it and keep
-        # going, then finish cleanly. (The risky steps run after the file has left
-        # the Inbox, so the next iteration picks a different file.)
-        outcomes = [
-            RuntimeError("boom — e.g. an unhandled reader crash"),
-            ProcessResult("LIBRARY_STORED", mirror_failed=False),
-            ProcessResult("NOOP", mirror_failed=False),
-        ]
-        with patch("procrafiler.pipeline._process_next_inbox_file", side_effect=outcomes):
+        # The first file blows up unexpectedly during cataloguing; the batch must
+        # log + count it and keep going, filing the rest. (The risky steps run
+        # after the file has left the Inbox, so it's already consumed.)
+        (self.paths.inbox_dir / "a.txt").write_bytes(b"alpha")
+        (self.paths.inbox_dir / "b.txt").write_bytes(b"beta")
+
+        real_catalog = pipeline._catalog_one_inbox_file
+        state = {"calls": 0}
+
+        def flaky(*args: object, **kwargs: object):  # noqa: ANN202
+            state["calls"] += 1
+            if state["calls"] == 1:
+                raise RuntimeError("boom — e.g. an unhandled reader crash")
+            return real_catalog(*args, **kwargs)  # type: ignore[arg-type]
+
+        with patch("procrafiler.pipeline._catalog_one_inbox_file", side_effect=flaky):
             summary = process_all_inbox_files(self.paths, now_utc=self.now)
 
         self.assertEqual(summary["errors"], 1)
-        self.assertEqual(summary["processed"], 1)
+        self.assertEqual(summary["processed"], 1)  # the second file still gets filed
 
     def test_process_error_is_logged(self) -> None:
         import json
 
-        outcomes = [RuntimeError("kaboom"), ProcessResult("NOOP", mirror_failed=False)]
-        with patch("procrafiler.pipeline._process_next_inbox_file", side_effect=outcomes):
+        (self.paths.inbox_dir / "doc.txt").write_bytes(b"kaboom-bait")
+        with patch("procrafiler.pipeline._catalog_one_inbox_file", side_effect=RuntimeError("kaboom")):
             process_all_inbox_files(self.paths, now_utc=self.now)
 
         events = [
