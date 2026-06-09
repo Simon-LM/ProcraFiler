@@ -84,13 +84,92 @@ class TestOrganizePipeline(unittest.TestCase):
         self.assertEqual(len(mirror_affair), 2)
 
     def test_no_organize_chain_means_no_grouping(self) -> None:
-        # Without an ORGANIZE chain, the second pass is a no-op: files stay where
-        # the per-file analysis put them (bare Insurance/).
+        # Without an ORGANIZE chain, there is no set phase: files stay where the
+        # per-file analysis put them (bare Insurance/).
         self._drop_claim_folder()
         summary = self._run()
         self.assertEqual(summary["organized"], 0)
         self.assertEqual(len(self._files_under("Personal", "Administrative", "Insurance")), 2)
         self.assertFalse((self.paths.library_root / "Personal" / "Administrative" / "Insurance" / "Degats-eaux-2025-08").exists())
+
+    def test_uncertain_files_do_not_leak_when_the_set_decides(self) -> None:
+        # THE core B win over the old post-pass: per-file analysis is UNCERTAIN
+        # (null category + options), which ALONE would park each file in the
+        # decisions queue (Manual_Review). Because the whole set is catalogued
+        # first then organised together, they are placed coherently in the affair
+        # folder instead — nothing leaks file-by-file.
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
+        self._drop_claim_folder()
+        analysis = json.dumps(
+            {
+                "name": "Doc",
+                "category_path": None,
+                "alternatives": ["Personal/Administrative/Insurance", "Personal/Administrative"],
+                "summary": "sinistre",
+            }
+        )
+        organize = json.dumps({"placements": [{"index": 0, "path": AFFAIR}, {"index": 1, "path": AFFAIR}]})
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            with patch("procrafiler.ai_organize.call_mistral_chat", return_value=organize):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["pending_decisions"], 0)  # NO leak — the set decided
+        self.assertEqual(summary["processed"], 2)
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Insurance", "Degats-eaux-2025-08")), 2)
+
+    def test_organizer_sees_the_whole_set_in_one_call(self) -> None:
+        # Catalog-first: the organiser is called ONCE with every fiche of the set
+        # (not file-by-file), and the prompt carries the drop-folder hypothesis.
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
+        self._drop_claim_folder()
+        analysis = json.dumps({"name": "Doc", "category_path": "Personal/Administrative/Insurance", "summary": "x"})
+        organize = json.dumps({"placements": [{"index": 0, "path": AFFAIR}, {"index": 1, "path": AFFAIR}]})
+        captured: dict[str, str] = {}
+
+        def fake_org(prompt: str, model: str, **kwargs: object) -> str:
+            captured["prompt"] = prompt
+            return organize
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            with patch("procrafiler.ai_organize.call_mistral_chat", side_effect=fake_org) as organize_mock:
+                process_all_inbox_files(self.paths, now_utc=self.now)
+
+        organize_mock.assert_called_once()
+        self.assertIn("[0]", captured["prompt"])
+        self.assertIn("[1]", captured["prompt"])
+        self.assertIn("Dégats_eaux", captured["prompt"])  # the folder is fed as a hypothesis
+        self.assertIn("STRONG HYPOTHESIS", captured["prompt"])
+
+    def test_an_off_topic_file_is_split_out_of_the_set(self) -> None:
+        # The folder is a hypothesis, not binding: the organiser may place a file
+        # that doesn't belong somewhere else entirely (content has the last word).
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
+        self._drop_claim_folder()
+        banking = "Personal/Administrative/Banking"
+        analysis = json.dumps({"name": "Doc", "category_path": "Personal/Administrative/Insurance", "summary": "x"})
+        organize = json.dumps({"placements": [{"index": 0, "path": AFFAIR}, {"index": 1, "path": banking}]})
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            with patch("procrafiler.ai_organize.call_mistral_chat", return_value=organize):
+                process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Insurance", "Degats-eaux-2025-08")), 1)
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Banking")), 1)
+
+    def test_root_singletons_are_not_organized_as_a_set(self) -> None:
+        # Files loose in the Inbox root are singletons — the set organiser is NOT
+        # run over them as a group (that would invent a set the user never made).
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
+        (self.paths.inbox_dir / "a.txt").write_bytes(b"banking statement")
+        (self.paths.inbox_dir / "b.txt").write_bytes(b"another banking note")
+        analysis = json.dumps({"name": "Doc", "category_path": "Personal/Administrative/Banking", "summary": "x"})
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            with patch("procrafiler.ai_organize.call_mistral_chat") as organize_mock:
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        organize_mock.assert_not_called()  # root singletons skip the set organiser
+        self.assertEqual(summary["processed"], 2)
+        self.assertEqual(summary["organized"], 0)
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Banking")), 2)
 
 
 if __name__ == "__main__":

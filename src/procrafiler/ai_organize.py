@@ -80,19 +80,40 @@ def _build_organize_prompt(
 ) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
-    dropped = f' (they were dropped together in a folder named "{source_folder}")' if source_folder else ""
 
     lines: list[str] = []
     for index, document in enumerate(documents):
         name = str(document.get("name") or "?")
         date = str(document.get("document_date") or document.get("effective_date") or "?")
         proposed = str(document.get("category_path") or "?")
+        origin = str(document.get("original_filename") or "")
         summary = str(document.get("summary") or "")[:MAX_SUMMARY_CHARS]
-        lines.append(f"[{index}] name: {name} | date: {date} | proposed: {proposed} | summary: {summary}")
+        origin_part = f" | original_filename: {origin}" if origin else ""
+        lines.append(
+            f"[{index}] name: {name} | date: {date} | proposed: {proposed}{origin_part} | summary: {summary}"
+        )
     doc_block = "\n".join(lines)
 
+    # The drop-folder is a STRONG HYPOTHESIS, not a certainty: the user grouped
+    # these files on purpose, so they PROBABLY form one coherent set and the
+    # folder name is PROBABLY the right theme. Base the grouping on it — but the
+    # CONTENT is authoritative and can override it.
+    if source_folder:
+        hypothesis = (
+            f"These files were dropped together by the user in a folder named \"{source_folder}\". "
+            "Treat that as a STRONG HYPOTHESIS, not a certainty: assume they PROBABLY belong to the "
+            "same affair/case and that the folder name is PROBABLY the right theme — make this your "
+            "starting point and lean toward keeping them together under one folder named for it. "
+            "BUT verify against each document's own content: if a file clearly does not belong, place "
+            "it where ITS content says (split it out of the set); if the content contradicts the "
+            "folder name, the content wins. Privilégier, pas imposer.\n\n"
+        )
+    else:
+        hypothesis = ""
+
     return (
-        f"You are organizing a set of {len(documents)} documents that were already read{dropped}.\n"
+        f"You are organizing a set of {len(documents)} documents that were already read.\n"
+        f"{hypothesis}"
         "Decide a final folder for EACH document. Return JSON only, with this exact schema: "
         "{\"placements\": [{\"index\": 0, \"path\": \"...\"}, ...]} — one entry per document.\n\n"
         "Rules:\n"
@@ -101,12 +122,12 @@ def _build_organize_prompt(
         f"{bases}\n"
         "- Group documents that belong to the SAME affair, event, or case into ONE shared subfolder, "
         "named for that affair and its period (e.g. \".../Insurance/Degats-eaux-2025-07\"). "
-        "Use the documents' dates and the drop-folder name as signals.\n"
+        "Use the documents' dates, their content, and the drop-folder hypothesis above as signals.\n"
         "- For a document of an obviously RECURRING kind (meter reading, bank statement, payslip, "
         "bill, tax notice…), put it in a series subfolder, created even from a single instance "
         "(e.g. \".../Housing/Releves-eau\").\n"
         "- Do NOT force unrelated documents together; a genuine one-off may stay directly in its base "
-        "category. Prefer reusing an EXISTING folder from the tree below over a near-duplicate.\n"
+        "category. Prefer reusing an EXISTING folder from the tree below over creating a near-duplicate.\n"
         "- Use short, normalized folder names (no accents needed). Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"
         f"{tree}\n\n"

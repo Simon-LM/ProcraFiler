@@ -491,225 +491,44 @@ class ProcessResult:
     doc_id: str | None = None
 
 
-def _process_next_inbox_file(
+@dataclass
+class _CatalogedDoc:
+    """One Inbox file read + analyzed but NOT yet filed (it waits in the Queue).
+
+    The catalog phase produces these; the file phase consumes them. Keeping the
+    two apart lets the organize phase look at a whole FOLDER's docs together
+    before deciding where each one goes (so a coherent set isn't scattered)."""
+
+    queued_target: Path
+    source: Path
+    source_folder: str
+    sha256: str
+    dispatch: Any
+    operation_id: str
+    current_state: str
+    content_text: str | None = None
+    read_via: str | None = None
+    analysis: Any = None  # AnalysisResult | None
+    max_depth: int = 0
+
+
+def _read_and_analyze(
     paths: RuntimePaths,
-    now_utc: datetime | None = None,
-    dry_run: bool = False,
-    progress: ProgressFn | None = None,
-) -> ProcessResult:
-    """Process one file from Inbox according to MVP flow rules.
-
-    Walks the state machine declared in `procrafiler.flow`. Every transition
-    goes through `validate_transition`, which raises `InvalidTransition` if
-    the code ever attempts an illegal jump. The final state lands in the
-    catalog's `flow_state` column for the documents we persist (manual review
-    and library store paths). Duplicate paths produce no DB row, only log
-    events — the spec says we never permanently delete in inbox/library.
-    """
-    ensure_runtime_layout(paths)
-    features = load_feature_settings(paths)["features"]
-    emit: ProgressFn = progress or (lambda _message: None)
-
-    candidates = _iter_inbox_files(paths.inbox_dir)
-    if not candidates:
-        return ProcessResult("NOOP", mirror_failed=False)
-
-    operation_id = str(uuid4())
-    source = candidates[0]
-    current_state = INITIAL_STATE
-    # The Inbox-relative folder the file was dropped in (e.g. "Water-Damage" for
-    # Inbox/Water-Damage/photo.jpg; "" at the Inbox root). Recorded on the fiche
-    # as a grouping signal for the future organize phase — files dropped together
-    # in a folder are a candidate set. The folder is a hint, not ground truth.
-    try:
-        relative_dir = source.parent.relative_to(paths.inbox_dir)
-        source_folder = "" if relative_dir == Path(".") else str(relative_dir)
-    except ValueError:
-        source_folder = ""
-    try:
-        display_name = str(source.relative_to(paths.inbox_dir))
-    except ValueError:
-        display_name = source.name
-    emit(f"→ {display_name}")
-
-    _append_action_log(
-        paths,
-        operation_id=operation_id,
-        action="ingest_detected",
-        status="success",
-        message="File detected in inbox",
-        now_utc=now_utc,
-        path_before=str(source),
-        features=features,
-    )
-
-    queued_target = _ensure_unique_path(paths.queue_dir / source.name)
-    analysis_path = source
-    if not dry_run:
-        move(str(source), str(queued_target))
-
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="move_to_queue",
-            status="success",
-            message="File moved from inbox to queue",
-            now_utc=now_utc,
-            path_before=str(source),
-            path_after=str(queued_target),
-            features=features,
-        )
-        analysis_path = queued_target
-    current_state = validate_transition(current_state, "INBOX_QUEUED")
-
-    current_state = validate_transition(current_state, "PROCESSING_LOCKED")
-    sha256 = _file_sha256(analysis_path)
-    repo = CatalogRepository(paths.catalog_db_file)
-    repo.init_schema()
-    current_state = validate_transition(current_state, "ANALYSIS_RUNNING")
-
-    if dry_run:
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="dry_run_analysis",
-            status="success",
-            message="Dry-run analysis completed",
-            now_utc=now_utc,
-            path_before=str(source),
-            extra_fields={"dry_run": True},
-            features=features,
-        )
-        if repo.has_sha256(sha256):
-            current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
-            current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
-            _append_action_log(
-                paths,
-                operation_id=operation_id,
-                action="dry_run_duplicate_detected_exact",
-                status="success",
-                message="Dry-run detected duplicate by sha256",
-                now_utc=now_utc,
-                path_before=str(analysis_path),
-                extra_fields={"dry_run": True},
-                features=features,
-            )
-            return ProcessResult(current_state, mirror_failed=False)
-
-        current_state = validate_transition(current_state, "CLASSIFICATION_READY")
-        current_state = validate_transition(current_state, "ROUTE_PROPOSED")
-
-        dispatch = dispatch_for_filename(source.name)
-        if not dispatch.can_dispatch:
-            current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
-            _append_action_log(
-                paths,
-                operation_id=operation_id,
-                action="dry_run_manual_review_required",
-                status="warning",
-                message="Dry-run requires manual review for this file",
-                now_utc=now_utc,
-                path_before=str(source),
-                extra_fields={
-                    "dry_run": True,
-                    "reason": dispatch.reason,
-                    "matched_extension": dispatch.matched_extension,
-                },
-                features=features,
-            )
-            return ProcessResult(current_state, mirror_failed=False)
-
-        current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
-        current_state = validate_transition(current_state, "LIBRARY_STORED")
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="dry_run_route_to_library",
-            status="success",
-            message="Dry-run routed file to interim review pending AI classification",
-            now_utc=now_utc,
-            path_before=str(analysis_path),
-            extra_fields={
-                "dry_run": True,
-                "target_route": "/".join(INTERIM_LIBRARY_DIR),
-                "media_type": dispatch.media_type,
-                "matched_extension": dispatch.matched_extension,
-            },
-            features=features,
-        )
-        return ProcessResult(current_state, mirror_failed=False)
-
-    if repo.has_sha256(sha256):
-        current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
-        trash_target = _ensure_unique_path(paths.inbox_trash_manual_dir / queued_target.name)
-        move(str(queued_target), str(trash_target))
-        current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
-
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="duplicate_detected_exact",
-            status="success",
-            message="Exact duplicate detected by sha256",
-            now_utc=now_utc,
-            path_before=str(queued_target),
-            features=features,
-        )
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="move_to_inbox_trash_manual",
-            status="success",
-            message="Duplicate moved to manual inbox trash",
-            now_utc=now_utc,
-            path_before=str(queued_target),
-            path_after=str(trash_target),
-            features=features,
-        )
-        _write_catalog_snapshot(paths, repo, now_utc, features=features)
-        emit("   duplicate → Inbox_Trash_Manual")
-        return ProcessResult(current_state, mirror_failed=False)
-
-    current_state = validate_transition(current_state, "CLASSIFICATION_READY")
-    current_state = validate_transition(current_state, "ROUTE_PROPOSED")
-
-    dispatch = dispatch_for_filename(queued_target.name)
-    if not dispatch.can_dispatch:
-        current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
-        now_iso = _utc_iso(now_utc)
-        repo.upsert_document(
-            doc_id=str(uuid4()),
-            sha256=sha256,
-            current_filename=queued_target.name,
-            current_path=str(queued_target),
-            status="USER_CONFIRMATION_REQUIRED",
-            updated_at_utc=now_iso,
-            flow_state=current_state,
-        )
-        _write_catalog_snapshot(paths, repo, now_utc, features=features)
-
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="manual_review_required",
-            status="warning",
-            message="Manual review required for unsupported or missing extension",
-            now_utc=now_utc,
-            path_before=str(queued_target),
-            extra_fields={
-                "reason": dispatch.reason,
-                "matched_extension": dispatch.matched_extension,
-            },
-            features=features,
-        )
-        emit(f"   → manual review (unreadable: {dispatch.reason})")
-        return ProcessResult(current_state, mirror_failed=False)
-
-    current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
-
-    # Read the content locally (no AI call here). For text files and readable
-    # PDFs this yields the text the AI classifier consumes below; for
-    # scans/images it records which AI reader is still needed (built later).
+    *,
+    queued_target: Path,
+    source: Path,
+    source_folder: str,
+    sha256: str,
+    dispatch: Any,
+    operation_id: str,
+    current_state: str,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> _CatalogedDoc:
+    """Read the file's content (local / OCR / vision) and run the single AI
+    analysis → a fiche. Does NOT decide a final folder or file anything; returns
+    a `_CatalogedDoc` for the caller (per-file or set-aware) to place."""
     extraction = extract_text_content(queued_target, dispatch.media_type or "")
     emit(
         f"   read: {dispatch.media_type}"
@@ -737,10 +556,6 @@ def _process_next_inbox_file(
         features=features,
     )
 
-    # The unified content text: what we read locally, or — for scanned PDFs and
-    # images — what the OCR / vision reader produces. The single analysis call
-    # (naming + classification + fiche) consumes it. `read_via` records which
-    # reader produced it, for the fiche's provenance.
     content_text = extraction.text
     read_via: str | None = "text" if (content_text is not None and content_text.strip()) else None
     if (content_text is None or not content_text.strip()) and extraction.reader_hint == "ocr":
@@ -812,18 +627,8 @@ def _process_next_inbox_file(
             )
             emit(f"   vision unavailable ({vision_result.reason})")
 
-    # One analysis call reads the content once and returns the whole fiche: the
-    # descriptive name, the document's date, the destination category (+
-    # alternatives), a summary, keywords, and entities (spec §4.1, §9). Naming
-    # and classification are NOT separate passes. Files we can't read at all
-    # (images awaiting their vision reader, or OCR unavailable) and any
-    # uncertain/unconfigured outcome fall back to the interim review bucket —
-    # never to a guessed category.
-    route_dir = INTERIM_LIBRARY_DIR
-    pending_options: list[str] | None = None
-    pending_reason: str | None = None
     analysis = None
-    validated: tuple[str, ...] | None = None
+    max_depth = load_runtime_policy(paths).taxonomy_max_depth
     if content_text is not None and content_text.strip():
         base_categories = [category_label(c) for c in classifiable_categories()]
         existing_paths = existing_category_paths(paths.library_root)
@@ -834,18 +639,70 @@ def _process_next_inbox_file(
             original_filename=source.name,
             source_folder=source_folder or None,
         )
-        max_depth = load_runtime_policy(paths).taxonomy_max_depth
-        validated = normalize_category_path(analysis.category_path, max_depth) if analysis.category_path else None
+
+    return _CatalogedDoc(
+        queued_target=queued_target,
+        source=source,
+        source_folder=source_folder,
+        sha256=sha256,
+        dispatch=dispatch,
+        operation_id=operation_id,
+        current_state=current_state,
+        content_text=content_text,
+        read_via=read_via,
+        analysis=analysis,
+        max_depth=max_depth,
+    )
+
+
+def _route_from_analysis(
+    paths: RuntimePaths,
+    catdoc: _CatalogedDoc,
+    *,
+    organized_path: str | None = None,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> tuple[tuple[str, ...], list[str] | None, str | None]:
+    """Decide the final folder for one cataloged doc.
+
+    `organized_path` (set-aware organize's decision for this doc) wins when it
+    validates against the taxonomy — that's how the whole-set decision overrides
+    a context-blind per-file guess, so a folder's files don't scatter or leak to
+    the decisions queue individually. Otherwise fall back to the per-file
+    analysis: a confident category, else the decisions queue (alternatives), else
+    plain manual review. Returns (route_dir, pending_options, pending_reason)."""
+    analysis = catdoc.analysis
+    max_depth = catdoc.max_depth
+
+    if organized_path is not None:
+        validated = normalize_category_path(organized_path, max_depth)
         if validated is not None:
-            route_dir = validated
             _append_action_log(
                 paths,
-                operation_id=operation_id,
+                operation_id=catdoc.operation_id,
+                action="organize_placed",
+                status="success",
+                message="Set-aware organize placed the document",
+                now_utc=now_utc,
+                path_before=str(catdoc.queued_target),
+                extra_fields={"category": "/".join(validated), "proposed_path": organized_path},
+                features=features,
+            )
+            emit(f"   organized → {'/'.join(validated)}")
+            return validated, None, None
+
+    if analysis is not None:
+        validated = normalize_category_path(analysis.category_path, max_depth) if analysis.category_path else None
+        if validated is not None:
+            _append_action_log(
+                paths,
+                operation_id=catdoc.operation_id,
                 action="analysis_success",
                 status="success",
                 message="AI analyzed and classified document from content",
                 now_utc=now_utc,
-                path_before=str(queued_target),
+                path_before=str(catdoc.queued_target),
                 extra_fields={
                     "category": "/".join(validated),
                     "proposed_path": analysis.category_path,
@@ -855,67 +712,80 @@ def _process_next_inbox_file(
                 features=features,
             )
             emit(f"   classified → {'/'.join(validated)}")
-        else:
-            # No confident path. Collect the AI's alternatives (validated against
-            # the taxonomy, de-duplicated). If at least one survives, the file is
-            # a genuine decision-with-options → park it in the decisions queue for
-            # `review`. If none survive (AI unconfigured, hard failure, or all
-            # options invalid), fall back to plain manual review as before: a
-            # settled placement in Manual_Review that IS mirrored.
-            options: list[str] = []
-            for alt in analysis.alternatives:
-                normalized = normalize_category_path(alt, max_depth)
-                if normalized is not None:
-                    label = "/".join(normalized)
-                    if label not in options:
-                        options.append(label)
-            if options:
-                pending_options = options
-                pending_reason = analysis.reason or "uncertain_with_options"
-                _append_action_log(
-                    paths,
-                    operation_id=operation_id,
-                    action="decision_pending",
-                    status="warning",
-                    message="AI uncertain, parking file in the decisions queue for review",
-                    now_utc=now_utc,
-                    path_before=str(queued_target),
-                    extra_fields={
-                        "reason": pending_reason,
-                        "options": options,
-                        "provider": analysis.provider,
-                        "model": analysis.model,
-                    },
-                    features=features,
-                )
-                emit(f"   → decision pending ({len(options)} options)")
-            else:
-                _append_action_log(
-                    paths,
-                    operation_id=operation_id,
-                    action="analysis_manual_review",
-                    status="warning",
-                    message="AI analysis unavailable or uncertain, routing to manual review",
-                    now_utc=now_utc,
-                    path_before=str(queued_target),
-                    extra_fields={
-                        "reason": analysis.reason,
-                        "provider": analysis.provider,
-                        "model": analysis.model,
-                    },
-                    features=features,
-                )
-                emit(f"   → manual review ({analysis.reason})")
+            return validated, None, None
+
+        options: list[str] = []
+        for alt in analysis.alternatives:
+            normalized = normalize_category_path(alt, max_depth)
+            if normalized is not None:
+                label = "/".join(normalized)
+                if label not in options:
+                    options.append(label)
+        if options:
+            pending_reason = analysis.reason or "uncertain_with_options"
+            _append_action_log(
+                paths,
+                operation_id=catdoc.operation_id,
+                action="decision_pending",
+                status="warning",
+                message="AI uncertain, parking file in the decisions queue for review",
+                now_utc=now_utc,
+                path_before=str(catdoc.queued_target),
+                extra_fields={
+                    "reason": pending_reason,
+                    "options": options,
+                    "provider": analysis.provider,
+                    "model": analysis.model,
+                },
+                features=features,
+            )
+            emit(f"   → decision pending ({len(options)} options)")
+            return INTERIM_LIBRARY_DIR, options, pending_reason
+
+        _append_action_log(
+            paths,
+            operation_id=catdoc.operation_id,
+            action="analysis_manual_review",
+            status="warning",
+            message="AI analysis unavailable or uncertain, routing to manual review",
+            now_utc=now_utc,
+            path_before=str(catdoc.queued_target),
+            extra_fields={
+                "reason": analysis.reason,
+                "provider": analysis.provider,
+                "model": analysis.model,
+            },
+            features=features,
+        )
+        emit(f"   → manual review ({analysis.reason})")
+
+    return INTERIM_LIBRARY_DIR, None, None
+
+
+def _file_cataloged(
+    paths: RuntimePaths,
+    catdoc: _CatalogedDoc,
+    *,
+    route_dir: tuple[str, ...],
+    pending_options: list[str] | None,
+    pending_reason: str | None,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> ProcessResult:
+    """Name, date, move the file into `route_dir`, persist its fiche, and mirror.
+    The route was decided by the caller (per-file or set-aware organize)."""
+    analysis = catdoc.analysis
+    queued_target = catdoc.queued_target
+    source = catdoc.source
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
 
     target_dir = paths.library_root / Path(*route_dir)
     if not target_dir.exists():
         emit(f"   created folder: {'/'.join(route_dir)}")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # The descriptive name comes from the SAME analysis (the content, never the
-    # original filename). When the analysis couldn't run or returned no name
-    # (no readable content, or all providers failed), fall back to the filename
-    # stem — those files are in manual review anyway.
     if analysis is not None and analysis.name:
         stem = analysis.name
     else:
@@ -923,53 +793,41 @@ def _process_next_inbox_file(
     document_date = analysis.document_date if analysis is not None else None
 
     candidate_name = f"{stem}{queued_target.suffix}"
-    # Date the file by its real date: EXIF capture date for photos, else the date
-    # the AI found in the content, else the file's mtime, else the processing time.
-    # Only the filename prefix uses this; logs/catalog keep the real processing time.
-    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=dispatch.media_type)
+    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=catdoc.dispatch.media_type)
     final_name = build_timestamped_filename(candidate_name, now_utc=document_dt)
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
-    current_state = validate_transition(current_state, "LIBRARY_STORED")
+    current_state = validate_transition(catdoc.current_state, "LIBRARY_STORED")
     emit(f"   filed → {'/'.join(route_dir)}/{library_target.name}")
 
     now_iso = _utc_iso(now_utc)
-    # Persist the document fiche (§4.1): the understanding from this single read,
-    # so search and `reorganize` never need to re-read the file. Stored as a JSON
-    # string in the catalog (queryable); the snapshot inlines it as nested JSON.
+    is_routed = tuple(route_dir) != tuple(INTERIM_LIBRARY_DIR)
     fiche: dict[str, Any] = {
         "name": analysis.name if analysis is not None else None,
         "document_date": document_date,
-        "category_path": "/".join(validated) if validated is not None else None,
+        "category_path": "/".join(route_dir) if is_routed else None,
         "alternatives": pending_options or (analysis.alternatives if analysis is not None else []),
         "summary": analysis.summary if analysis is not None else None,
         "keywords": analysis.keywords if analysis is not None else [],
         "entities": analysis.entities if analysis is not None else {},
         "language": analysis.language if analysis is not None else None,
-        # The Inbox subfolder the file came from (grouping signal for `organize`),
-        # the user's original filename (kept as an aid for naming/search — never
-        # trusted, only a hint), and the real date it was filed under.
-        "source_folder": source_folder or None,
+        "source_folder": catdoc.source_folder or None,
         "original_filename": source.name,
         "effective_date": document_dt.strftime("%Y-%m-%d"),
-        "read_via": read_via,
+        "read_via": catdoc.read_via,
         "provider": analysis.provider if analysis is not None else None,
         "model": analysis.model if analysis is not None else None,
         "analyzed_at": now_iso,
     }
     content_json = json.dumps(fiche, ensure_ascii=True)
 
-    # A parked file is physically in Manual_Review but NOT a settled placement:
-    # its status is DECISION_PENDING and it carries the AI's options for `review`.
-    # We deliberately do NOT mirror it — the mirror holds the durable library, and
-    # the destination will change once the user resolves the decision.
     is_pending = bool(pending_options)
     if is_pending:
         pending_blob = json.dumps(
             {
                 "options": pending_options,
                 "reason": pending_reason,
-                "snippet": (content_text or "")[:280],
+                "snippet": (catdoc.content_text or "")[:280],
             }
         )
         catalog_status = "DECISION_PENDING"
@@ -980,7 +838,7 @@ def _process_next_inbox_file(
     doc_id = str(uuid4())
     repo.upsert_document(
         doc_id=doc_id,
-        sha256=sha256,
+        sha256=catdoc.sha256,
         current_filename=library_target.name,
         current_path=str(library_target),
         status=catalog_status,
@@ -993,7 +851,7 @@ def _process_next_inbox_file(
 
     _append_action_log(
         paths,
-        operation_id=operation_id,
+        operation_id=catdoc.operation_id,
         action="move_to_library",
         status="success",
         message="File stored in the library",
@@ -1002,25 +860,322 @@ def _process_next_inbox_file(
         path_after=str(library_target),
         extra_fields={
             "target_route": "/".join(route_dir),
-            "media_type": dispatch.media_type,
-            "matched_extension": dispatch.matched_extension,
+            "media_type": catdoc.dispatch.media_type,
+            "matched_extension": catdoc.dispatch.matched_extension,
         },
         features=features,
     )
 
     if is_pending:
-        # No mirror while the decision is pending.
         return ProcessResult(current_state, mirror_failed=False, pending=True)
 
     mirror_status = _sync_to_mirror(
         paths,
-        operation_id=operation_id,
+        operation_id=catdoc.operation_id,
         library_file=library_target,
         now_utc=now_utc,
         features=features,
     )
-
     return ProcessResult(current_state, mirror_failed=mirror_status == MIRROR_FAILED, doc_id=doc_id)
+
+
+def _dry_run_one(
+    paths: RuntimePaths,
+    source: Path,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> ProcessResult:
+    """Dry-run a single inbox file: walk the states and report where it WOULD
+    go, without moving anything or calling the AI."""
+    operation_id = str(uuid4())
+    current_state = INITIAL_STATE
+    try:
+        display_name = str(source.relative_to(paths.inbox_dir))
+    except ValueError:
+        display_name = source.name
+    emit(f"→ {display_name}")
+
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="ingest_detected",
+        status="success",
+        message="File detected in inbox",
+        now_utc=now_utc,
+        path_before=str(source),
+        features=features,
+    )
+    current_state = validate_transition(current_state, "INBOX_QUEUED")
+    current_state = validate_transition(current_state, "PROCESSING_LOCKED")
+    sha256 = _file_sha256(source)
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    current_state = validate_transition(current_state, "ANALYSIS_RUNNING")
+
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="dry_run_analysis",
+        status="success",
+        message="Dry-run analysis completed",
+        now_utc=now_utc,
+        path_before=str(source),
+        extra_fields={"dry_run": True},
+        features=features,
+    )
+    if repo.has_sha256(sha256):
+        current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
+        current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="dry_run_duplicate_detected_exact",
+            status="success",
+            message="Dry-run detected duplicate by sha256",
+            now_utc=now_utc,
+            path_before=str(source),
+            extra_fields={"dry_run": True},
+            features=features,
+        )
+        return ProcessResult(current_state, mirror_failed=False)
+
+    current_state = validate_transition(current_state, "CLASSIFICATION_READY")
+    current_state = validate_transition(current_state, "ROUTE_PROPOSED")
+
+    dispatch = dispatch_for_filename(source.name)
+    if not dispatch.can_dispatch:
+        current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="dry_run_manual_review_required",
+            status="warning",
+            message="Dry-run requires manual review for this file",
+            now_utc=now_utc,
+            path_before=str(source),
+            extra_fields={
+                "dry_run": True,
+                "reason": dispatch.reason,
+                "matched_extension": dispatch.matched_extension,
+            },
+            features=features,
+        )
+        return ProcessResult(current_state, mirror_failed=False)
+
+    current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
+    current_state = validate_transition(current_state, "LIBRARY_STORED")
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="dry_run_route_to_library",
+        status="success",
+        message="Dry-run routed file to interim review pending AI classification",
+        now_utc=now_utc,
+        path_before=str(source),
+        extra_fields={
+            "dry_run": True,
+            "target_route": "/".join(INTERIM_LIBRARY_DIR),
+            "media_type": dispatch.media_type,
+            "matched_extension": dispatch.matched_extension,
+        },
+        features=features,
+    )
+    return ProcessResult(current_state, mirror_failed=False)
+
+
+def _catalog_one_inbox_file(
+    paths: RuntimePaths,
+    source: Path,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+    extra_known_hashes: frozenset[str] | set[str] = frozenset(),
+) -> _CatalogedDoc | ProcessResult:
+    """Phase 1 (CATALOG) for ONE file: move it to the Queue, dedup, dispatch, and
+    read+analyze it into a fiche — WITHOUT filing it into the library. Returns the
+    `_CatalogedDoc` (ready for the file phase, per-file or set-aware), or a
+    terminal `ProcessResult` when the file is a duplicate or can't be dispatched.
+
+    `extra_known_hashes` lets a batch catch INTRA-run duplicates: in the two-phase
+    flow every file is catalogued before any is persisted, so the caller passes the
+    sha256s already seen this run (the catalog alone wouldn't know about them yet).
+    """
+    operation_id = str(uuid4())
+    current_state = INITIAL_STATE
+    # The Inbox-relative folder the file was dropped in (e.g. "Water-Damage" for
+    # Inbox/Water-Damage/photo.jpg; "" at the Inbox root). Recorded on the fiche
+    # as the grouping signal for the organize phase — files dropped together in a
+    # folder are a SET. The folder is a strong hint, not ground truth.
+    try:
+        relative_dir = source.parent.relative_to(paths.inbox_dir)
+        source_folder = "" if relative_dir == Path(".") else str(relative_dir)
+    except ValueError:
+        source_folder = ""
+    try:
+        display_name = str(source.relative_to(paths.inbox_dir))
+    except ValueError:
+        display_name = source.name
+    emit(f"→ {display_name}")
+
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="ingest_detected",
+        status="success",
+        message="File detected in inbox",
+        now_utc=now_utc,
+        path_before=str(source),
+        features=features,
+    )
+
+    queued_target = _ensure_unique_path(paths.queue_dir / source.name)
+    move(str(source), str(queued_target))
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="move_to_queue",
+        status="success",
+        message="File moved from inbox to queue",
+        now_utc=now_utc,
+        path_before=str(source),
+        path_after=str(queued_target),
+        features=features,
+    )
+    current_state = validate_transition(current_state, "INBOX_QUEUED")
+    current_state = validate_transition(current_state, "PROCESSING_LOCKED")
+    sha256 = _file_sha256(queued_target)
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    current_state = validate_transition(current_state, "ANALYSIS_RUNNING")
+
+    if repo.has_sha256(sha256) or sha256 in extra_known_hashes:
+        current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
+        trash_target = _ensure_unique_path(paths.inbox_trash_manual_dir / queued_target.name)
+        move(str(queued_target), str(trash_target))
+        current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="duplicate_detected_exact",
+            status="success",
+            message="Exact duplicate detected by sha256",
+            now_utc=now_utc,
+            path_before=str(queued_target),
+            features=features,
+        )
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="move_to_inbox_trash_manual",
+            status="success",
+            message="Duplicate moved to manual inbox trash",
+            now_utc=now_utc,
+            path_before=str(queued_target),
+            path_after=str(trash_target),
+            features=features,
+        )
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
+        emit("   duplicate → Inbox_Trash_Manual")
+        return ProcessResult(current_state, mirror_failed=False)
+
+    current_state = validate_transition(current_state, "CLASSIFICATION_READY")
+    current_state = validate_transition(current_state, "ROUTE_PROPOSED")
+
+    dispatch = dispatch_for_filename(queued_target.name)
+    if not dispatch.can_dispatch:
+        current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
+        now_iso = _utc_iso(now_utc)
+        repo.upsert_document(
+            doc_id=str(uuid4()),
+            sha256=sha256,
+            current_filename=queued_target.name,
+            current_path=str(queued_target),
+            status="USER_CONFIRMATION_REQUIRED",
+            updated_at_utc=now_iso,
+            flow_state=current_state,
+        )
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="manual_review_required",
+            status="warning",
+            message="Manual review required for unsupported or missing extension",
+            now_utc=now_utc,
+            path_before=str(queued_target),
+            extra_fields={
+                "reason": dispatch.reason,
+                "matched_extension": dispatch.matched_extension,
+            },
+            features=features,
+        )
+        emit(f"   → manual review (unreadable: {dispatch.reason})")
+        return ProcessResult(current_state, mirror_failed=False)
+
+    current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
+
+    return _read_and_analyze(
+        paths,
+        queued_target=queued_target,
+        source=source,
+        source_folder=source_folder,
+        sha256=sha256,
+        dispatch=dispatch,
+        operation_id=operation_id,
+        current_state=current_state,
+        now_utc=now_utc,
+        features=features,
+        emit=emit,
+    )
+
+
+def _process_next_inbox_file(
+    paths: RuntimePaths,
+    now_utc: datetime | None = None,
+    dry_run: bool = False,
+    progress: ProgressFn | None = None,
+) -> ProcessResult:
+    """Process one file from Inbox according to MVP flow rules.
+
+    Walks the state machine declared in `procrafiler.flow`. Every transition
+    goes through `validate_transition`, which raises `InvalidTransition` if
+    the code ever attempts an illegal jump. The final state lands in the
+    catalog's `flow_state` column for the documents we persist (manual review
+    and library store paths). Duplicate paths produce no DB row, only log
+    events — the spec says we never permanently delete in inbox/library.
+    """
+    ensure_runtime_layout(paths)
+    features = load_feature_settings(paths)["features"]
+    emit: ProgressFn = progress or (lambda _message: None)
+
+    candidates = _iter_inbox_files(paths.inbox_dir)
+    if not candidates:
+        return ProcessResult("NOOP", mirror_failed=False)
+
+    source = candidates[0]
+    if dry_run:
+        return _dry_run_one(paths, source, now_utc=now_utc, features=features, emit=emit)
+
+    result = _catalog_one_inbox_file(paths, source, now_utc=now_utc, features=features, emit=emit)
+    if isinstance(result, ProcessResult):
+        return result  # duplicate or unreadable — already filed/trashed
+    catdoc = result
+    route_dir, pending_options, pending_reason = _route_from_analysis(
+        paths, catdoc, now_utc=now_utc, features=features, emit=emit
+    )
+    return _file_cataloged(
+        paths,
+        catdoc,
+        route_dir=route_dir,
+        pending_options=pending_options,
+        pending_reason=pending_reason,
+        now_utc=now_utc,
+        features=features,
+        emit=emit,
+    )
 
 
 def process_next_inbox_file(
@@ -1330,135 +1485,6 @@ def run_review(
     return summary
 
 
-def _move_mirror_copy(paths: RuntimePaths, old_library_path: Path, new_library_path: Path) -> None:
-    """Move a file's mirror copy to follow it when the library file is moved,
-    keeping the mirror consistent. No-op if the mirror copy isn't there."""
-    try:
-        old_rel = old_library_path.resolve().relative_to(paths.library_root.resolve())
-        new_rel = new_library_path.resolve().relative_to(paths.library_root.resolve())
-    except (OSError, ValueError):
-        return
-    old_mirror = paths.mirror_root / old_rel
-    new_mirror = paths.mirror_root / new_rel
-    if not old_mirror.exists() or new_mirror.exists():
-        return
-    new_mirror.parent.mkdir(parents=True, exist_ok=True)
-    move(str(old_mirror), str(new_mirror))
-
-
-def _organize_ingested(
-    paths: RuntimePaths,
-    ingested_doc_ids: list[str],
-    *,
-    now_utc: datetime | None,
-    features: dict[str, bool],
-    progress: ProgressFn | None,
-) -> int:
-    """Second pass: group the files just ingested into dated affair/series folders.
-
-    Files dropped together in one Inbox subfolder form a SET; the set-aware
-    `organize_set` (Mistral medium) looks at their fiches together and proposes a
-    final folder for each, creating dated affair/series subfolders. Only the
-    documents ingested in THIS run are touched — never the rest of the library
-    (re-sorting the existing library is the separate, deferred `reorganize`).
-    A no-op when no ORGANIZE chain is configured. Returns the number moved.
-    """
-    emit: ProgressFn = progress or (lambda _message: None)
-    if not ingested_doc_ids or not task_chain_from_env("ORGANIZE"):
-        return 0
-
-    repo = CatalogRepository(paths.catalog_db_file)
-    repo.init_schema()
-    by_id = {str(d["doc_id"]): d for d in repo.list_documents()}
-
-    # Group by the TOP-LEVEL Inbox subfolder the file came from (the set
-    # boundary). Files with no source folder are grouped together as loose drops.
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for doc_id in ingested_doc_ids:
-        row = by_id.get(doc_id)
-        if row is None or row.get("status") != "LIBRARY_STORED":
-            continue
-        raw = row.get("content_json")
-        try:
-            fiche = json.loads(raw) if raw else {}
-        except (TypeError, ValueError):
-            fiche = {}
-        if not isinstance(fiche, dict) or not fiche.get("category_path"):
-            continue  # manual-review / no category → nothing to group
-        source_folder = str(fiche.get("source_folder") or "")
-        top = source_folder.split("/")[0] if source_folder else ""
-        groups.setdefault(top, []).append({"doc_id": doc_id, "row": row, "fiche": fiche, "source_folder": source_folder})
-
-    if not groups:
-        return 0
-
-    max_depth = load_runtime_policy(paths).taxonomy_max_depth
-    base_categories = [category_label(c) for c in classifiable_categories()]
-    moved = 0
-
-    for top, members in groups.items():
-        documents = [
-            {
-                "name": m["fiche"].get("name"),
-                "summary": m["fiche"].get("summary"),
-                "document_date": m["fiche"].get("effective_date") or m["fiche"].get("document_date"),
-                "category_path": m["fiche"].get("category_path"),
-            }
-            for m in members
-        ]
-        result = organize_set(
-            documents,
-            base_categories=base_categories,
-            existing_paths=existing_category_paths(paths.library_root),
-            source_folder=(top or None),
-        )
-        for index, member in enumerate(members):
-            proposed = result.placements.get(index)
-            validated = normalize_category_path(proposed, max_depth) if proposed else None
-            if validated is None:
-                continue
-            current_path = Path(str(member["row"]["current_path"]))
-            new_dir = paths.library_root / Path(*validated)
-            if not current_path.exists() or new_dir.resolve() == current_path.parent.resolve():
-                continue  # gone, or already in the proposed folder
-
-            new_target = _ensure_unique_path(new_dir / current_path.name)
-            new_target.parent.mkdir(parents=True, exist_ok=True)
-            move(str(current_path), str(new_target))
-            _move_mirror_copy(paths, current_path, new_target)
-
-            fiche = member["fiche"]
-            fiche["category_path"] = "/".join(validated)
-            repo.upsert_document(
-                doc_id=member["doc_id"],
-                sha256=str(member["row"]["sha256"]),
-                current_filename=new_target.name,
-                current_path=str(new_target),
-                status="LIBRARY_STORED",
-                updated_at_utc=_utc_iso(now_utc),
-                flow_state="LIBRARY_STORED",
-                content_json=json.dumps(fiche, ensure_ascii=True),
-            )
-            _append_action_log(
-                paths,
-                operation_id=str(uuid4()),
-                action="organize_grouped",
-                status="success",
-                message="Grouped into an affair/series folder",
-                now_utc=now_utc,
-                path_before=str(current_path),
-                path_after=str(new_target),
-                extra_fields={"folder": "/".join(validated), "source_folder": member["source_folder"]},
-                features=features,
-            )
-            emit(f"   grouped → {'/'.join(validated)}/{new_target.name}")
-            moved += 1
-
-    if moved:
-        _write_catalog_snapshot(paths, repo, now_utc, features=features)
-    return moved
-
-
 def process_all_inbox_files(
     paths: RuntimePaths,
     now_utc: datetime | None = None,
@@ -1514,66 +1540,138 @@ def process_all_inbox_files(
         )
         return summary
 
-    # Safety bound: a healthy batch does one iteration per Inbox file (+1 NOOP).
-    # If we ever loop well past that — e.g. a file that fails *before* it leaves
-    # the Inbox — stop rather than spin forever.
-    iteration_budget = len(_iter_inbox_files(paths.inbox_dir)) * 2 + 10
-    iterations = 0
-    ingested_doc_ids: list[str] = []
-    while True:
-        iterations += 1
-        if iterations > iteration_budget:
-            if progress is not None:
-                progress("   ✗ stopping batch: too many iterations (a file may be stuck)")
-            break
+    emit: ProgressFn = progress or (lambda _message: None)
 
-        try:
-            result = _process_next_inbox_file(paths, now_utc=now_utc, dry_run=False, progress=progress)
-        except Exception as exc:  # noqa: BLE001 — one bad file must never abort the whole batch
-            # The risky steps (reading, AI calls) all run after the file has been
-            # moved out of the Inbox, so the offending file is already consumed and
-            # the next iteration picks a different one. Log it, count it, continue.
-            summary["total"] += 1
-            summary["errors"] += 1
-            _append_action_log(
-                paths,
-                operation_id=str(uuid4()),
-                action="process_error",
-                status="error",
-                message=f"Unexpected error processing a file, skipping: {exc}",
-                now_utc=now_utc,
-                features=features,
-            )
-            if progress is not None:
-                progress(f"   ✗ error, skipping: {exc}")
-            continue
-
-        if result.flow_state == "NOOP":
-            break
-
+    def _tally(result: ProcessResult, *, organized: bool = False) -> None:
         summary["total"] += 1
         if result.pending:
             summary["pending_decisions"] += 1
         elif result.flow_state == "LIBRARY_STORED":
             summary["processed"] += 1
-            if result.doc_id:
-                ingested_doc_ids.append(result.doc_id)
+            if organized:
+                summary["organized"] += 1
         elif result.flow_state == "INBOX_TRASH_PENDING_MANUAL":
             summary["duplicates"] += 1
         elif result.flow_state == "USER_CONFIRMATION_REQUIRED":
             summary["manual_reviews"] += 1
         elif result.flow_state.startswith("ERROR"):
             summary["errors"] += 1
-
         if result.mirror_failed:
             summary["mirror_failures"] += 1
 
-    # Second pass — set-aware organization: group the files just ingested into
-    # dated affair/series folders (the per-file analysis couldn't see they form a
-    # set). Only this run's files, never the rest of the library.
-    summary["organized"] = _organize_ingested(
-        paths, ingested_doc_ids, now_utc=now_utc, features=features, progress=progress
-    )
+    def _record_error(exc: Exception) -> None:
+        # The risky steps (reading, AI calls) all run after the file has left the
+        # Inbox, so the offending file is already consumed — log it, count it, move on.
+        summary["total"] += 1
+        summary["errors"] += 1
+        _append_action_log(
+            paths,
+            operation_id=str(uuid4()),
+            action="process_error",
+            status="error",
+            message=f"Unexpected error processing a file, skipping: {exc}",
+            now_utc=now_utc,
+            features=features,
+        )
+        emit(f"   ✗ error, skipping: {exc}")
+
+    # Two-phase, set-aware processing (Option B). Files dropped together in a
+    # top-level Inbox subfolder are a SET: CATALOG every file of the set first
+    # (read+analyze → fiche, no filing), THEN ORGANIZE the whole set at once so a
+    # coherent group is placed together — nothing scatters or leaks to the
+    # decisions queue file-by-file. Files loose in the Inbox root are singletons,
+    # classified one by one. One bad file never aborts the batch.
+    folder_sets: dict[str, list[Path]] = {}
+    singletons: list[Path] = []
+    for candidate in _iter_inbox_files(paths.inbox_dir):
+        try:
+            relative_dir = candidate.parent.relative_to(paths.inbox_dir)
+        except ValueError:
+            relative_dir = Path(".")
+        if relative_dir == Path("."):
+            singletons.append(candidate)
+        else:
+            folder_sets.setdefault(relative_dir.parts[0], []).append(candidate)
+
+    # Each top-level subfolder = one set; each loose root file = its own singleton.
+    work_sets: list[tuple[str, list[Path]]] = [(top, members) for top, members in folder_sets.items()]
+    work_sets += [("", [loose]) for loose in singletons]
+
+    organize_chain = task_chain_from_env("ORGANIZE")
+    max_depth = load_runtime_policy(paths).taxonomy_max_depth
+    base_categories = [category_label(c) for c in classifiable_categories()]
+    run_seen: set[str] = set()
+
+    for set_top, sources in work_sets:
+        # Phase 1 — CATALOG every file of the set (no filing yet).
+        catdocs: list[_CatalogedDoc] = []
+        for source in sources:
+            try:
+                outcome = _catalog_one_inbox_file(
+                    paths, source, now_utc=now_utc, features=features, emit=emit, extra_known_hashes=run_seen
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad file must never abort the batch
+                _record_error(exc)
+                continue
+            if isinstance(outcome, ProcessResult):
+                _tally(outcome)  # duplicate or unreadable — already trashed/filed
+                continue
+            run_seen.add(outcome.sha256)
+            catdocs.append(outcome)
+
+        # Phase 2 — ORGANIZE the whole set at once (real folder-sets only, and only
+        # when an ORGANIZE chain is configured). The set's coherence decides each
+        # placement; the drop-folder is a strong-but-overridable hypothesis. A
+        # singleton root file or a missing chain → per-file route (no grouping).
+        organized: dict[int, str | None] = {}
+        analyzable = [(i, c) for i, c in enumerate(catdocs) if c.analysis is not None]
+        if organize_chain and set_top and analyzable:
+            documents = [
+                {
+                    "name": c.analysis.name,
+                    "summary": c.analysis.summary,
+                    "document_date": c.analysis.document_date,
+                    "category_path": c.analysis.category_path,
+                    "original_filename": c.source.name,
+                }
+                for _, c in analyzable
+            ]
+            try:
+                org_result = organize_set(
+                    documents,
+                    base_categories=base_categories,
+                    existing_paths=existing_category_paths(paths.library_root),
+                    source_folder=set_top,
+                )
+                for doc_pos, (cat_idx, _) in enumerate(analyzable):
+                    organized[cat_idx] = org_result.placements.get(doc_pos)
+            except Exception as exc:  # noqa: BLE001 — organize failure → per-file fallback
+                emit(f"   ✗ organize failed, per-file fallback: {exc}")
+
+        # Phase 3 — FILE each catalogued doc into its final placement.
+        for index, catdoc in enumerate(catdocs):
+            try:
+                organized_path = organized.get(index)
+                used_organize = (
+                    organized_path is not None and normalize_category_path(organized_path, max_depth) is not None
+                )
+                route_dir, pending_options, pending_reason = _route_from_analysis(
+                    paths, catdoc, organized_path=organized_path, now_utc=now_utc, features=features, emit=emit
+                )
+                result = _file_cataloged(
+                    paths,
+                    catdoc,
+                    route_dir=route_dir,
+                    pending_options=pending_options,
+                    pending_reason=pending_reason,
+                    now_utc=now_utc,
+                    features=features,
+                    emit=emit,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _record_error(exc)
+                continue
+            _tally(result, organized=used_organize and result.flow_state == "LIBRARY_STORED")
 
     # Tidy up: drop the now-empty Inbox subfolders the processed files left behind.
     _prune_empty_inbox_dirs(paths.inbox_dir)
