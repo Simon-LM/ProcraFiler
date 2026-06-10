@@ -126,6 +126,17 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("most distinctive entity", lowered)
         self.assertIn("do not name it by its file type or format", lowered)
 
+    def test_prompt_name_uses_consistent_per_kind_templates(self) -> None:
+        # Naming consistency: a generalist skeleton + few-shot examples so two
+        # documents of the same kind get the same structure; no date in the name
+        # (the timestamp prefix carries it), no redundant words.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("CONSISTENTLY", prompt)
+        self.assertIn("CV-<Nom-Prenom>", prompt)
+        self.assertIn("Facture-<issuer>", prompt)
+        self.assertIn("Releve-<bank>", prompt)
+        self.assertIn("do NOT put a DATE in the name", prompt)
+
     def test_prompt_carries_filename_and_folder_as_hints(self) -> None:
         prompt = _build_analysis_prompt("x", BASES, [], original_filename="CV_Simon-LOUVEL.odt", source_folder="Dégats_eaux")
         self.assertIn("CV_Simon-LOUVEL.odt", prompt)
