@@ -135,6 +135,14 @@ class TestAnalyzeContent(unittest.TestCase):
     def test_prompt_has_no_hints_block_when_none_given(self) -> None:
         self.assertNotIn("Hints", _build_analysis_prompt("x", BASES, []))
 
+    def test_prompt_includes_user_context_when_given(self) -> None:
+        prompt = _build_analysis_prompt("x", BASES, [], user_context="La musique est un loisir")
+        self.assertIn("La musique est un loisir", prompt)
+        self.assertIn("About the user", prompt)
+
+    def test_prompt_has_no_user_context_block_by_default(self) -> None:
+        self.assertNotIn("About the user", _build_analysis_prompt("x", BASES, []))
+
     def test_noisy_json_is_parsed(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
         noisy = "Voici:\n" + _full(category_path="Personal/Administrative/Banking") + "\nVoilà."

@@ -190,6 +190,30 @@ class TestOrganizePipeline(unittest.TestCase):
         self.assertEqual(summary["organized"], 0)
         self.assertEqual(len(self._files_under("Personal", "Administrative", "Banking")), 2)
 
+    def test_user_context_is_injected_into_the_analysis_prompt(self) -> None:
+        # The optional user-context file is loaded and fed to the analysis prompt
+        # (PROCRAFILER_CONTEXT_FILE wins over any repo-root context.txt → deterministic).
+        ctx = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        ctx.write("La musique est ma passion (loisir, pas pro).")
+        ctx.close()
+        os.environ["PROCRAFILER_CONTEXT_FILE"] = ctx.name
+        try:
+            (self.paths.inbox_dir / "note.txt").write_bytes(b"un document a classer")
+            captured: dict[str, str] = {}
+
+            def fake_analysis(prompt: str, model: str, **kwargs: object) -> str:
+                captured["prompt"] = prompt
+                return json.dumps({"name": "Doc", "category_path": "Personal/Hobbies", "summary": "x"})
+
+            with patch("procrafiler.ai_analysis.call_mistral_chat", side_effect=fake_analysis):
+                process_all_inbox_files(self.paths, now_utc=self.now)
+
+            self.assertIn("La musique est ma passion", captured["prompt"])
+            self.assertIn("About the user", captured["prompt"])
+        finally:
+            os.environ.pop("PROCRAFILER_CONTEXT_FILE", None)
+            os.unlink(ctx.name)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -76,7 +76,11 @@ def _empty_result(*, provider: str, model: str, reason: str, documents: list[dic
 
 
 def _build_organize_prompt(
-    documents: list[dict[str, Any]], base_categories: list[str], existing_paths: list[str], source_folder: str | None
+    documents: list[dict[str, Any]],
+    base_categories: list[str],
+    existing_paths: list[str],
+    source_folder: str | None,
+    user_context: str | None = None,
 ) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
@@ -108,9 +112,21 @@ def _build_organize_prompt(
     else:
         hypothesis = ""
 
+    # Optional user context (passions, work, places, identity) to disambiguate —
+    # e.g. tell a hobby from professional. Never overrides the documents' content.
+    if user_context:
+        context_block = (
+            "Context about the user (to disambiguate — e.g. tell a hobby from professional; the "
+            "documents' content still rules):\n"
+            f"{user_context}\n\n"
+        )
+    else:
+        context_block = ""
+
     return (
         f"You are organizing a set of {len(documents)} documents that were already read.\n"
         f"{hypothesis}"
+        f"{context_block}"
         "Decide a final folder for EACH document. Return JSON only, with this exact schema: "
         "{\"placements\": [{\"index\": 0, \"path\": \"...\"}, ...]} — one entry per document.\n\n"
         "Rules (in priority order):\n"
@@ -171,6 +187,7 @@ def organize_set(
     base_categories: list[str],
     existing_paths: list[str],
     source_folder: str | None = None,
+    user_context: str | None = None,
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
@@ -192,7 +209,7 @@ def organize_set(
 
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ORGANIZE", default_value=90)
     retry_count = retries if retries is not None else _task_retries_from_env("ORGANIZE", default_value=2)
-    prompt = _build_organize_prompt(documents, base_categories, existing_paths, source_folder)
+    prompt = _build_organize_prompt(documents, base_categories, existing_paths, source_folder, user_context)
 
     last_error = "unknown"
     for entry in chain_entries:

@@ -21,6 +21,7 @@ from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings, load_runtime_policy
 from procrafiler.ai_analysis import analyze_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
+from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
@@ -638,6 +639,7 @@ def _read_and_analyze(
             existing_paths=existing_paths,
             original_filename=source.name,
             source_folder=source_folder or None,
+            user_context=load_user_context(),
         )
 
     return _CatalogedDoc(
@@ -1606,6 +1608,7 @@ def process_all_inbox_files(
     organize_chain = task_chain_from_env("ORGANIZE")
     max_depth = load_runtime_policy(paths).taxonomy_max_depth
     base_categories = [category_label(c) for c in classifiable_categories()]
+    user_context = load_user_context()
     run_seen: set[str] = set()
 
     for set_top, sources in work_sets:
@@ -1654,6 +1657,7 @@ def process_all_inbox_files(
                         base_categories=base_categories,
                         existing_paths=existing_paths,
                         source_folder=set_top,
+                        user_context=user_context,
                     )
                     for local_pos, (cat_idx, _) in enumerate(batch):
                         organized[cat_idx] = org_result.placements.get(local_pos)
