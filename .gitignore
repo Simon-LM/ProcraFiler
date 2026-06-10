@@ -24,6 +24,10 @@ venv/
 *.key
 *.pem
 
+# User context file (personal data — only the .example template is committed)
+context.txt
+context.md
+
 # ProcraFiler runtime artifacts
 runtime/
 logs/

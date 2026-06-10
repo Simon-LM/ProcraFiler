@@ -94,6 +94,22 @@ class TestOrganizeSet(unittest.TestCase):
         self.assertIn("recurring", prompt)
         self.assertIn("degats_eaux_cuisine", prompt)  # the drop-folder name is a signal
 
+    def test_prompt_enforces_keep_the_set_together(self) -> None:
+        # Plan B spirit (R1–R5): a dropped folder stays together by default; only a
+        # FLAGRANT misfit is split out; photo descriptions may be hallucinated; the
+        # date goes at the START of the folder name.
+        prompt = _build_organize_prompt(DOCS, BASES, [], "Degats_eaux_cuisine").lower()
+        self.assertIn("strong hypothesis", prompt)
+        self.assertIn("keep the set together", prompt)       # R1
+        self.assertIn("flagrantly", prompt)                  # R2 — high bar to split
+        self.assertIn("two base categories", prompt)         # R3 — no cross-base split
+        self.assertIn("start of the folder name", prompt)    # R4 — date first
+        self.assertIn("hallucinate", prompt)                 # R5 — photos unreliable
+
+    def test_prompt_has_no_hypothesis_block_without_a_drop_folder(self) -> None:
+        prompt = _build_organize_prompt(DOCS, BASES, [], None)
+        self.assertNotIn("STRONG HYPOTHESIS", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

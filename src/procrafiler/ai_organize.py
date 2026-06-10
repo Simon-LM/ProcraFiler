@@ -94,19 +94,16 @@ def _build_organize_prompt(
         )
     doc_block = "\n".join(lines)
 
-    # The drop-folder is a STRONG HYPOTHESIS, not a certainty: the user grouped
-    # these files on purpose, so they PROBABLY form one coherent set and the
-    # folder name is PROBABLY the right theme. Base the grouping on it — but the
-    # CONTENT is authoritative and can override it.
+    # The drop-folder is a STRONG HYPOTHESIS: files the user grouped on purpose
+    # are, by DEFAULT, one coherent affair that must stay together in ONE folder.
+    # Only a FLAGRANT misfit is split out (high bar). Vision descriptions of
+    # photos may be hallucinated → never disperse the set on a shaky photo.
     if source_folder:
         hypothesis = (
-            f"These files were dropped together by the user in a folder named \"{source_folder}\". "
-            "Treat that as a STRONG HYPOTHESIS, not a certainty: assume they PROBABLY belong to the "
-            "same affair/case and that the folder name is PROBABLY the right theme — make this your "
-            "starting point and lean toward keeping them together under one folder named for it. "
-            "BUT verify against each document's own content: if a file clearly does not belong, place "
-            "it where ITS content says (split it out of the set); if the content contradicts the "
-            "folder name, the content wins. Privilégier, pas imposer.\n\n"
+            f"These {len(documents)} files were dropped together by the user in ONE folder named "
+            f"\"{source_folder}\". Treat this as a STRONG HYPOTHESIS: by DEFAULT they ALL belong to the "
+            "SAME affair/case and must go TOGETHER into ONE single destination folder. Your job is to "
+            "find that one folder — NOT to sort them apart. Do not scatter a coherent set.\n\n"
         )
     else:
         hypothesis = ""
@@ -116,18 +113,29 @@ def _build_organize_prompt(
         f"{hypothesis}"
         "Decide a final folder for EACH document. Return JSON only, with this exact schema: "
         "{\"placements\": [{\"index\": 0, \"path\": \"...\"}, ...]} — one entry per document.\n\n"
-        "Rules:\n"
+        "Rules (in priority order):\n"
         "- \"path\" MUST start with one of these existing base categories "
         "(you may NOT invent a new top-level category):\n"
         f"{bases}\n"
-        "- Group documents that belong to the SAME affair, event, or case into ONE shared subfolder, "
-        "named for that affair and its period (e.g. \".../Insurance/Degats-eaux-2025-07\"). "
-        "Use the documents' dates, their content, and the drop-folder hypothesis above as signals.\n"
-        "- For a document of an obviously RECURRING kind (meter reading, bank statement, payslip, "
-        "bill, tax notice…), put it in a series subfolder, created even from a single instance "
+        "- KEEP THE SET TOGETHER (default): put ALL the documents above into ONE shared folder — the "
+        "SAME base category AND the SAME single subfolder — named for their common affair. Pick ONE "
+        "base and ONE affair folder for the whole set; do NOT spread the same affair across two base "
+        "categories (e.g. half in Housing, half in Insurance).\n"
+        "- The DATE goes at the START of the folder name, NEVER at the end "
+        "(e.g. \".../Insurance/2025-08_Degats-eaux-Annoville\"). Choose ONE period for the whole "
+        "affair; do NOT create several date-variant folders (…2025-08 AND …2025-10) for the same affair.\n"
+        "- Only place a document ELSEWHERE if its content is FLAGRANTLY a different case — a HIGH bar. "
+        "A mere nuance is NOT a reason to split: a damage photo and the insurance form of the SAME "
+        "affair belong in the SAME folder.\n"
+        "- IMAGES were described by an AI vision model that CAN HALLUCINATE (wrong date, place, or "
+        "subject) — their descriptions are NOT 100% reliable. NEVER split a file out of the set on the "
+        "strength of a single shaky photo description; for an image-heavy set, trust the drop-folder "
+        "grouping MORE than an individual photo's description.\n"
+        "- Reuse an EXISTING folder from the tree below if one already fits this affair, rather than "
+        "creating a near-duplicate.\n"
+        "- Exception — a genuinely RECURRING kind on its own (meter reading, bank statement, payslip, "
+        "bill, tax notice…) goes into a series subfolder, even from a single instance "
         "(e.g. \".../Housing/Releves-eau\").\n"
-        "- Do NOT force unrelated documents together; a genuine one-off may stay directly in its base "
-        "category. Prefer reusing an EXISTING folder from the tree below over creating a near-duplicate.\n"
         "- Use short, normalized folder names (no accents needed). Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"
         f"{tree}\n\n"
