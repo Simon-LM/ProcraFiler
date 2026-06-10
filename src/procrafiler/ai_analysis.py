@@ -89,10 +89,20 @@ def _build_analysis_prompt(
     existing_paths: list[str],
     original_filename: str | None = None,
     source_folder: str | None = None,
+    user_context: str | None = None,
 ) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
     snippet = text[:MAX_CONTENT_CHARS]
+    # Optional user context (passions, work, places, identity) to disambiguate —
+    # e.g. tell a hobby from professional. Never authoritative over the content.
+    context_block = ""
+    if user_context:
+        context_block = (
+            "\nAbout the user (context to disambiguate — e.g. tell a hobby from professional, or "
+            "anchor a person's identity; the document content still rules):\n"
+            f"{user_context}\n"
+        )
     # The original filename and the folder the user dropped it in are HINTS, not
     # ground truth: the content stays authoritative, but these help when the
     # content is ambiguous (e.g. a file literally named "CV ...", or a photo in a
@@ -134,7 +144,8 @@ def _build_analysis_prompt(
         "Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"
         f"{tree}\n"
-        f"{hints}\n"
+        f"{hints}"
+        f"{context_block}\n"
         "Document content:\n"
         f"{snippet}"
     )
@@ -195,6 +206,7 @@ def analyze_content(
     existing_paths: list[str],
     original_filename: str | None = None,
     source_folder: str | None = None,
+    user_context: str | None = None,
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
@@ -216,7 +228,9 @@ def analyze_content(
 
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
-    prompt = _build_analysis_prompt(text, base_categories, existing_paths, original_filename, source_folder)
+    prompt = _build_analysis_prompt(
+        text, base_categories, existing_paths, original_filename, source_folder, user_context
+    )
 
     last_error = "unknown"
     for entry in chain_entries:
