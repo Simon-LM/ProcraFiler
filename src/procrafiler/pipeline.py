@@ -1485,6 +1485,12 @@ def run_review(
     return summary
 
 
+# R7 scale guard: max documents sent to the organizer in one call. A folder set
+# larger than this is processed in batches so a single huge call can't error out.
+# Normal folders stay well under it and are organized in ONE call (whole set).
+ORGANIZE_MAX_SET = 80
+
+
 def process_all_inbox_files(
     paths: RuntimePaths,
     now_utc: datetime | None = None,
@@ -1626,27 +1632,33 @@ def process_all_inbox_files(
         organized: dict[int, str | None] = {}
         analyzable = [(i, c) for i, c in enumerate(catdocs) if c.analysis is not None]
         if organize_chain and set_top and analyzable:
-            documents = [
-                {
-                    "name": c.analysis.name,
-                    "summary": c.analysis.summary,
-                    "document_date": c.analysis.document_date,
-                    "category_path": c.analysis.category_path,
-                    "original_filename": c.source.name,
-                }
-                for _, c in analyzable
-            ]
-            try:
-                org_result = organize_set(
-                    documents,
-                    base_categories=base_categories,
-                    existing_paths=existing_category_paths(paths.library_root),
-                    source_folder=set_top,
-                )
-                for doc_pos, (cat_idx, _) in enumerate(analyzable):
-                    organized[cat_idx] = org_result.placements.get(doc_pos)
-            except Exception as exc:  # noqa: BLE001 — organize failure → per-file fallback
-                emit(f"   ✗ organize failed, per-file fallback: {exc}")
+            # R7 (scale): one organize call over a huge folder is error-prone; cap
+            # the batch size and chunk. Normal folders (well under the cap) stay in
+            # a SINGLE call, so the whole set is decided together.
+            existing_paths = existing_category_paths(paths.library_root)
+            for batch_start in range(0, len(analyzable), ORGANIZE_MAX_SET):
+                batch = analyzable[batch_start : batch_start + ORGANIZE_MAX_SET]
+                documents = [
+                    {
+                        "name": c.analysis.name,
+                        "summary": c.analysis.summary,
+                        "document_date": c.analysis.document_date,
+                        "category_path": c.analysis.category_path,
+                        "original_filename": c.source.name,
+                    }
+                    for _, c in batch
+                ]
+                try:
+                    org_result = organize_set(
+                        documents,
+                        base_categories=base_categories,
+                        existing_paths=existing_paths,
+                        source_folder=set_top,
+                    )
+                    for local_pos, (cat_idx, _) in enumerate(batch):
+                        organized[cat_idx] = org_result.placements.get(local_pos)
+                except Exception as exc:  # noqa: BLE001 — organize failure → per-file fallback
+                    emit(f"   ✗ organize failed, per-file fallback: {exc}")
 
         # Phase 3 — FILE each catalogued doc into its final placement.
         for index, catdoc in enumerate(catdocs):

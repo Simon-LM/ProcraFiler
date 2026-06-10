@@ -155,6 +155,25 @@ class TestOrganizePipeline(unittest.TestCase):
         self.assertEqual(len(self._files_under("Personal", "Administrative", "Insurance", "Degats-eaux-2025-08")), 1)
         self.assertEqual(len(self._files_under("Personal", "Administrative", "Banking")), 1)
 
+    def test_huge_folder_is_organized_in_batches(self) -> None:
+        # R7 scale guard: a folder larger than ORGANIZE_MAX_SET is organized in
+        # several batches (not one giant call), and every file is still placed.
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
+        sub = self.paths.inbox_dir / "Big"
+        sub.mkdir()
+        for i in range(3):
+            (sub / f"f{i}.txt").write_bytes(f"document numero {i}".encode())
+        analysis = json.dumps({"name": "Doc", "category_path": "Personal/Administrative/Insurance", "summary": "x"})
+        organize = json.dumps({"placements": [{"index": 0, "path": AFFAIR}, {"index": 1, "path": AFFAIR}]})
+        with patch("procrafiler.pipeline.ORGANIZE_MAX_SET", 2):
+            with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+                with patch("procrafiler.ai_organize.call_mistral_chat", return_value=organize) as organize_mock:
+                    summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(organize_mock.call_count, 2)  # 3 docs, batch size 2 → 2 calls
+        self.assertEqual(summary["processed"], 3)
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Insurance", "Degats-eaux-2025-08")), 3)
+
     def test_root_singletons_are_not_organized_as_a_set(self) -> None:
         # Files loose in the Inbox root are singletons — the set organiser is NOT
         # run over them as a group (that would invent a set the user never made).
