@@ -48,7 +48,7 @@ class TestBatchCli(unittest.TestCase):
         self.assertEqual(len(list(self.paths.inbox_dir.iterdir())), 0)
         self.assertEqual(len(list(self.paths.queue_dir.iterdir())), 0)
         self.assertEqual(len(list(self.paths.inbox_trash_manual_dir.iterdir())), 1)
-        library_files = [p for p in self.paths.library_root.rglob("*") if p.is_file()]
+        library_files = [p for p in self.paths.library_root.rglob("*") if p.is_file() and not p.is_symlink()]
         self.assertEqual(len(library_files), 2)
 
         events = [

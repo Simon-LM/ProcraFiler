@@ -51,7 +51,7 @@ class TestOrganizePipeline(unittest.TestCase):
 
     def _files_under(self, *parts: str) -> list[Path]:
         base = self.paths.library_root.joinpath(*parts)
-        return [p for p in base.rglob("*") if p.is_file()] if base.exists() else []
+        return [p for p in base.rglob("*") if p.is_file() and not p.is_symlink()] if base.exists() else []
 
     def test_set_is_grouped_into_a_dated_affair_folder(self) -> None:
         os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
@@ -213,6 +213,114 @@ class TestOrganizePipeline(unittest.TestCase):
         finally:
             os.environ.pop("PROCRAFILER_CONTEXT_FILE", None)
             os.unlink(ctx.name)
+
+
+class TestSingletonGrouping(unittest.TestCase):
+    """M2+M3: root singletons that share a series are regrouped together."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        os.environ["PROCRAFILER_WORKSPACE_DIR"] = str(root / "ProcraFiler_Inbox")
+        os.environ["PROCRAFILER_LIBRARY_DIR"] = str(root / "ProcraFiler_Library")
+        os.environ["PROCRAFILER_LIBRARY_MIRROR_DIR"] = str(root / "ProcraFiler_Library_Mirror")
+        os.environ["PROCRAFILER_HOME"] = str(root / ".state")
+        os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
+        self.paths = default_runtime_paths()
+        ensure_runtime_layout(self.paths)
+        self.now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
+
+    def tearDown(self) -> None:
+        os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
+        self.tmp.cleanup()
+
+    def _files_under(self, *parts: str) -> list[Path]:
+        base = self.paths.library_root.joinpath(*parts)
+        return [p for p in base.rglob("*") if p.is_file() and not p.is_symlink()] if base.exists() else []
+
+    def test_two_singletons_of_same_series_are_regrouped(self) -> None:
+        # Two "Releve eau" files dropped as root singletons.
+        # First run: filed in Housing/ (no existing files → grouping skips).
+        # Second run: grouping sees the first file in Housing/, proposes
+        # Housing/Releves-eau as a common series, moves the first there, and
+        # files the second there too. Symlink left at first file's old location.
+        housing = "Personal/Administrative/Housing"
+        analysis_raw = json.dumps(
+            {"name": "Releve-eau", "category_path": housing, "summary": "relevé compteur eau"}
+        )
+
+        # Drop and process first singleton.
+        (self.paths.inbox_dir / "releve_jan.txt").write_bytes(b"Releve compteur eau janvier 2026")
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            summary1 = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary1["processed"], 1)
+        housing_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing"
+        stored = [p for p in housing_dir.rglob("*") if p.is_file() and not p.is_symlink()]
+        self.assertEqual(len(stored), 1)
+        first_stored = stored[0]
+
+        # Drop second singleton.
+        (self.paths.inbox_dir / "releve_fev.txt").write_bytes(b"Releve compteur eau fevrier 2026")
+
+        series = f"{housing}/Releves-eau"
+        grouping_raw = json.dumps({"path": series, "group_with": [first_stored.name]})
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary2 = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary2["processed"], 1)
+        self.assertEqual(summary2["regrouped"], 1)
+
+        # Both files end up in Housing/Releves-eau.
+        series_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing" / "Releves-eau"
+        real_files = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
+        self.assertEqual(len(real_files), 2)
+
+        # Symlink left at the first file's old location.
+        self.assertTrue(first_stored.is_symlink(), "old location should be a symlink after regroup")
+        self.assertTrue(first_stored.resolve().is_file(), "symlink should point to a real file")
+
+        # Catalog entry for the first file updated to new path.
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        docs = repo.list_documents()
+        paths_in_catalog = {d["current_path"] for d in docs}
+        # The first file is now recorded at its new location (inside Releves-eau).
+        self.assertTrue(
+            any("Releves-eau" in p for p in paths_in_catalog),
+            "catalog should reflect the new Releves-eau path",
+        )
+
+    def test_unknown_filename_in_group_with_warns_without_crash(self) -> None:
+        # If group_with names a file that doesn't exist on disk, the pipeline
+        # warns but doesn't crash, and still files the new document normally.
+        housing = "Personal/Administrative/Housing"
+        housing_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing"
+        housing_dir.mkdir(parents=True, exist_ok=True)
+        (housing_dir / "2026-01-01__Existing.txt").write_bytes(b"an existing file")
+
+        (self.paths.inbox_dir / "releve.txt").write_bytes(b"Releve eau")
+        analysis_raw = json.dumps(
+            {"name": "Releve-eau", "category_path": housing, "summary": "compteur"}
+        )
+        grouping_raw = json.dumps({"path": f"{housing}/Releves-eau", "group_with": ["ghost-file.pdf"]})
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        # New file is still filed (in the proposed series folder).
+        self.assertEqual(summary["processed"], 1)
+        # Ghost file not found → no regroup.
+        self.assertEqual(summary["regrouped"], 0)
+        # New file goes to the proposed Releves-eau subfolder.
+        series_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing" / "Releves-eau"
+        self.assertTrue(series_dir.exists())
+        new_files = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
+        self.assertEqual(len(new_files), 1)
 
 
 if __name__ == "__main__":
