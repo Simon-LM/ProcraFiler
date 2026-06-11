@@ -20,6 +20,7 @@ ProgressFn = Callable[[str], None]
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings, load_runtime_policy
 from procrafiler.ai_analysis import analyze_content  # type: ignore[reportMissingImports]
+from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
@@ -1487,6 +1488,264 @@ def run_review(
     return summary
 
 
+def _list_branch_files(
+    candidate_dir: Path,
+    *,
+    max_files: int = 30,
+    max_depth: int = 2,
+) -> list[str]:
+    """File names under `candidate_dir`, recursively to `max_depth`, newest-first.
+
+    Symlinks are excluded — they may be the relocation markers created by M3 and
+    must never be treated as documents. Depth 0 = files directly in candidate_dir;
+    depth 2 = two levels below it (three directory levels total).
+    """
+    if not candidate_dir.is_dir():
+        return []
+    root = candidate_dir
+    entries: list[tuple[float, str]] = []
+    for dirpath, dirnames, filenames in os.walk(candidate_dir, followlinks=False):
+        try:
+            depth = len(Path(dirpath).relative_to(root).parts)
+        except ValueError:
+            dirnames.clear()
+            continue
+        if depth >= max_depth:
+            dirnames.clear()  # prune — don't descend further
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.is_symlink():
+                continue
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            entries.append((mtime, name))
+    entries.sort(key=lambda x: x[0], reverse=True)
+    return [name for _, name in entries[:max_files]]
+
+
+def _collect_candidate_branches(
+    catdoc: _CatalogedDoc,
+    paths: RuntimePaths,
+    *,
+    max_branches: int = 3,
+) -> tuple[dict[str, list[str]], dict[str, Path]]:
+    """Build the inputs for `propose_grouping`.
+
+    Returns (candidate_branches, resolved_dirs):
+    - candidate_branches: branch-path-str → list of existing filenames (for the prompt).
+    - resolved_dirs: branch-path-str → actual directory Path (for file lookup in M3).
+
+    Only branches that already exist on disk are included (empty ones are kept so
+    the prompt shows them, but the caller's skip-if-all-empty guard still fires).
+    At most `max_branches` (3) entries: category_path first, then alternatives.
+    """
+    if catdoc.analysis is None:
+        return {}, {}
+    candidates: list[str] = []
+    if catdoc.analysis.category_path:
+        candidates.append(catdoc.analysis.category_path)
+    for alt in catdoc.analysis.alternatives:
+        if alt not in candidates:
+            candidates.append(alt)
+        if len(candidates) >= max_branches:
+            break
+    candidate_branches: dict[str, list[str]] = {}
+    resolved_dirs: dict[str, Path] = {}
+    for path_str in candidates:
+        validated = normalize_category_path(path_str, catdoc.max_depth)
+        if validated is None:
+            continue
+        candidate_dir = paths.library_root / Path(*validated)
+        if candidate_dir.is_dir():
+            candidate_branches[path_str] = _list_branch_files(candidate_dir)
+            resolved_dirs[path_str] = candidate_dir
+    return candidate_branches, resolved_dirs
+
+
+def _regroup_existing_file(
+    paths: RuntimePaths,
+    existing_filename: str,
+    resolved_dirs: dict[str, Path],
+    dest_dir: Path,
+    *,
+    operation_id: str,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> bool:
+    """Move an existing LIBRARY_STORED file to `dest_dir`, leave a relative
+    symlink at its old location, update the catalog and mirror copy.
+
+    `resolved_dirs` comes from `_collect_candidate_branches`; we walk them to
+    find `existing_filename` on disk. Returns True when the file was moved.
+    Symlink failure (FS without support) is logged as a warning; the run continues.
+    """
+    existing_path: Path | None = None
+    for branch_dir in resolved_dirs.values():
+        for dirpath, _dirs, files in os.walk(branch_dir, followlinks=False):
+            if existing_filename in files:
+                candidate = Path(dirpath) / existing_filename
+                if not candidate.is_symlink():
+                    existing_path = candidate
+                break
+        if existing_path is not None:
+            break
+
+    if existing_path is None or not existing_path.is_file():
+        emit(f"   ⚠ regroup: {existing_filename!r} not found on disk — skipping")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="regroup_file_not_found",
+            status="warning",
+            message=f"Cannot regroup: file not found on disk: {existing_filename}",
+            now_utc=now_utc,
+            features=features,
+        )
+        return False
+
+    try:
+        existing_path.resolve().relative_to(paths.library_root.resolve())
+    except ValueError:
+        emit(f"   ⚠ regroup: {existing_filename!r} outside library_root — refusing")
+        return False
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    record = repo.find_by_current_path(str(existing_path))
+    if record is None:
+        emit(f"   ⚠ regroup: {existing_filename!r} not in catalog — skipping")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="regroup_not_in_catalog",
+            status="warning",
+            message=f"Cannot regroup: no catalog entry for {existing_filename}",
+            now_utc=now_utc,
+            path_before=str(existing_path),
+            features=features,
+        )
+        return False
+
+    if record.get("status") != "LIBRARY_STORED":
+        emit(f"   ⚠ regroup: {existing_filename!r} status={record.get('status')} ≠ LIBRARY_STORED — skipping")
+        return False
+
+    if existing_path.parent == dest_dir:
+        # Already where the grouping wants it — moving it onto itself would only
+        # rename it (__1) and leave a pointless symlink. Nothing to do.
+        return False
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    new_path = _ensure_unique_path(dest_dir / existing_path.name)
+    old_path = existing_path
+    move(str(old_path), str(new_path))
+
+    try:
+        rel_target = os.path.relpath(str(new_path), str(old_path.parent))
+        old_path.symlink_to(rel_target)
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="symlink_left",
+            status="success",
+            message="Symlink left at old location after regroup",
+            now_utc=now_utc,
+            path_before=str(old_path),
+            path_after=str(new_path),
+            features=features,
+        )
+    except OSError as exc:
+        emit(f"   ⚠ regroup: symlink at {old_path} failed: {exc}")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="symlink_failed",
+            status="warning",
+            message=f"Could not create symlink at old location: {exc}",
+            now_utc=now_utc,
+            path_before=str(old_path),
+            path_after=str(new_path),
+            features=features,
+        )
+
+    new_category_path = "/".join(new_path.relative_to(paths.library_root).parent.parts)
+    existing_fiche = record.get("content_json")
+    content_json: str | None = None
+    if existing_fiche:
+        try:
+            fiche = json.loads(existing_fiche)
+        except (TypeError, ValueError):
+            fiche = None
+        if isinstance(fiche, dict):
+            fiche["category_path"] = new_category_path
+            content_json = json.dumps(fiche, ensure_ascii=True)
+        else:
+            content_json = str(existing_fiche)
+
+    now_iso = _utc_iso(now_utc)
+    repo.upsert_document(
+        doc_id=str(record["doc_id"]),
+        sha256=str(record["sha256"]),
+        current_filename=new_path.name,
+        current_path=str(new_path),
+        status="LIBRARY_STORED",
+        updated_at_utc=now_iso,
+        flow_state="LIBRARY_STORED",
+        content_json=content_json,
+    )
+    _write_catalog_snapshot(paths, repo, now_utc, features=features)
+
+    _append_action_log(
+        paths,
+        operation_id=operation_id,
+        action="library_file_regrouped",
+        status="success",
+        message="Existing library file moved to common series folder",
+        now_utc=now_utc,
+        path_before=str(old_path),
+        path_after=str(new_path),
+        features=features,
+    )
+    emit(f"   regrouped → {new_path.relative_to(paths.library_root)}")
+
+    # Move the mirror copy (if any). Symlinks are never mirrored.
+    try:
+        old_relative = old_path.relative_to(paths.library_root)
+        old_mirror = paths.mirror_root / old_relative
+        if old_mirror.exists() and old_mirror.is_file() and not old_mirror.is_symlink():
+            new_relative = new_path.relative_to(paths.library_root)
+            new_mirror = _ensure_unique_path(paths.mirror_root / new_relative)
+            new_mirror.parent.mkdir(parents=True, exist_ok=True)
+            move(str(old_mirror), str(new_mirror))
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="mirror_regrouped",
+                status="success",
+                message="Mirror copy moved with regrouped file",
+                now_utc=now_utc,
+                path_before=str(old_mirror),
+                path_after=str(new_mirror),
+                features=features,
+            )
+    except Exception as exc:  # noqa: BLE001
+        emit(f"   ⚠ mirror regroup failed: {exc}")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="mirror_regroup_failed",
+            status="warning",
+            message=f"Mirror regroup failed: {exc}",
+            now_utc=now_utc,
+            features=features,
+        )
+
+    return True
+
+
 # R7 scale guard: max documents sent to the organizer in one call. A folder set
 # larger than this is processed in batches so a single huge call can't error out.
 # Normal folders stay well under it and are organized in ONE call (whole set).
@@ -1508,6 +1767,7 @@ def process_all_inbox_files(
         "manual_reviews": 0,
         "pending_decisions": 0,
         "organized": 0,
+        "regrouped": 0,
         "errors": 0,
         "mirror_failures": 0,
         "total": 0,
@@ -1674,6 +1934,47 @@ def process_all_inbox_files(
                 route_dir, pending_options, pending_reason = _route_from_analysis(
                     paths, catdoc, organized_path=organized_path, now_utc=now_utc, features=features, emit=emit
                 )
+
+                # M2+M3 — singleton-only grouping: compare this new file's name
+                # against existing files along its candidate branches; propose a
+                # shared series folder and regroup existing files into it (M3).
+                # Skipped for folder-sets (organizer already handles them), for
+                # pending decisions, for manual review, and for no-analysis files.
+                if (
+                    not set_top
+                    and catdoc.analysis is not None
+                    and pending_options is None
+                    and tuple(route_dir) != tuple(INTERIM_LIBRARY_DIR)
+                ):
+                    candidate_branches, resolved_dirs = _collect_candidate_branches(catdoc, paths)
+                    if candidate_branches:
+                        grouping = propose_grouping(
+                            {
+                                "name": catdoc.analysis.name,
+                                "summary": catdoc.analysis.summary,
+                                "original_filename": catdoc.source.name,
+                            },
+                            candidate_branches,
+                        )
+                        if not grouping.used_fallback and grouping.path is not None:
+                            validated_gp = normalize_category_path(grouping.path, max_depth)
+                            if validated_gp is not None:
+                                route_dir = validated_gp
+                                dest_dir = paths.library_root / Path(*validated_gp)
+                                for existing_name in grouping.group_with:
+                                    ok = _regroup_existing_file(
+                                        paths,
+                                        existing_name,
+                                        resolved_dirs,
+                                        dest_dir,
+                                        operation_id=catdoc.operation_id,
+                                        now_utc=now_utc,
+                                        features=features,
+                                        emit=emit,
+                                    )
+                                    if ok:
+                                        summary["regrouped"] += 1
+
                 result = _file_cataloged(
                     paths,
                     catdoc,
@@ -1701,8 +2002,8 @@ def process_all_inbox_files(
             "Batch completed: "
             f"processed={summary['processed']}, duplicates={summary['duplicates']}, "
             f"manual_reviews={summary['manual_reviews']}, pending_decisions={summary['pending_decisions']}, "
-            f"organized={summary['organized']}, errors={summary['errors']}, "
-            f"mirror_failures={summary['mirror_failures']}"
+            f"organized={summary['organized']}, regrouped={summary['regrouped']}, "
+            f"errors={summary['errors']}, mirror_failures={summary['mirror_failures']}"
         ),
         now_utc=now_utc,
         extra_fields={"dry_run": False},

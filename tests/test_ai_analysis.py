@@ -154,6 +154,14 @@ class TestAnalyzeContent(unittest.TestCase):
     def test_prompt_has_no_user_context_block_by_default(self) -> None:
         self.assertNotIn("About the user", _build_analysis_prompt("x", BASES, []))
 
+    def test_prompt_has_series_folder_rule(self) -> None:
+        # RECURRING-kind documents must get a series subfolder even when alone,
+        # and reuse that folder when it already exists in the tree.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        lowered = prompt.lower()
+        self.assertIn("recurring", lowered)
+        self.assertIn("series", lowered)
+
     def test_noisy_json_is_parsed(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
         noisy = "Voici:\n" + _full(category_path="Personal/Administrative/Banking") + "\nVoilà."
