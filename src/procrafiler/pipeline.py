@@ -1633,6 +1633,11 @@ def _regroup_existing_file(
         emit(f"   ⚠ regroup: {existing_filename!r} status={record.get('status')} ≠ LIBRARY_STORED — skipping")
         return False
 
+    if existing_path.parent == dest_dir:
+        # Already where the grouping wants it — moving it onto itself would only
+        # rename it (__1) and leave a pointless symlink. Nothing to do.
+        return False
+
     dest_dir.mkdir(parents=True, exist_ok=True)
     new_path = _ensure_unique_path(dest_dir / existing_path.name)
     old_path = existing_path
