@@ -102,6 +102,9 @@ def _build_analysis_prompt(
             "\nAbout the user (context to disambiguate — e.g. tell a hobby from professional, or "
             "anchor a person's identity; the document content still rules):\n"
             f"{user_context}\n"
+            "When the document relates to the user's declared PROFESSION or business (a practice, "
+            "training, tool, or event of that trade), prefer Work over Personal; the declared "
+            "hobbies stay Personal.\n"
         )
     # The original filename and the folder the user dropped it in are HINTS, not
     # ground truth: the content stays authoritative, but these help when the
@@ -125,7 +128,8 @@ def _build_analysis_prompt(
         "named CONSISTENTLY so two documents of the SAME kind get the SAME structure. Lead with its "
         "most distinctive entity — the person, organization, or subject — then the key detail. Follow "
         "these patterns for common kinds, and keep the same spirit for others:\n"
-        "    - CV/resume -> \"CV-<Nom-Prenom>\" (+ target role if stated), e.g. CV-Louvel-Simon-Developpeur-web\n"
+        "    - CV/resume -> \"CV_<NOM>-<Prenom>\" — underscore after CV, family NAME in UPPERCASE "
+        "(+ \"_<target role>\" if stated), e.g. CV_LOUVEL-Simon_Developpeur-web\n"
         "    - facture/bill -> \"Facture-<issuer>\" (+ object only if it adds information), e.g. Facture-EDF "
         "(NOT Facture-EDF-electricite: the issuer already implies it)\n"
         "    - bank statement -> \"Releve-<bank>\", e.g. Releve-BNP-Paribas\n"
