@@ -132,7 +132,9 @@ class TestAnalyzeContent(unittest.TestCase):
         # (the timestamp prefix carries it), no redundant words.
         prompt = _build_analysis_prompt("contenu", BASES, [])
         self.assertIn("CONSISTENTLY", prompt)
-        self.assertIn("CV-<Nom-Prenom>", prompt)
+        # CV pattern: underscore after CV, family NAME in UPPERCASE.
+        self.assertIn("CV_<NOM>-<Prenom>", prompt)
+        self.assertIn("CV_LOUVEL-Simon", prompt)
         self.assertIn("Facture-<issuer>", prompt)
         self.assertIn("Releve-<bank>", prompt)
         self.assertIn("do NOT put a DATE in the name", prompt)
@@ -150,6 +152,10 @@ class TestAnalyzeContent(unittest.TestCase):
         prompt = _build_analysis_prompt("x", BASES, [], user_context="La musique est un loisir")
         self.assertIn("La musique est un loisir", prompt)
         self.assertIn("About the user", prompt)
+        # Profession weighting: documents of the user's declared trade lean Work
+        # (run 3: a professional co-development workshop went to Hobbies).
+        self.assertIn("PROFESSION", prompt)
+        self.assertIn("prefer Work", prompt)
 
     def test_prompt_has_no_user_context_block_by_default(self) -> None:
         self.assertNotIn("About the user", _build_analysis_prompt("x", BASES, []))
