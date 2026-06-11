@@ -10,6 +10,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **`Personal/Administrative/Energy` joins the base library tree.** Energy bills (electricity, gas) are a document kind virtually every household has — same universal status as `Telecom`, which has been in the base since the taxonomy redesign. The third real sandbox run showed two electricity bills (different issuers) landing bare in `Housing` with nothing to group them; a dedicated base folder gives them a stable, predictable home (and the series rule can still create finer subfolders under it, e.g. per issuer). `taxonomy.BASE_LIBRARY_DIRECTORIES` +1; README and `docs/spec-mvp-v1.md` §10 base trees updated; `tests/test_config_layout.py` asserts the folder is created.
+
 - **Root singletons now detect existing series folders and regroup related files together (Plan D — M1, M2, M3).** Three interlocking changes fix the "two compteur d'eau filed apart" regression that plan B's folder-sets didn't cover, because root singletons skip the organizer:
 
   **(M1 — analysis prompt):** The `category_path` rule in `_build_analysis_prompt` gains a **SERIES RULE**: for an obviously recurring kind (meter reading, bank statement, payslip, bill, tax notice, insurance policy…), propose a series subfolder even for a single instance (e.g. `.../Housing/Releves-eau`) — and REUSE that exact folder from the live tree when one already fits. In practice, the first *compteur d'eau* now creates `Housing/Releves-eau` on its own; the second one finds it in the tree and routes itself there — often without ever needing M2. `tests/test_ai_analysis.py` +1 (`test_prompt_has_series_folder_rule`).
