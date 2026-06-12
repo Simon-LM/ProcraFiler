@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -491,6 +492,10 @@ class ProcessResult:
     # The catalog doc_id when the file was stored in the library (LIBRARY_STORED,
     # not pending). The batch then hands these to the organize pass for grouping.
     doc_id: str | None = None
+    # Where the file landed in the library, when it did. The batch records these
+    # as THIS RUN's placements: a location created during the run is not a
+    # pre-run reference, so regrouping from it leaves no symlink (spec §1.2).
+    library_path: str | None = None
 
 
 @dataclass
@@ -870,7 +875,7 @@ def _file_cataloged(
     )
 
     if is_pending:
-        return ProcessResult(current_state, mirror_failed=False, pending=True)
+        return ProcessResult(current_state, mirror_failed=False, pending=True, library_path=str(library_target))
 
     mirror_status = _sync_to_mirror(
         paths,
@@ -879,7 +884,12 @@ def _file_cataloged(
         now_utc=now_utc,
         features=features,
     )
-    return ProcessResult(current_state, mirror_failed=mirror_status == MIRROR_FAILED, doc_id=doc_id)
+    return ProcessResult(
+        current_state,
+        mirror_failed=mirror_status == MIRROR_FAILED,
+        doc_id=doc_id,
+        library_path=str(library_target),
+    )
 
 
 def _dry_run_one(
@@ -1494,11 +1504,15 @@ def _list_branch_files(
     max_files: int = 30,
     max_depth: int = 2,
 ) -> list[str]:
-    """File names under `candidate_dir`, recursively to `max_depth`, newest-first.
+    """Paths of files under `candidate_dir` (RELATIVE to it), to `max_depth`,
+    newest-first.
 
-    Symlinks are excluded — they may be the relocation markers created by M3 and
-    must never be treated as documents. Depth 0 = files directly in candidate_dir;
-    depth 2 = two levels below it (three directory levels total).
+    Relative paths — not bare names — so the grouping model sees WHERE inside
+    the branch each file lives (an existing series subfolder is visible as
+    `Releves-eau/2026-01__Releve.pdf`), and so a `group_with` answer cites an
+    unambiguous path. Symlinks are excluded — they may be the relocation
+    markers left by a regroup and must never be treated as documents. Depth 0 =
+    files directly in candidate_dir; depth 2 = two levels below it.
     """
     if not candidate_dir.is_dir():
         return []
@@ -1506,11 +1520,11 @@ def _list_branch_files(
     entries: list[tuple[float, str]] = []
     for dirpath, dirnames, filenames in os.walk(candidate_dir, followlinks=False):
         try:
-            depth = len(Path(dirpath).relative_to(root).parts)
+            rel_dir = Path(dirpath).relative_to(root)
         except ValueError:
             dirnames.clear()
             continue
-        if depth >= max_depth:
+        if len(rel_dir.parts) >= max_depth:
             dirnames.clear()  # prune — don't descend further
         for name in filenames:
             p = Path(dirpath) / name
@@ -1520,9 +1534,9 @@ def _list_branch_files(
                 mtime = p.stat().st_mtime
             except OSError:
                 mtime = 0.0
-            entries.append((mtime, name))
+            entries.append((mtime, (rel_dir / name).as_posix()))
     entries.sort(key=lambda x: x[0], reverse=True)
-    return [name for _, name in entries[:max_files]]
+    return [rel for _, rel in entries[:max_files]]
 
 
 def _collect_candidate_branches(
@@ -1533,13 +1547,16 @@ def _collect_candidate_branches(
 ) -> tuple[dict[str, list[str]], dict[str, Path]]:
     """Build the inputs for `propose_grouping`.
 
-    Returns (candidate_branches, resolved_dirs):
-    - candidate_branches: branch-path-str → list of existing filenames (for the prompt).
-    - resolved_dirs: branch-path-str → actual directory Path (for file lookup in M3).
+    Returns (candidate_branches, resolved_dirs), both keyed by the branch's
+    normalized label (e.g. "Personal/Administrative/Housing"):
+    - candidate_branches: label → existing files inside (paths relative to the
+      branch, for the prompt).
+    - resolved_dirs: label → the branch directory Path (for file lookup).
 
-    Only branches that already exist on disk are included (empty ones are kept so
-    the prompt shows them, but the caller's skip-if-all-empty guard still fires).
-    At most `max_branches` (3) entries: category_path first, then alternatives.
+    A candidate that does not exist on disk yet (e.g. the series subfolder M1
+    just proposed) is replaced by its NEAREST EXISTING ANCESTOR — that is where
+    the files to regroup live. At most `max_branches` (3) candidates are
+    considered: category_path first, then alternatives.
     """
     if catdoc.analysis is None:
         return {}, {}
@@ -1557,16 +1574,69 @@ def _collect_candidate_branches(
         validated = normalize_category_path(path_str, catdoc.max_depth)
         if validated is None:
             continue
-        candidate_dir = paths.library_root / Path(*validated)
-        if candidate_dir.is_dir():
-            candidate_branches[path_str] = _list_branch_files(candidate_dir)
-            resolved_dirs[path_str] = candidate_dir
+        # Walk up to the nearest existing directory (never above the base's
+        # first segment — bases always exist via ensure_runtime_layout).
+        parts = list(validated)
+        while parts and not (paths.library_root / Path(*parts)).is_dir():
+            parts.pop()
+        if not parts:
+            continue
+        label = "/".join(parts)
+        if label in candidate_branches:
+            continue
+        branch_dir = paths.library_root / Path(*parts)
+        candidate_branches[label] = _list_branch_files(branch_dir)
+        resolved_dirs[label] = branch_dir
     return candidate_branches, resolved_dirs
+
+
+_TS_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}__")
+
+
+def _strip_ts_prefix(name: str) -> str:
+    return _TS_PREFIX_RE.sub("", name)
+
+
+def _find_listed_file(
+    existing_ref: str,
+    candidate_branches: dict[str, list[str]],
+    resolved_dirs: dict[str, Path],
+) -> Path | None:
+    """Resolve a `group_with` reference to a real file among the LISTED branch
+    files — never guess.
+
+    First an exact branch-relative path (what the prompt asks the model to
+    copy); then, tolerance for a model citing just the file name or dropping
+    the timestamp prefix — accepted only when the match is UNIQUE across all
+    listed files.
+    """
+    ref = existing_ref.strip().strip("/")
+    if not ref:
+        return None
+    for label, branch_dir in resolved_dirs.items():
+        if ref in candidate_branches.get(label, []):
+            candidate = branch_dir / ref
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+    ref_name = _strip_ts_prefix(Path(ref).name)
+    hits: list[Path] = []
+    seen: set[str] = set()
+    for label, rels in candidate_branches.items():
+        for rel in rels:
+            if _strip_ts_prefix(Path(rel).name) == ref_name:
+                candidate = resolved_dirs[label] / rel
+                if str(candidate) not in seen:
+                    seen.add(str(candidate))
+                    hits.append(candidate)
+    if len(hits) == 1 and hits[0].is_file() and not hits[0].is_symlink():
+        return hits[0]
+    return None
 
 
 def _regroup_existing_file(
     paths: RuntimePaths,
-    existing_filename: str,
+    existing_ref: str,
+    candidate_branches: dict[str, list[str]],
     resolved_dirs: dict[str, Path],
     dest_dir: Path,
     *,
@@ -1574,33 +1644,34 @@ def _regroup_existing_file(
     now_utc: datetime | None,
     features: dict[str, bool],
     emit: ProgressFn,
+    run_placed: set[str],
+    run_symlinks: dict[str, Path],
 ) -> bool:
-    """Move an existing LIBRARY_STORED file to `dest_dir`, leave a relative
-    symlink at its old location, update the catalog and mirror copy.
+    """Move an existing LIBRARY_STORED file DEEPER into `dest_dir`, update the
+    catalog and mirror copy, and leave a relative symlink at its old location.
 
-    `resolved_dirs` comes from `_collect_candidate_branches`; we walk them to
-    find `existing_filename` on disk. Returns True when the file was moved.
-    Symlink failure (FS without support) is logged as a warning; the run continues.
+    Two run-invariant guards (spec §1.2, plan-d révision):
+    - DEEPEN-ONLY: `dest_dir` must be a STRICT descendant of the file's current
+      folder. A run may only increase order — never flatten, move up, or cross
+      branches; anything else is refused and logged.
+    - SYMLINK = PRE-RUN REFERENCE ONLY: a symlink preserves a location the user
+      knew BEFORE the run. `run_placed` holds the paths this run created — a
+      file regrouped from one of those moves WITHOUT leaving a symlink, and a
+      symlink this run already created (`run_symlinks`: target → link) is
+      RETARGETED if its file moves again, never left dangling.
+
+    Returns True when the file was moved. Symlink failure (FS without support)
+    is logged as a warning; the run continues.
     """
-    existing_path: Path | None = None
-    for branch_dir in resolved_dirs.values():
-        for dirpath, _dirs, files in os.walk(branch_dir, followlinks=False):
-            if existing_filename in files:
-                candidate = Path(dirpath) / existing_filename
-                if not candidate.is_symlink():
-                    existing_path = candidate
-                break
-        if existing_path is not None:
-            break
-
-    if existing_path is None or not existing_path.is_file():
-        emit(f"   ⚠ regroup: {existing_filename!r} not found on disk — skipping")
+    existing_path = _find_listed_file(existing_ref, candidate_branches, resolved_dirs)
+    if existing_path is None:
+        emit(f"   ⚠ regroup: {existing_ref!r} not found among the listed files — skipping")
         _append_action_log(
             paths,
             operation_id=operation_id,
             action="regroup_file_not_found",
             status="warning",
-            message=f"Cannot regroup: file not found on disk: {existing_filename}",
+            message=f"Cannot regroup: no unique listed file matches: {existing_ref}",
             now_utc=now_utc,
             features=features,
         )
@@ -1609,20 +1680,20 @@ def _regroup_existing_file(
     try:
         existing_path.resolve().relative_to(paths.library_root.resolve())
     except ValueError:
-        emit(f"   ⚠ regroup: {existing_filename!r} outside library_root — refusing")
+        emit(f"   ⚠ regroup: {existing_ref!r} outside library_root — refusing")
         return False
 
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
     record = repo.find_by_current_path(str(existing_path))
     if record is None:
-        emit(f"   ⚠ regroup: {existing_filename!r} not in catalog — skipping")
+        emit(f"   ⚠ regroup: {existing_ref!r} not in catalog — skipping")
         _append_action_log(
             paths,
             operation_id=operation_id,
             action="regroup_not_in_catalog",
             status="warning",
-            message=f"Cannot regroup: no catalog entry for {existing_filename}",
+            message=f"Cannot regroup: no catalog entry for {existing_ref}",
             now_utc=now_utc,
             path_before=str(existing_path),
             features=features,
@@ -1630,12 +1701,28 @@ def _regroup_existing_file(
         return False
 
     if record.get("status") != "LIBRARY_STORED":
-        emit(f"   ⚠ regroup: {existing_filename!r} status={record.get('status')} ≠ LIBRARY_STORED — skipping")
+        emit(f"   ⚠ regroup: {existing_ref!r} status={record.get('status')} ≠ LIBRARY_STORED — skipping")
         return False
 
-    if existing_path.parent == dest_dir:
-        # Already where the grouping wants it — moving it onto itself would only
-        # rename it (__1) and leave a pointless symlink. Nothing to do.
+    try:
+        depth_gain = dest_dir.relative_to(existing_path.parent)
+    except ValueError:
+        depth_gain = None
+    if depth_gain is None or not depth_gain.parts:
+        # Not a strict descendant of the file's current folder: moving it would
+        # flatten or cross branches — exactly what a run must never do.
+        emit(f"   ⚠ regroup refused (not deeper): {existing_ref!r} stays where it is")
+        _append_action_log(
+            paths,
+            operation_id=operation_id,
+            action="regroup_refused_not_deeper",
+            status="warning",
+            message="Regroup refused: destination is not strictly deeper than the file's folder",
+            now_utc=now_utc,
+            path_before=str(existing_path),
+            path_after=str(dest_dir),
+            features=features,
+        )
         return False
 
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1643,33 +1730,48 @@ def _regroup_existing_file(
     old_path = existing_path
     move(str(old_path), str(new_path))
 
-    try:
-        rel_target = os.path.relpath(str(new_path), str(old_path.parent))
-        old_path.symlink_to(rel_target)
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="symlink_left",
-            status="success",
-            message="Symlink left at old location after regroup",
-            now_utc=now_utc,
-            path_before=str(old_path),
-            path_after=str(new_path),
-            features=features,
-        )
-    except OSError as exc:
-        emit(f"   ⚠ regroup: symlink at {old_path} failed: {exc}")
-        _append_action_log(
-            paths,
-            operation_id=operation_id,
-            action="symlink_failed",
-            status="warning",
-            message=f"Could not create symlink at old location: {exc}",
-            now_utc=now_utc,
-            path_before=str(old_path),
-            path_after=str(new_path),
-            features=features,
-        )
+    placed_this_run = str(old_path) in run_placed
+    run_placed.add(str(new_path))
+    earlier_symlink = run_symlinks.pop(str(old_path), None)
+    if placed_this_run:
+        # The old location only ever existed within this run — nobody knew it,
+        # so no marker there. But a symlink this run left at the file's PRE-RUN
+        # location must follow the file instead of dangling.
+        if earlier_symlink is not None and earlier_symlink.is_symlink():
+            try:
+                earlier_symlink.unlink()
+                earlier_symlink.symlink_to(os.path.relpath(str(new_path), str(earlier_symlink.parent)))
+                run_symlinks[str(new_path)] = earlier_symlink
+            except OSError as exc:
+                emit(f"   ⚠ regroup: retargeting symlink {earlier_symlink} failed: {exc}")
+    else:
+        try:
+            old_path.symlink_to(os.path.relpath(str(new_path), str(old_path.parent)))
+            run_symlinks[str(new_path)] = old_path
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="symlink_left",
+                status="success",
+                message="Symlink left at old location after regroup",
+                now_utc=now_utc,
+                path_before=str(old_path),
+                path_after=str(new_path),
+                features=features,
+            )
+        except OSError as exc:
+            emit(f"   ⚠ regroup: symlink at {old_path} failed: {exc}")
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="symlink_failed",
+                status="warning",
+                message=f"Could not create symlink at old location: {exc}",
+                now_utc=now_utc,
+                path_before=str(old_path),
+                path_after=str(new_path),
+                features=features,
+            )
 
     new_category_path = "/".join(new_path.relative_to(paths.library_root).parent.parts)
     existing_fiche = record.get("content_json")
@@ -1870,6 +1972,12 @@ def process_all_inbox_files(
     base_categories = [category_label(c) for c in classifiable_categories()]
     user_context = load_user_context()
     run_seen: set[str] = set()
+    # Run-invariant bookkeeping (spec §1.2): library paths THIS run created, and
+    # the symlinks it left (target → link). A location born during the run is
+    # not a pre-run reference — regrouping from it leaves no symlink — and a
+    # symlink whose file moves again is retargeted, never left dangling.
+    run_placed: set[str] = set()
+    run_symlinks: dict[str, Path] = {}
 
     for set_top, sources in work_sets:
         # Phase 1 — CATALOG every file of the set (no filing yet).
@@ -1935,11 +2043,14 @@ def process_all_inbox_files(
                     paths, catdoc, organized_path=organized_path, now_utc=now_utc, features=features, emit=emit
                 )
 
-                # M2+M3 — singleton-only grouping: compare this new file's name
-                # against existing files along its candidate branches; propose a
-                # shared series folder and regroup existing files into it (M3).
-                # Skipped for folder-sets (organizer already handles them), for
-                # pending decisions, for manual review, and for no-analysis files.
+                # M2+M3 — singleton-only grouping: show the AI the existing files
+                # along the candidate branches; it may confirm, or propose a DEEPER
+                # shared series/affair subfolder and pull related existing files
+                # down into it. Run-invariant locks (spec §1.2): the proposed path
+                # is honored only if it CREUSES (strict descendant of a candidate
+                # branch — G3); existing files only ever move DEEPER (G4, inside
+                # _regroup_existing_file). Skipped for folder-sets (the organizer
+                # owns them), pending decisions, manual review, no-analysis files.
                 if (
                     not set_top
                     and catdoc.analysis is not None
@@ -1958,22 +2069,34 @@ def process_all_inbox_files(
                         )
                         if not grouping.used_fallback and grouping.path is not None:
                             validated_gp = normalize_category_path(grouping.path, max_depth)
-                            if validated_gp is not None:
+                            branch_tuples = [tuple(label.split("/")) for label in resolved_dirs]
+                            deepens = validated_gp is not None and any(
+                                len(validated_gp) > len(b) and validated_gp[: len(b)] == b for b in branch_tuples
+                            )
+                            if validated_gp is not None and deepens:
                                 route_dir = validated_gp
                                 dest_dir = paths.library_root / Path(*validated_gp)
-                                for existing_name in grouping.group_with:
+                                for existing_ref in grouping.group_with:
                                     ok = _regroup_existing_file(
                                         paths,
-                                        existing_name,
+                                        existing_ref,
+                                        candidate_branches,
                                         resolved_dirs,
                                         dest_dir,
                                         operation_id=catdoc.operation_id,
                                         now_utc=now_utc,
                                         features=features,
                                         emit=emit,
+                                        run_placed=run_placed,
+                                        run_symlinks=run_symlinks,
                                     )
                                     if ok:
                                         summary["regrouped"] += 1
+                            elif validated_gp is not None:
+                                # The model proposed a branch root or an unrelated
+                                # path: that's a flatten/cross-branch, not a series
+                                # subfolder — keep the analysis route untouched.
+                                emit("   grouping ignored (does not deepen a candidate branch)")
 
                 result = _file_cataloged(
                     paths,
@@ -1988,6 +2111,8 @@ def process_all_inbox_files(
             except Exception as exc:  # noqa: BLE001
                 _record_error(exc)
                 continue
+            if result.library_path:
+                run_placed.add(result.library_path)
             _tally(result, organized=used_organize and result.flow_state == "LIBRARY_STORED")
 
     # Tidy up: drop the now-empty Inbox subfolders the processed files left behind.

@@ -166,6 +166,94 @@ ensembles = plus tard, si les runs le justifient.
 - `test_batch_cli.test_process_all_batch_summary` : même correction (`is_file() and not is_symlink()`).
 - Aucune déviation fonctionnelle ; toutes les règles du plan respectées.
 
+## Révision post-run 3 (validée par l'utilisateur, 2026-06-12)
+
+Le 3e run sandbox réel (librairie vide) a validé M1 et tout l'amont (plan B,
+contexte, nommage), mais **M2/M3 a dé-rangé la librairie** : `mistral-small` a
+inversé la sémantique (« rapatrier les semblables vers le chemin confirmé »,
+même moins profond, au lieu de « creuser un sous-dossier-série ») ; il a arraché
+les constats du dossier d'affaire Insurance (2×, chaînes de symlinks), aplati
+Banking/Housing/Health vers Administrative nu, et écrasé la route-série des deux
+compteurs (M1 correcte) vers Housing nu. Rien dans la mécanique ne l'en
+empêchait. De plus, les symlinks laissés étaient TOUS parasites (librairie
+partie de vide → aucun repère pré-run à préserver).
+
+### L'invariant du run (consolidation d'architecture)
+
+> **Un `run` ne peut qu'augmenter l'ordre de la librairie, jamais le défaire.**
+> Il peut créer des dossiers, placer les nouveaux fichiers, et **approfondir**
+> un fichier existant (le descendre dans un sous-dossier strictement plus
+> spécifique de là où il est). Il ne peut **jamais** aplatir, remonter, ni
+> croiser les branches. La « réorganisation » utile (sous-dossiers série/affaire
+> qui attirent les fichiers apparentés) se produit ainsi naturellement au fil
+> des runs, par approfondissement.
+
+Décisions d'architecture associées (mêmes échanges) :
+
+- **`reorganize` (commande globale) : SUPPRIMÉ de la roadmap.** L'Inbox est la
+  seule porte par laquelle l'IA décide. Une passe corrective de fin de run est
+  REJETÉE par défaut (c'est l'option A déguisée — on durcit les étapes du run,
+  on ne répare pas derrière) ; réévaluable seulement si les runs réels restent
+  insuffisants.
+- **`rescan` (futur chantier) : secrétaire pur, automatique avant chaque run.**
+  Fichier déposé à la main dans la librairie → LU INTÉGRALEMENT (fiche complète
+  au catalogue, pour la recherche) + préfixe horodaté (nom de l'utilisateur
+  intouché) ; fichier connu déplacé/renommé (sha256) → mise à jour du chemin,
+  zéro IA ; disparu → signalé. L'IA *comprend*, ne *décide* pas.
+- **Trou connu (échappatoire future)** : un fichier déjà catalogué ne peut pas
+  repasser par l'Inbox (la dédup sha256 le jetterait en doublon). Si le besoin
+  émerge : micro-commande `refile <chemin>` (dé-épingler du catalogue +
+  ré-ingérer par le pipeline normal). Rien à construire maintenant.
+
+### Corrections G1–G7 (cette PR) — « l'IA voit tout, mais ne peut que ranger »
+
+- **G1 — Listing en chemins relatifs** : chaque branche liste ses fichiers en
+  chemins relatifs à la branche (`Releves-eau/2026-01__Releve.pdf`), pas en noms
+  à plat — l'IA voit OÙ vit chaque fichier (donc les dossiers-séries existants)
+  et `group_with` cite des chemins non ambigus. Plafonds inchangés (≤3 branches,
+  ≤30 fichiers, prof. ≤2, ~2500 car.) — la visibilité n'est PAS réduite
+  (décision utilisateur : l'information le long des branches est la raison
+  d'être du plan D).
+- **G2 — Branche ancêtre incluse** : si la route de l'analyse n'existe pas
+  encore sur disque (ex. `Housing/Releves-eau` proposé par M1), son ancêtre
+  existant le plus proche (`Housing`) devient la branche candidate — c'est là
+  que vivent les fichiers à regrouper.
+- **G3 — Le `path` de M2 ne peut que creuser** : accepté seulement s'il est un
+  STRICT descendant d'une branche candidate ; sinon ignoré (la route de
+  l'analyse est conservée). Bloque l'écrasement des routes-série.
+- **G4 — Fichier existant : approfondissement uniquement** : M3 ne déplace que
+  vers un STRICT descendant du dossier ACTUEL du fichier. Bloque arrachages et
+  aplatissements ; rend les cascades intra-run inoffensives.
+- **G5 — Symlink = repère d'avant-run uniquement** : le run tient la liste des
+  fichiers qu'il a placés ; un regroupement d'un fichier placé pendant CE run se
+  fait SANS symlink (librairie vide → zéro symlink). Un symlink créé pendant le
+  run est re-ciblé si son fichier bouge encore (jamais de lien pendouillant).
+- **G6 — Chaîne M2 → ORGANIZE (`mistral-medium`)** : ce jugement mérite le même
+  modèle que l'organiseur d'ensembles. Remplace le choix ANALYSIS « pour
+  tester » (sa condition de réévaluation est remplie).
+- **G7 — Prompt réécrit autour du contrat** : confirmer, OU proposer UN
+  sous-dossier partagé PLUS PROFOND sous une branche candidate ; `group_with` =
+  uniquement des chemins relatifs copiés du listing dont le dossier actuel est
+  un ANCÊTRE du sous-dossier proposé (les fichiers descendent, jamais ne
+  remontent ni ne changent de branche) ; un fichier déjà dans un sous-dossier
+  bien nommé est déjà rangé → le laisser ; doute → confirmer, `group_with`
+  vide. Le prompt DÉCRIT ce que G3/G4 IMPOSENT — un modèle qui désobéit est
+  simplement ignoré.
+- Matching `group_with` : chemin relatif exact sous une branche ; sinon match
+  par nom de fichier (préfixe horodaté toléré) seulement s'il est UNIQUE —
+  jamais deviner.
+
+### Checklist révision
+
+- [x] G1 listing chemins relatifs + G2 branche ancêtre
+- [x] G3 verrou « creuser seulement » (nouveau fichier)
+- [x] G4 verrou « descendant strict » (fichiers existants) + refus journalisé
+- [x] G5 symlinks pré-run only + re-ciblage intra-run
+- [x] G6 chaîne ORGANIZE + G7 prompt contrat + matching tolérant unique
+- [x] Tests (G2–G5 pipeline, prompt/chaîne ai_grouping, existants ajustés)
+- [x] Invariant inscrit dans la spec ; rescan/refile/fin-de-run consignés au backlog
+- [x] CHANGELOG ; suite complète verte (250 tests)
+
 ## Hors périmètre (ne PAS faire ici)
 
 - Check global de la librairie / re-tri de l'existant (futur `reorganize`/`rescan`,

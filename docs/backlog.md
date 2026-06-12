@@ -44,6 +44,21 @@ binary in the taxonomy) is not in the document — it depends on the user's
       job, so dropping a file in the Inbox processes it without a manual command.
       Today processing is on-demand only (`process-once` / `process-all`).
 - [ ] **`library-untrash`** — a restore command (currently restore is a manual `mv`).
+- [ ] **`rescan`** — the pure-secretary sync, AUTOMATIC before every run (and standalone):
+      a file the user placed by hand in the library is READ IN FULL (complete fiche into
+      the catalog, for future search) and gets the timestamp prefix (the user's stem is
+      untouched); a known file moved/renamed (same sha256) just gets its catalog path
+      updated, no AI; a deleted file is flagged. The AI *understands*, it never *decides* —
+      the user's location and name always win.
+- [ ] **`refile <path>`** (idea, decide on real usage) — the only escape hatch for asking
+      the AI to reconsider an ALREADY-FILED file: unpin it from the catalog and re-ingest
+      it through the normal Inbox pipeline. Needed because an already-catalogued file
+      cannot simply be dropped back in the Inbox (sha256 dedup would trash it as a
+      duplicate). NOT a global `reorganize` — that command was deliberately dropped:
+      the Inbox is the only door through which the AI decides.
+- [ ] **End-of-run corrective pass** — REJECTED by default (it is the discarded
+      "file-then-fix" Option A in disguise; we harden the run's steps instead). Reevaluate
+      only if several real runs show the in-flow filing staying insufficient.
 
 ## Open evaluations
 

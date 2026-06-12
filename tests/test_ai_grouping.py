@@ -4,12 +4,17 @@ import json
 import unittest
 from unittest.mock import patch
 
-from procrafiler.ai_grouping import GroupingResult, _build_grouping_prompt, propose_grouping
+from procrafiler.ai_grouping import _build_grouping_prompt, propose_grouping
 from procrafiler.ai_naming import ChainEntry, ProviderCallError
 
+# Branch listings are branch-RELATIVE paths: the model sees where inside the
+# branch each file lives (an existing series subfolder is visible as such).
 BRANCHES_ONE = {"Personal/Administrative/Housing": ["2026-01-15__Releve-eau-jan.pdf"]}
 BRANCHES_TWO = {
-    "Personal/Administrative/Housing": ["2026-01-15__Releve-eau-jan.pdf", "2026-02-10__Releve-eau-feb.pdf"],
+    "Personal/Administrative/Housing": [
+        "Releves-eau/2026-01-15__Releve-eau-jan.pdf",
+        "2026-02-10__Releve-eau-feb.pdf",
+    ],
     "Personal/Administrative/Banking": ["2026-03-01__Releve-BNP-mars.pdf"],
 }
 DOC = {"name": "Releve-eau-mars", "summary": "relevé compteur eau mars 2026", "original_filename": "releve_mars.pdf"}
@@ -33,8 +38,15 @@ class TestProposeGrouping(unittest.TestCase):
         self.assertTrue(result.used_fallback)
         self.assertEqual(result.reason, "chain_not_configured")
 
+    def test_default_chain_is_the_organize_task(self) -> None:
+        # G6: this judgment (moving already-filed documents) deserves the same
+        # model as the set organizer — the chain comes from ORGANIZE, not ANALYSIS.
+        with patch("procrafiler.ai_grouping.task_chain_from_env", return_value=[]) as chain_mock:
+            propose_grouping(DOC, BRANCHES_ONE)
+        chain_mock.assert_called_once_with("ORGANIZE")
+
     def test_full_result_with_path_and_group_with(self) -> None:
-        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
         raw = json.dumps(
             {"path": "Personal/Administrative/Housing/Releves-eau", "group_with": ["2026-01-15__Releve-eau-jan.pdf"]}
         )
@@ -46,7 +58,7 @@ class TestProposeGrouping(unittest.TestCase):
         self.assertEqual(result.provider, "mistral")
 
     def test_null_path_with_empty_group_with(self) -> None:
-        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
         raw = json.dumps({"path": None, "group_with": []})
         with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=raw):
             result = propose_grouping(DOC, BRANCHES_ONE, chain=chain, retries=0)
@@ -55,13 +67,13 @@ class TestProposeGrouping(unittest.TestCase):
         self.assertEqual(result.group_with, [])
 
     def test_invalid_json_falls_back(self) -> None:
-        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
         with patch("procrafiler.ai_grouping.call_mistral_chat", return_value="not json at all"):
             result = propose_grouping(DOC, BRANCHES_ONE, chain=chain, retries=0)
         self.assertTrue(result.used_fallback)
 
     def test_api_error_falls_back(self) -> None:
-        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
         with patch("procrafiler.ai_grouping.call_mistral_chat", side_effect=ProviderCallError("API_ERROR_500")):
             result = propose_grouping(DOC, BRANCHES_ONE, chain=chain, retries=0)
         self.assertTrue(result.used_fallback)
@@ -69,9 +81,11 @@ class TestProposeGrouping(unittest.TestCase):
 
 
 class TestBuildGroupingPrompt(unittest.TestCase):
-    def test_prompt_contains_existing_filenames(self) -> None:
+    def test_prompt_contains_relative_paths(self) -> None:
+        # G1: the listing carries branch-relative PATHS, so an existing series
+        # subfolder is visible (Releves-eau/…) and citations are unambiguous.
         prompt = _build_grouping_prompt(DOC, BRANCHES_TWO)
-        self.assertIn("2026-01-15__Releve-eau-jan.pdf", prompt)
+        self.assertIn("Releves-eau/2026-01-15__Releve-eau-jan.pdf", prompt)
         self.assertIn("2026-02-10__Releve-eau-feb.pdf", prompt)
         self.assertIn("2026-03-01__Releve-BNP-mars.pdf", prompt)
 
@@ -79,12 +93,18 @@ class TestBuildGroupingPrompt(unittest.TestCase):
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
         self.assertIn("Personal/Administrative/Housing", prompt)
 
+    def test_prompt_states_the_deepen_only_contract(self) -> None:
+        # G7: the prompt describes what the pipeline locks enforce — subfolders
+        # only ever go DEEPER; never a parent, never a sibling branch.
+        prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
+        self.assertIn("DEEPER", prompt)
+        self.assertIn("NEVER propose a parent folder", prompt)
+        self.assertIn("never up, never sideways", prompt)
+
     def test_prompt_enforces_date_at_start_rule(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
-        lowered = prompt.lower()
-        # The prompt must say the date goes at the START (never at the end).
-        self.assertIn("start", lowered)
-        self.assertIn("never at the end", lowered)
+        self.assertIn("DATE goes at the START", prompt)
+        self.assertIn("NEVER at the end", prompt)
 
     def test_prompt_has_high_bar_rule(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
