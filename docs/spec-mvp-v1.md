@@ -26,6 +26,8 @@ This principle governs the whole design:
 
 ProcraFiler only ever acts on files placed in its drop folder (`Inbox`, the "vrac"). It must never read from or write to any other location on disk, except the folders it created itself (library, mirror, trash, application state). The rest of the user's disk is out of scope and untouchable.
 
+Within the library, a `run` is **monotonic**: it may create folders, place new files, and **deepen** an already-filed file (move it into a strictly more specific subfolder of where it already sits — e.g. into a series/affair folder it belongs to). It may never flatten, move a file up, or move it across branches. The Inbox is the only door through which the AI makes filing decisions; anything beyond deepening belongs to the user's own hand in the library (which the future `rescan` follows without judging).
+
 ## 2. Core Folder Structure
 
 ### 2.1 Inbox workspace (inside Downloads)

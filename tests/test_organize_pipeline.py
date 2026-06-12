@@ -227,17 +227,22 @@ class TestSingletonGrouping(unittest.TestCase):
         os.environ["PROCRAFILER_HOME"] = str(root / ".state")
         os.environ["PROCRAFILER_CONFIG_HOME"] = str(root / ".config")
         os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"
         self.paths = default_runtime_paths()
         ensure_runtime_layout(self.paths)
         self.now = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
         os.environ.pop("PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
+        os.environ.pop("PROCRAFILER_AI_ORGANIZE_PRIMARY", None)
         self.tmp.cleanup()
 
     def _files_under(self, *parts: str) -> list[Path]:
         base = self.paths.library_root.joinpath(*parts)
         return [p for p in base.rglob("*") if p.is_file() and not p.is_symlink()] if base.exists() else []
+
+    def _symlinks_in_library(self) -> list[Path]:
+        return [p for p in self.paths.library_root.rglob("*") if p.is_symlink()]
 
     def test_two_singletons_of_same_series_are_regrouped(self) -> None:
         # Two "Releve eau" files dropped as root singletons.
@@ -321,6 +326,103 @@ class TestSingletonGrouping(unittest.TestCase):
         self.assertTrue(series_dir.exists())
         new_files = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
         self.assertEqual(len(new_files), 1)
+
+    def test_same_run_regroup_leaves_no_symlink(self) -> None:
+        # G5 + G2: two compteurs dropped as root singletons in the SAME run, on
+        # an empty library. The first is filed bare in Housing; the second's
+        # analysis proposes the series folder (which doesn't exist on disk →
+        # its existing ANCESTOR Housing becomes the candidate branch, G2), and
+        # the grouping pulls the first file down into it. Both files were
+        # placed THIS run → there was no pre-run reference to preserve →
+        # ZERO symlink in the library (the run-3 design bug).
+        housing = "Personal/Administrative/Housing"
+        series = f"{housing}/Releves-eau"
+        analyses = iter(
+            [
+                json.dumps({"name": "Releve-eau", "category_path": housing, "summary": "compteur janvier"}),
+                json.dumps({"name": "Releve-eau", "category_path": series, "summary": "compteur fevrier"}),
+            ]
+        )
+        # group_with cites the bare file name without its timestamp prefix —
+        # the unique prefix-tolerant match finds it among the listed files.
+        grouping_raw = json.dumps({"path": series, "group_with": ["Releve-eau.txt"]})
+        (self.paths.inbox_dir / "a_releve.txt").write_bytes(b"Releve compteur eau janvier")
+        (self.paths.inbox_dir / "b_releve.txt").write_bytes(b"Releve compteur eau fevrier")
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", side_effect=lambda *a, **k: next(analyses)):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["processed"], 2)
+        self.assertEqual(summary["regrouped"], 1)
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Housing", "Releves-eau")), 2)
+        self.assertEqual(self._symlinks_in_library(), [])  # nothing pre-run → no marker
+
+    def test_flattening_path_is_ignored_and_analysis_route_kept(self) -> None:
+        # G3: the grouping answers with a candidate branch ROOT (not a deeper
+        # subfolder). That's a flatten — it is ignored: the new file keeps its
+        # analysis route (the series folder), and nothing is regrouped.
+        housing = "Personal/Administrative/Housing"
+        series = f"{housing}/Releves-eau"
+        housing_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing"
+        (housing_dir / "2026-01-01_00-00-00__Constat.txt").write_bytes(b"x")  # branch non-empty → grouping runs
+
+        (self.paths.inbox_dir / "releve.txt").write_bytes(b"Releve compteur eau")
+        analysis_raw = json.dumps({"name": "Releve-eau", "category_path": series, "summary": "compteur"})
+        grouping_raw = json.dumps({"path": housing, "group_with": ["2026-01-01_00-00-00__Constat.txt"]})
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["regrouped"], 0)
+        # The analysis route (series folder) survived the flattening attempt.
+        self.assertEqual(len(self._files_under("Personal", "Administrative", "Housing", "Releves-eau")), 1)
+        self.assertTrue((housing_dir / "2026-01-01_00-00-00__Constat.txt").is_file())
+
+    def test_regroup_refuses_to_pull_a_file_out_of_its_subfolder(self) -> None:
+        # G4: group_with cites a file living in a dated affair subfolder; the
+        # proposed series folder is NOT a descendant of that subfolder → the
+        # move would de-organize → refused (file stays), new file still filed.
+        housing = "Personal/Administrative/Housing"
+        affair_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing" / "2025-08-Degats-eaux"
+        affair_dir.mkdir(parents=True)
+        affair_file = affair_dir / "2025-08-01_00-00-00__Constat.txt"
+        affair_file.write_bytes(b"constat")
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        repo.upsert_document(
+            doc_id="doc-affair",
+            sha256="cafe",
+            current_filename=affair_file.name,
+            current_path=str(affair_file),
+            status="LIBRARY_STORED",
+            updated_at_utc="2025-08-01T00:00:00Z",
+            flow_state="LIBRARY_STORED",
+        )
+
+        (self.paths.inbox_dir / "releve.txt").write_bytes(b"Releve compteur eau")
+        analysis_raw = json.dumps({"name": "Releve-eau", "category_path": housing, "summary": "compteur"})
+        grouping_raw = json.dumps(
+            {
+                "path": f"{housing}/Releves-eau",
+                "group_with": ["2025-08-Degats-eaux/2025-08-01_00-00-00__Constat.txt"],
+            }
+        )
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["regrouped"], 0)
+        self.assertTrue(affair_file.is_file())  # the affair folder kept its document
+        self.assertEqual(self._symlinks_in_library(), [])
+        events = [
+            json.loads(line)
+            for line in self.paths.actions_log_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(any(e["action"] == "regroup_refused_not_deeper" for e in events))
 
 
 if __name__ == "__main__":

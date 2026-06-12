@@ -1,17 +1,22 @@
-"""Lightweight grouping step for singleton files.
+"""Grouping step for singleton files: confirm the destination, or creuse.
 
 After a root singleton's per-file analysis has produced a confirmed route,
-this step asks the AI to compare the new document against the *names* of
-existing files along the candidate destination branches — and to decide
-whether the new file and some of those existing files should share a common
-series or affair folder.
+this step shows the AI the existing files along the candidate destination
+branches (paths relative to each branch) and asks one question: is this new
+document part of a series/affair that deserves a DEEPER shared subfolder —
+and if so, which already-filed files should move down into it?
 
 Scope: root singletons only. Folder-sets are handled by `ai_organize`.
 
-The chain is deliberately read from the ANALYSIS task
-(`PROCRAFILER_AI_ANALYSIS_*`) — no new env var needed — since this is a
-lightweight "confirm or regroup" step whose cost is comparable to a
-per-file analysis call.
+The run invariant (spec §1.2) bounds everything this step can cause: the
+pipeline only honors a proposed path that is a STRICT descendant of a
+candidate branch, and only moves existing files STRICTLY DEEPER than where
+they sit. The prompt describes that contract; the locks enforce it.
+
+The chain is read from the ORGANIZE task (`PROCRAFILER_AI_ORGANIZE_*`, e.g.
+Mistral medium): deciding that already-filed documents belong together takes
+the same judgment as organizing a set — the third real run showed a small
+model inverting the grouping semantics.
 """
 
 from __future__ import annotations
@@ -96,24 +101,30 @@ def _build_grouping_prompt(
     branches_block = "\n".join(branches_parts)
 
     return (
-        "You are filing ONE new document. Confirm its destination OR propose a common SERIES "
-        "folder if the new document clearly belongs to the same recurring series as existing files. "
+        "You are filing ONE new document into a library. Decide whether it reveals a SERIES or "
+        "AFFAIR that deserves a shared subfolder. "
         "Return JSON only: {\"path\": \"...\"|null, \"group_with\": [\"...\"]}\n\n"
         "New document:\n"
         f"  name: {name}{origin_part} | summary: {summary}\n\n"
-        "Candidate destination branches (folder path → existing filenames inside):\n"
+        "Candidate destination branches (branch folder → existing files inside, as paths relative "
+        "to that branch):\n"
         f"{branches_block}\n\n"
         "Rules:\n"
-        "- Confirm ONE path from the candidates, OR propose a NEW SERIES SUBFOLDER under one of "
-        "them when the new document is manifestly of the same recurring kind as existing files — "
-        "and list those files' names in \"group_with\".\n"
+        "- Either CONFIRM one of the candidate branch paths as-is, OR propose ONE shared "
+        "series/affair SUBFOLDER strictly DEEPER under one of them (e.g. branch + \"/Releves-eau\"). "
+        "NEVER propose a parent folder, a sibling branch, or any path outside the candidates: files "
+        "may only ever move DOWN into a more specific folder, never up, never sideways.\n"
+        "- \"group_with\": ONLY when you proposed a deeper shared subfolder — list the existing "
+        "files (their relative paths, copied EXACTLY from the listing) that MANIFESTLY belong to "
+        "that same series/affair AND currently sit in an ANCESTOR folder of it. A file already "
+        "inside a well-named subfolder (e.g. a dated affair folder) is already organized — leave it "
+        "alone, do NOT list it.\n"
+        "- HIGH BAR: only group what is OBVIOUS (same recurring series, same affair). When in "
+        "doubt, confirm the original path and leave \"group_with\" empty.\n"
         "- The DATE goes at the START of any new folder name (e.g. \".../Housing/2025_Releves-eau\"), "
         "NEVER at the end.\n"
-        "- HIGH BAR: only regroup when the similarity is OBVIOUS (same recurring series or same "
-        "affair). When in doubt, confirm the original path and leave \"group_with\" empty.\n"
-        "- Existing filenames were produced by an AI — treat them as CLUES, not absolute truth.\n"
-        "- \"group_with\" must contain EXACT filenames from the listing above; never invent names.\n"
-        "- \"path\" null means: keep the per-file analysis route unchanged.\n"
+        "- Existing file names were produced by an AI — treat them as CLUES, not absolute truth.\n"
+        "- \"path\" null means: keep the originally proposed destination unchanged.\n"
         "- Do not add other keys or commentary."
     )
 
@@ -153,22 +164,22 @@ def propose_grouping(
     """Propose a grouping decision for ONE singleton document.
 
     `document` carries `name`, `summary`, `original_filename` (all optional).
-    `candidate_branches` maps each candidate folder path (string) to the list
-    of existing filenames inside that folder (see `_list_branch_files` in
+    `candidate_branches` maps each candidate branch label to the existing files
+    inside it, as branch-relative paths (see `_list_branch_files` in
     pipeline.py for how this dict is built).
 
-    Returns early (no AI call) when all branches are empty or when no ANALYSIS
+    Returns early (no AI call) when all branches are empty or when no ORGANIZE
     chain is configured. On failure falls back gracefully to a no-op result.
     """
     if not candidate_branches or all(not v for v in candidate_branches.values()):
         return _empty_grouping_result(provider="none", model="none", reason="no_candidate_files")
 
-    chain_entries = chain if chain is not None else task_chain_from_env("ANALYSIS")
+    chain_entries = chain if chain is not None else task_chain_from_env("ORGANIZE")
     if not chain_entries:
         return _empty_grouping_result(provider="none", model="none", reason="chain_not_configured")
 
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
-    retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ORGANIZE", default_value=90)
+    retry_count = retries if retries is not None else _task_retries_from_env("ORGANIZE", default_value=2)
     prompt = _build_grouping_prompt(document, candidate_branches)
 
     last_error = "unknown"
