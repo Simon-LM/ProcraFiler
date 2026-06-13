@@ -135,9 +135,26 @@ class TestAnalyzeContent(unittest.TestCase):
         # CV pattern: underscore after CV, family NAME in UPPERCASE.
         self.assertIn("CV_<NOM>-<Prenom>", prompt)
         self.assertIn("CV_LOUVEL-Simon", prompt)
-        self.assertIn("Facture-<issuer>", prompt)
-        self.assertIn("Releve-<bank>", prompt)
+        self.assertIn("Facture_<issuer>", prompt)
+        self.assertIn("Releve_<bank>", prompt)
         self.assertIn("do NOT put a DATE in the name", prompt)
+
+    def test_prompt_has_separator_grammar(self) -> None:
+        # One generalist grammar: underscore separates semantic COMPONENTS,
+        # hyphens join words WITHIN a component (run 4 leaked mixed separators).
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("underscore separates", prompt)
+        self.assertIn("hyphens join the words WITHIN", prompt)
+        self.assertIn("Releve_BNP-Paribas", prompt)
+
+    def test_prompt_says_series_folders_are_never_dated(self) -> None:
+        # Series folders are open-ended → never dated at their own level; a
+        # period inside a series is a bare-YEAR subfolder; only one-off affair
+        # folders carry a date, at the START of the name.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("SERIES folder is NEVER dated", prompt)
+        self.assertIn("bare-YEAR subfolder", prompt)
+        self.assertIn("Factures-electricite/2026", prompt)
 
     def test_prompt_carries_filename_and_folder_as_hints(self) -> None:
         prompt = _build_analysis_prompt("x", BASES, [], original_filename="CV_Simon-LOUVEL.odt", source_folder="Dégats_eaux")

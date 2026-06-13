@@ -254,6 +254,29 @@ Décisions d'architecture associées (mêmes échanges) :
 - [x] Invariant inscrit dans la spec ; rescan/refile/fin-de-run consignés au backlog
 - [x] CHANGELOG ; suite complète verte (250 tests)
 
+### Affinements post-run 4 (validés 2026-06-13)
+
+Le run 4 a validé l'architecture (compteurs réunis, regroupement intra-run propre,
+zéro symlink, G3 visible en action). Trois finitions décidées :
+
+- **Série vs affaire (dates)** : un dossier-SÉRIE n'est JAMAIS daté à son niveau
+  (il est ouvert) ; une période dans une série = sous-dossier **millésime nu**
+  (`Factures-electricite/2026/`), créé seulement quand il apporte quelque chose ;
+  seule une AFFAIRE ponctuelle est datée directement, date en tête
+  (`2025-08_Degats-eaux-cuisine/`). (Le run 4 avait produit `2026_Releves-eau`
+  avec un millésime faux — l'exemple du prompt grouping enseignait à dater les
+  séries ; corrigé.)
+- **Grammaire des séparateurs** : l'underscore sépare les COMPOSANTS sémantiques
+  d'un nom, le tiret lie les MOTS d'un composant, `__` reste réservé au préfixe
+  horodaté — `Facture_EDF`, `Releve_BNP-Paribas`, `CV_LOUVEL-Simon_Developpeur-web`,
+  dossier `2025-08_Degats-eaux-cuisine-Annoville`. (Corrige la fuite de
+  séparateurs mélangés du run 4.)
+- **`regrouped` au CLI** : non affiché (journal d'actions suffisant pour les
+  regroupements intra-run).
+- **Doublons posés à la main dans la librairie** (futur `rescan`) : détecter par
+  sha256, cataloguer l'exemplaire en réutilisant la fiche de l'original (zéro IA),
+  alerter, ne JAMAIS agir — politique détaillée dans `docs/backlog.md`.
+
 ## Hors périmètre (ne PAS faire ici)
 
 - Check global de la librairie / re-tri de l'existant (futur `reorganize`/`rescan`,
