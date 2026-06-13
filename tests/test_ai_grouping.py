@@ -106,6 +106,13 @@ class TestBuildGroupingPrompt(unittest.TestCase):
         self.assertIn("DATE goes at the START", prompt)
         self.assertIn("NEVER at the end", prompt)
 
+    def test_prompt_says_series_folders_are_never_dated(self) -> None:
+        # Run 4 produced a wrongly dated series folder (2026_Releves-eau holding
+        # 2024/2025 readings) because the example here taught dating series.
+        prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
+        self.assertIn("SERIES folder (recurring kind) is NEVER dated", prompt)
+        self.assertIn("Releves-eau/2026", prompt)  # bare-year subfolder inside the series
+
     def test_prompt_has_high_bar_rule(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
         self.assertIn("HIGH BAR", prompt)

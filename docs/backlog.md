@@ -50,6 +50,15 @@ binary in the taxonomy) is not in the document — it depends on the user's
       untouched); a known file moved/renamed (same sha256) just gets its catalog path
       updated, no AI; a deleted file is flagged. The AI *understands*, it never *decides* —
       the user's location and name always win.
+      **Duplicate policy (decided 2026-06-13):** a hand-placed file whose sha256 already
+      exists in the catalog is a deliberate copy — rescan CATALOGS it anyway (reusing the
+      original's fiche, zero AI call), ALERTS ("duplicate of `<original path>`" in the
+      summary + a `library_duplicate_detected` action-log event), and NEVER acts on it —
+      no deletion, no symlink substitution, no reorganization. The Inbox/library asymmetry
+      is deliberate: an Inbox file is *to be processed* (duplicate → trash), a library file
+      is the user's sovereign choice (duplicate → reported, untouched). Today such a file
+      is simply invisible (sha256 dedup is Inbox-only; the catalog has no unique constraint
+      on sha256, so two rows can share a hash — no migration needed).
 - [ ] **`refile <path>`** (idea, decide on real usage) — the only escape hatch for asking
       the AI to reconsider an ALREADY-FILED file: unpin it from the catalog and re-ingest
       it through the normal Inbox pipeline. Needed because an already-catalogued file
