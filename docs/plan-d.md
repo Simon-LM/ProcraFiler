@@ -303,6 +303,26 @@ règle post-run-4 « millésime créé seulement quand il apporte quelque chose 
   (`override_name` dans `_file_cataloged`). Ne renomme PAS les fichiers déjà classés
   (harmonisation lourde = hors périmètre, toucherait symlinks/catalogue/miroir).
 
+### Affinements post-run 7 (validés 2026-06-14, PR « année déterministe »)
+
+Le run 7 a validé les 4 correctifs du run 6, MAIS révélé que le **sous-dossier
+année disparaissait** dès qu'un dossier-série était créé/confirmé par le grouping
+ou l'organize (le modèle écrivait l'année — et parfois la mauvaise, `2026` pour des
+relevés de 2024/2025). Décision : **l'année passe du modèle au CODE.**
+
+- **L'année est déterministe, dérivée de la date du document.** L'analyse renvoie
+  un booléen `series` + le dossier-**entité sans année** ; les prompts (analyse,
+  organize, grouping) ne proposent QUE l'entité. Le pipeline ajoute `/<AAAA>` une
+  seule fois (`_with_series_year`), après que grouping/organize ont fixé l'entité —
+  année = `document_dt` (date EXIF/contenu, jamais l'horodatage de traitement) pour
+  le nouveau fichier ; `_fiche_year` (catalogue) pour un fichier regroupé. On
+  n'ajoute l'année que s'il y a un dossier-entité **sous une base** (un certif tombé
+  à plat dans `Education` n'est pas daté). `series` est stocké dans la fiche.
+- **`Energy` → `Utilities`** (parapluie élec/gaz/eau ; les relevés d'eau ne sont
+  pas de l'énergie). `Telecom` reste séparé.
+- **CV = série datée** : `series: true`, entité `…/Employment/CV`, le nom de la
+  personne reste dans le FICHIER (`CV_LOUVEL-Simon`) → `…/CV/2026/`.
+
 ## Hors périmètre (ne PAS faire ici)
 
 - Check global de la librairie / re-tri de l'existant (futur `reorganize`/`rescan`,

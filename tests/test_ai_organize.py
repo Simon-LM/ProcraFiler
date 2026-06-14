@@ -105,12 +105,14 @@ class TestOrganizeSet(unittest.TestCase):
         self.assertIn("two base categories", prompt)         # R3 — no cross-base split
         self.assertIn("start of the folder name", prompt)    # R4 — date first
         self.assertIn("hallucinate", prompt)                 # R5 — photos unreliable
-        # A SERIES is filed as <ENTITY>/<YEAR>: an undated entity folder + a
-        # bare-year subfolder; different entities are different series.
-        self.assertIn("filed as <entity>/<year>", prompt)
-        self.assertIn("never dated", prompt)
+        # A SERIES goes in its undated ENTITY folder WITHOUT a year — the system
+        # appends the dated year subfolder itself; different entities are
+        # different series. (The prompt may ILLUSTRATE what the system does
+        # — "you give .../utilities/edf, it files into …/2026" — but the AI is
+        # told to propose only the entity folder.)
+        self.assertIn("the system appends the dated year subfolder itself", prompt)
         self.assertIn("different entities are different series", prompt)
-        self.assertIn("energy/edf/2026", prompt)
+        self.assertIn("utilities/edf", prompt)
 
     def test_prompt_has_no_hypothesis_block_without_a_drop_folder(self) -> None:
         prompt = _build_organize_prompt(DOCS, BASES, [], None)

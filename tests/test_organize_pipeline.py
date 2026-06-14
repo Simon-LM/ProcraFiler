@@ -327,6 +327,63 @@ class TestSingletonGrouping(unittest.TestCase):
         new_files = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
         self.assertEqual(len(new_files), 1)
 
+    def test_series_file_gets_year_subfolder_from_document_date(self) -> None:
+        # A series root singleton: analysis proposes only the ENTITY folder and
+        # series=true; the pipeline appends the YEAR subfolder itself, derived
+        # from the document's OWN date (2019), not the processing time (2026).
+        (self.paths.inbox_dir / "facture.txt").write_bytes(b"Facture Enercoop abonnement avril 2019")
+        analysis = json.dumps({
+            "name": "Facture_Enercoop",
+            "date": "2019-04-25",
+            "category_path": "Personal/Administrative/Utilities/Enercoop",
+            "series": True,
+            "summary": "facture d'electricite",
+        })
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["processed"], 1)
+        year_dir = self.paths.library_root / "Personal" / "Administrative" / "Utilities" / "Enercoop" / "2019"
+        filed = [p for p in year_dir.glob("*") if p.is_file()]
+        self.assertEqual(len(filed), 1, "series file should be filed in its <Entity>/<Year> folder")
+
+    def test_non_series_file_gets_no_year_subfolder(self) -> None:
+        # series=false → the pipeline never appends a year; the file stays in the
+        # folder the AI proposed.
+        (self.paths.inbox_dir / "idees.txt").write_bytes(b"idees de week-end a la campagne")
+        analysis = json.dumps({
+            "name": "Idees-week-end",
+            "date": "2026-05-30",
+            "category_path": "Personal/Hobbies",
+            "series": False,
+            "summary": "notes loisirs",
+        })
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            process_all_inbox_files(self.paths, now_utc=self.now)
+
+        hobbies = self.paths.library_root / "Personal" / "Hobbies"
+        self.assertEqual(len(self._files_under("Personal", "Hobbies")), 1)
+        # No bare-year subfolder was created under Hobbies.
+        self.assertFalse(any(p.is_dir() and p.name.isdigit() for p in hobbies.iterdir()))
+
+    def test_series_at_a_bare_base_is_not_dated(self) -> None:
+        # A series doc the AI under-routes flat into a BASE (no entity folder)
+        # is NOT dated — there is no entity folder to date.
+        (self.paths.inbox_dir / "certif.txt").write_bytes(b"attestation de formation")
+        analysis = json.dumps({
+            "name": "Certificat_Formation",
+            "date": "2023-03-26",
+            "category_path": "Personal/Education",
+            "series": True,
+            "summary": "certificat",
+        })
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            process_all_inbox_files(self.paths, now_utc=self.now)
+
+        education = self.paths.library_root / "Personal" / "Education"
+        self.assertEqual(len(self._files_under("Personal", "Education")), 1)
+        self.assertFalse(any(p.is_dir() and p.name.isdigit() for p in education.iterdir()))
+
     def test_grouping_name_renames_new_file_to_match_series(self) -> None:
         # 3a: a new singleton joins a populated series; grouping DEEPENS the
         # branch into Releves-eau and returns a consistent stem ("Releve_eau")

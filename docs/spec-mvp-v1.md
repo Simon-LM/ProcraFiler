@@ -162,7 +162,7 @@ The base tree is organized by life **context** (Personal / Work), then by **subj
 
 ```text
 Personal/
-    Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Energy  Telecom  Vehicle
+    Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Utilities  Telecom  Vehicle
     Education/
     Hobbies/
 Work/

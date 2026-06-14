@@ -60,6 +60,13 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertEqual(result.keywords, ["banque", "bnp", "relevé"])
         self.assertEqual(result.entities["issuer"], "BNP Paribas")
         self.assertEqual(result.language, "fr")
+        self.assertFalse(result.series)  # absent in JSON → defaults False
+
+    def test_series_flag_parsed_when_true(self) -> None:
+        chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=_full(series=True)):
+            result = _analyze("Relevé BNP", chain=chain, retries=0)
+        self.assertTrue(result.series)
 
     def test_name_from_content_not_filename(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-small-latest")]
@@ -151,16 +158,17 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("hyphens join the words WITHIN", prompt)
         self.assertIn("Releve_BNP-Paribas", prompt)
 
-    def test_prompt_series_uses_entity_year_structure(self) -> None:
-        # A series is filed as <ENTITY>/<YEAR>: an undated entity folder
-        # (issuer/organism, or the kind when there is no issuer) + a bare-YEAR
-        # subfolder. Two DIFFERENT entities are DIFFERENT series → different
-        # folders (run 6: an Enercoop bill wrongly landed inside Energy/EDF).
+    def test_prompt_series_proposes_entity_folder_without_year(self) -> None:
+        # A series sets "series": true and proposes only the ENTITY folder
+        # (issuer/organism, or the kind when there is no issuer) WITHOUT a year —
+        # the system appends the dated year subfolder itself (run 7: the model
+        # dropped/guessed the year; the code now owns it). Different entities are
+        # different series → different folders.
         prompt = _build_analysis_prompt("contenu", BASES, [])
-        self.assertIn("<ENTITY>/<YEAR>", prompt)
-        self.assertIn("Energy/EDF/2026", prompt)
-        self.assertIn("bare-YEAR subfolder", prompt)
-        self.assertIn("ENTITY (series) folder is NEVER dated", prompt)
+        self.assertIn('"series": true', prompt)
+        self.assertIn("the system appends the dated year subfolder itself", prompt)
+        self.assertIn("Utilities/EDF", prompt)
+        self.assertNotIn("Utilities/EDF/2026", prompt)  # no year written by the AI
         self.assertIn("DIFFERENT entities are DIFFERENT series", prompt)
 
     def test_prompt_carries_filename_and_folder_as_hints(self) -> None:

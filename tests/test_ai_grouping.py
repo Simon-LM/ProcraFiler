@@ -123,7 +123,10 @@ class TestBuildGroupingPrompt(unittest.TestCase):
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
         self.assertIn("SERIES subfolder is named after its ENTITY", prompt)
         self.assertIn("is NEVER dated", prompt)
-        self.assertIn("Releves-eau/2026", prompt)  # bare-year subfolder inside the series
+        # The AI proposes the entity folder WITHOUT a year; the system dates it.
+        self.assertIn("the system appends the dated year subfolder itself", prompt)
+        self.assertIn("Releves-eau/2024", prompt)
+        self.assertNotIn("Releves-eau/2026", prompt)
 
     def test_prompt_forbids_grouping_across_entities(self) -> None:
         # Run 6: an Enercoop bill was pulled into Energy/EDF. Different issuers
