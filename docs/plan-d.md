@@ -277,6 +277,32 @@ zéro symlink, G3 visible en action). Trois finitions décidées :
   sha256, cataloguer l'exemplaire en réutilisant la fiche de l'original (zéro IA),
   alerter, ne JAMAIS agir — politique détaillée dans `docs/backlog.md`.
 
+### Affinements post-run 6 (validés 2026-06-14)
+
+Le run 6 a validé l'ancrage Personnel/Travail sur le fichier contexte (PR #43).
+Quatre finitions décidées (PR « série = `<Entité>/<Année>/` »), **supersèdent** la
+règle post-run-4 « millésime créé seulement quand il apporte quelque chose » :
+
+- **Série = `<Entité>/<Année>/`** : un genre récurrent va dans un dossier nommé
+  d'après son **entité** (émetteur/organisme — `Energy/EDF`, `Energy/Enercoop`,
+  `Banking/BNP-Paribas` — ou le genre à défaut d'émetteur — `Housing/Releves-eau`),
+  jamais daté, puis un sous-dossier **millésime nu** pour l'année du document
+  (`Energy/EDF/2026`), **toujours**, même pour une seule occurrence. Deux entités
+  différentes = deux séries différentes, **jamais** le même dossier (le run 6 avait
+  mis une facture Enercoop dans `Energy/EDF` ; le prompt grouping interdit désormais
+  de regrouper entre émetteurs). Règle portée dans les 3 prompts (analyse, organize,
+  grouping). Règle aussi la question CV (`…/CV/2026`).
+- **Pas de date dans le stem** : `naming.sanitize_filename_stem` retire de façon
+  déterministe une date **mois** (`YYYY-MM`/`YYYY-MM-DD`) en TÊTE du stem (le préfixe
+  horodaté la porte déjà) ; une année nue est gardée (identité possible,
+  `Recensement-population_2026`). La règle de prompt « pas de date dans le nom » reste.
+- **Noms de relevés cohérents** : few-shot `relevé de compteur → Releve_<ressource>`
+  (`Releve_eau`, `Releve_electricite`) — deux relevés de la même ressource = même nom.
+- **3a léger** : quand le grouping place le nouveau fichier dans une série déjà
+  peuplée, il peut renvoyer un `name` pour aligner son stem sur ses voisins
+  (`override_name` dans `_file_cataloged`). Ne renomme PAS les fichiers déjà classés
+  (harmonisation lourde = hors périmètre, toucherait symlinks/catalogue/miroir).
+
 ## Hors périmètre (ne PAS faire ici)
 
 - Check global de la librairie / re-tri de l'existant (futur `reorganize`/`rescan`,
