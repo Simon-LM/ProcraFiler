@@ -137,6 +137,10 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("CV_LOUVEL-Simon", prompt)
         self.assertIn("Facture_<issuer>", prompt)
         self.assertIn("Releve_<bank>", prompt)
+        # Meter readings get one canonical structure so two readings of the same
+        # resource get the SAME name (run 6: Releve_Compteur-eau vs Releve_eau_Compteur).
+        self.assertIn("Releve_<resource>", prompt)
+        self.assertIn("Releve_eau", prompt)
         self.assertIn("do NOT put a DATE in the name", prompt)
 
     def test_prompt_has_separator_grammar(self) -> None:
@@ -147,14 +151,17 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("hyphens join the words WITHIN", prompt)
         self.assertIn("Releve_BNP-Paribas", prompt)
 
-    def test_prompt_says_series_folders_are_never_dated(self) -> None:
-        # Series folders are open-ended → never dated at their own level; a
-        # period inside a series is a bare-YEAR subfolder; only one-off affair
-        # folders carry a date, at the START of the name.
+    def test_prompt_series_uses_entity_year_structure(self) -> None:
+        # A series is filed as <ENTITY>/<YEAR>: an undated entity folder
+        # (issuer/organism, or the kind when there is no issuer) + a bare-YEAR
+        # subfolder. Two DIFFERENT entities are DIFFERENT series → different
+        # folders (run 6: an Enercoop bill wrongly landed inside Energy/EDF).
         prompt = _build_analysis_prompt("contenu", BASES, [])
-        self.assertIn("SERIES folder is NEVER dated", prompt)
+        self.assertIn("<ENTITY>/<YEAR>", prompt)
+        self.assertIn("Energy/EDF/2026", prompt)
         self.assertIn("bare-YEAR subfolder", prompt)
-        self.assertIn("Factures-electricite/2026", prompt)
+        self.assertIn("ENTITY (series) folder is NEVER dated", prompt)
+        self.assertIn("DIFFERENT entities are DIFFERENT series", prompt)
 
     def test_prompt_carries_filename_and_folder_as_hints(self) -> None:
         prompt = _build_analysis_prompt("x", BASES, [], original_filename="CV_Simon-LOUVEL.odt", source_folder="Dégats_eaux")

@@ -327,6 +327,36 @@ class TestSingletonGrouping(unittest.TestCase):
         new_files = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
         self.assertEqual(len(new_files), 1)
 
+    def test_grouping_name_renames_new_file_to_match_series(self) -> None:
+        # 3a: a new singleton joins a populated series; grouping DEEPENS the
+        # branch into Releves-eau and returns a consistent stem ("Releve_eau")
+        # so the new file is named like its siblings instead of keeping its own
+        # analysis name ("Releve-compteur").
+        housing = "Personal/Administrative/Housing"
+        series_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing" / "Releves-eau"
+        series_dir.mkdir(parents=True, exist_ok=True)
+        (series_dir / "2026-01-01__Releve_eau.txt").write_bytes(b"an existing reading")
+
+        (self.paths.inbox_dir / "nouveau.txt").write_bytes(b"Releve compteur eau mars 2026")
+        # Analysis routes to the parent Housing; grouping deepens into Releves-eau.
+        analysis_raw = json.dumps(
+            {"name": "Releve-compteur", "category_path": housing, "summary": "compteur"}
+        )
+        grouping_raw = json.dumps(
+            {"path": f"{housing}/Releves-eau", "group_with": [], "name": "Releve_eau"}
+        )
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["processed"], 1)
+        real_files = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
+        self.assertEqual(len(real_files), 2)
+        # The NEW file carries the series-consistent stem, not its analysis name.
+        new_file = next(p for p in real_files if p.name != "2026-01-01__Releve_eau.txt")
+        self.assertIn("Releve_eau", new_file.name)
+        self.assertNotIn("Releve-compteur", new_file.name)
+
     def test_same_run_regroup_leaves_no_symlink(self) -> None:
         # G5 + G2: two compteurs dropped as root singletons in the SAME run, on
         # an empty library. The first is filed bare in Housing; the second's

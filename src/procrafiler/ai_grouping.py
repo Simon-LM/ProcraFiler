@@ -48,12 +48,15 @@ class GroupingResult:
     `path` is the confirmed or proposed common destination (raw, caller
     validates against the taxonomy). `group_with` names existing files that
     should be moved to that destination too (empty = new file only, no
-    existing file to regroup). `used_fallback` is True when no AI call was
-    made or the call failed — `path` is then None and `group_with` is empty.
+    existing file to regroup). `name` is an optional consistent stem for the
+    NEW file when it joins a populated series (so siblings match); None to keep
+    the analysis name. `used_fallback` is True when no AI call was made or the
+    call failed — `path` is then None and `group_with`/`name` are empty.
     """
 
     path: str | None
     group_with: list[str]
+    name: str | None
     provider: str
     model: str
     raw_output: str
@@ -65,6 +68,7 @@ def _empty_grouping_result(*, provider: str, model: str, reason: str) -> Groupin
     return GroupingResult(
         path=None,
         group_with=[],
+        name=None,
         provider=provider,
         model=model,
         raw_output="",
@@ -103,7 +107,7 @@ def _build_grouping_prompt(
     return (
         "You are filing ONE new document into a library. Decide whether it reveals a SERIES or "
         "AFFAIR that deserves a shared subfolder. "
-        "Return JSON only: {\"path\": \"...\"|null, \"group_with\": [\"...\"]}\n\n"
+        "Return JSON only: {\"path\": \"...\"|null, \"group_with\": [\"...\"], \"name\": \"...\"|null}\n\n"
         "New document:\n"
         f"  name: {name}{origin_part} | summary: {summary}\n\n"
         "Candidate destination branches (branch folder → existing files inside, as paths relative "
@@ -121,10 +125,20 @@ def _build_grouping_prompt(
         "alone, do NOT list it.\n"
         "- HIGH BAR: only group what is OBVIOUS (same recurring series, same affair). When in "
         "doubt, confirm the original path and leave \"group_with\" empty.\n"
-        "- A SERIES folder (recurring kind) is NEVER dated — it is open-ended (e.g. "
-        "\".../Housing/Releves-eau\"); a period inside a series is a bare-YEAR subfolder (e.g. "
-        "\"Releves-eau/2026\"). Only a one-off AFFAIR folder is dated, and its DATE goes at the "
-        "START of the folder name (e.g. \".../Housing/2025-08_Degats-eaux\"), NEVER at the end.\n"
+        "- A SERIES subfolder is named after its ENTITY (issuer/organism — EDF, Enercoop, "
+        "BNP-Paribas — or the kind when there is no issuer — Releves-eau) and is NEVER dated; the "
+        "period is a bare-YEAR subfolder INSIDE it (e.g. \"Energy/EDF/2026\", \"Releves-eau/2026\"). "
+        "Only a one-off AFFAIR folder is dated, its DATE at the START (e.g. "
+        "\".../Housing/2025-08_Degats-eaux\"), NEVER at the end.\n"
+        "- DIFFERENT entities are DIFFERENT series: NEVER group documents from different issuers "
+        "together (an EDF bill and an Enercoop bill do NOT share a folder, even though both are "
+        "electricity bills). Only group an existing file that shares the SAME entity AND the SAME "
+        "year as the new document.\n"
+        "- \"name\": ONLY when you place the new document into a series subfolder that ALREADY "
+        "contains files of the SAME kind — rewrite the new document's name to follow the SAME "
+        "structure as those existing files (same components, same order, e.g. all \"Releve_eau\"), "
+        "so siblings are named consistently. Give just the descriptive stem (no date, no extension). "
+        "Otherwise set it to null.\n"
         "- Existing file names were produced by an AI — treat them as CLUES, not absolute truth.\n"
         "- \"path\" null means: keep the originally proposed destination unchanged.\n"
         "- Do not add other keys or commentary."
@@ -143,9 +157,12 @@ def _extract_grouping_result(raw_output: str, *, provider: str, model: str) -> G
         for item in group_with_raw:
             if isinstance(item, str) and item.strip():
                 group_with.append(item.strip())
+    name_raw = payload.get("name")
+    name: str | None = name_raw.strip() if isinstance(name_raw, str) and name_raw.strip() else None
     return GroupingResult(
         path=path,
         group_with=group_with,
+        name=name,
         provider=provider,
         model=model,
         raw_output=raw_output,
