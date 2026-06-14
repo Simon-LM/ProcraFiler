@@ -47,9 +47,13 @@ binary in the taxonomy) is not in the document — it depends on the user's
 - [ ] **`rescan`** — the pure-secretary sync, AUTOMATIC before every run (and standalone):
       a file the user placed by hand in the library is READ IN FULL (complete fiche into
       the catalog, for future search) and gets the timestamp prefix (the user's stem is
-      untouched); a known file moved/renamed (same sha256) just gets its catalog path
-      updated, no AI; a deleted file is flagged. The AI *understands*, it never *decides* —
-      the user's location and name always win.
+      untouched). It tracks every file by its content fingerprint (sha256), so ANY hand
+      reorganization is followed without AI: a file renamed or moved, or a whole FOLDER
+      renamed or moved (every file inside keeps its sha256), just has its catalog path/name
+      updated — no re-reading, no re-classification, no re-naming. A deleted file is flagged.
+      This is the supported way to fix an awkward auto-named folder (e.g. rename `CV_LM` →
+      `CV` and rescan follows). The AI *understands*, it never *decides* — the user's
+      location and name always win.
       **Duplicate policy (decided 2026-06-13):** a hand-placed file whose sha256 already
       exists in the catalog is a deliberate copy — rescan CATALOGS it anyway (reusing the
       original's fiche, zero AI call), ALERTS ("duplicate of `<original path>`" in the

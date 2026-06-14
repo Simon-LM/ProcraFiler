@@ -118,6 +118,9 @@ class TestOrganizeSet(unittest.TestCase):
         prompt = _build_organize_prompt(DOCS, BASES, [], "Degats_eaux", user_context="Musique = loisir")
         self.assertIn("Musique = loisir", prompt)
         self.assertIn("Context about the user", prompt)
+        # Generalist rule: the organizer must use the declared context as its
+        # reference for classification (not a narrow hobby/pro check).
+        self.assertIn("DECLARED here as your reference", prompt)
 
     def test_prompt_has_no_user_context_block_by_default(self) -> None:
         self.assertNotIn("Context about the user", _build_organize_prompt(DOCS, BASES, [], "Degats_eaux"))

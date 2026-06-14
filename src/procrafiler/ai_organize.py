@@ -116,8 +116,9 @@ def _build_organize_prompt(
     # e.g. tell a hobby from professional. Never overrides the documents' content.
     if user_context:
         context_block = (
-            "Context about the user (to disambiguate — e.g. tell a hobby from professional; the "
-            "documents' content still rules):\n"
+            "Context about the user — use what they DECLARED here as your reference when deciding "
+            "where these documents belong (which subjects are personal vs professional in their "
+            "life, who they are); the documents' content still rules:\n"
             f"{user_context}\n\n"
         )
     else:
