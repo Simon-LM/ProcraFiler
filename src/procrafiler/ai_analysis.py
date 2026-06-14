@@ -99,12 +99,14 @@ def _build_analysis_prompt(
     context_block = ""
     if user_context:
         context_block = (
-            "\nAbout the user (context to disambiguate — e.g. tell a hobby from professional, or "
-            "anchor a person's identity; the document content still rules):\n"
+            "\nAbout the user — use the facts DECLARED here to disambiguate (which subjects are the "
+            "user's hobbies vs their job, who the person is); the document's content still decides "
+            "WHAT it is:\n"
             f"{user_context}\n"
-            "When the document relates to the user's declared PROFESSION or business (a practice, "
-            "training, tool, or event of that trade), prefer Work over Personal; the declared "
-            "hobbies stay Personal.\n"
+            "For the Personal-vs-Work axis, go by the user's RELATIONSHIP to the document as declared "
+            "above, not by how professional the content looks: if it concerns one of the user's stated "
+            "HOBBIES it is Personal — even when the equipment, skill, or venue is professional-grade; "
+            "only a document of the user's stated JOB or business leans Work.\n"
         )
     # The original filename and the folder the user dropped it in are HINTS, not
     # ground truth: the content stays authoritative, but these help when the

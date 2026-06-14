@@ -169,10 +169,14 @@ class TestAnalyzeContent(unittest.TestCase):
         prompt = _build_analysis_prompt("x", BASES, [], user_context="La musique est un loisir")
         self.assertIn("La musique est un loisir", prompt)
         self.assertIn("About the user", prompt)
-        # Profession weighting: documents of the user's declared trade lean Work
-        # (run 3: a professional co-development workshop went to Hobbies).
-        self.assertIn("PROFESSION", prompt)
-        self.assertIn("prefer Work", prompt)
+        # The Personal/Work decision is anchored to what the context DECLARES
+        # (generalist: the context is the reference), and resolved by the user's
+        # RELATIONSHIP — a declared hobby stays Personal even when pro-grade,
+        # only the stated job leans Work (run 5 over-corrected hobby gear → Work).
+        self.assertIn("DECLARED here", prompt)
+        self.assertIn("RELATIONSHIP", prompt)
+        self.assertIn("stated HOBBIES", prompt)
+        self.assertIn("leans Work", prompt)
 
     def test_prompt_has_no_user_context_block_by_default(self) -> None:
         self.assertNotIn("About the user", _build_analysis_prompt("x", BASES, []))
