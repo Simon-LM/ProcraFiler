@@ -18,8 +18,17 @@ def _slugify_stem(stem: str) -> str:
     return normalized or "file"
 
 
+def _strip_leading_date(stem: str) -> str:
+    """Drop a redundant date that LEADS the stem — the timestamp prefix already
+    carries the date. Only a month-precision date (YYYY-MM or YYYY-MM-DD) is
+    removed; a bare year (YYYY) can be part of the identity (e.g.
+    Recensement-population_2026), so it is kept."""
+    stripped = re.sub(r"^\d{4}-\d{2}(?:-\d{2})?[-_]+", "", stem)
+    return stripped or stem
+
+
 def sanitize_filename_stem(stem: str) -> str:
-    return _slugify_stem(stem)
+    return _strip_leading_date(_slugify_stem(stem))
 
 
 def build_timestamped_filename(original_name: str, now_utc: datetime | None = None) -> str:
@@ -35,5 +44,7 @@ def build_timestamped_filename(original_name: str, now_utc: datetime | None = No
 
     path = Path(original_name)
     timestamp = dt.strftime("%Y-%m-%d_%H-%M-%S")
-    safe_stem = _slugify_stem(path.stem)
+    # Route through sanitize_filename_stem so a redundant leading date is stripped
+    # uniformly (the timestamp prefix below already carries the date).
+    safe_stem = sanitize_filename_stem(path.stem)
     return f"{timestamp}__{safe_stem}{path.suffix}"
