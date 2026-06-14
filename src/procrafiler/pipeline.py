@@ -32,6 +32,7 @@ from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[repor
 from procrafiler.naming import build_timestamped_filename, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
+    base_category_for,
     category_label,
     classifiable_categories,
     dispatch_for_filename,
@@ -196,6 +197,49 @@ def _resolve_document_date(
     except OSError:
         pass
     return now_utc or datetime.now(timezone.utc)
+
+
+_YEAR_RE = re.compile(r"^\d{4}$")
+
+
+def _with_series_year(
+    route_dir: tuple[str, ...], *, series: bool, year: str | None
+) -> tuple[str, ...]:
+    """Append a bare-YEAR subfolder to a SERIES document's ENTITY folder.
+
+    The year is owned by the CODE (derived from the document's own date), not by
+    the AI: the prompts propose only the entity folder. No-op when the document
+    is not a series, when `route_dir` is at or above a base (no entity folder to
+    date — e.g. a cert filed flat in `Education`), when the last segment is
+    already a year, or when no usable year is available.
+    """
+    if not series or not year or not _YEAR_RE.match(year):
+        return route_dir
+    base = base_category_for(route_dir)
+    if base is None or len(route_dir) <= len(base):
+        return route_dir
+    if _YEAR_RE.match(route_dir[-1]):
+        return route_dir
+    return route_dir + (year,)
+
+
+def _fiche_year(content_json: Any) -> str | None:
+    """Extract a 4-digit year from a stored fiche — the document's own date
+    (document_date, else the resolved effective_date). Used to date an EXISTING
+    file when a regroup moves it into a series folder."""
+    if not content_json:
+        return None
+    try:
+        fiche = json.loads(content_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(fiche, dict):
+        return None
+    for key in ("document_date", "effective_date"):
+        value = fiche.get(key)
+        if isinstance(value, str) and _YEAR_RE.match(value[:4]):
+            return value[:4]
+    return None
 
 
 def _ensure_unique_path(target: Path) -> Path:
@@ -792,11 +836,6 @@ def _file_cataloged(
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
 
-    target_dir = paths.library_root / Path(*route_dir)
-    if not target_dir.exists():
-        emit(f"   created folder: {'/'.join(route_dir)}")
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     if override_name:
         stem = sanitize_filename_stem(override_name)
     elif analysis is not None and analysis.name:
@@ -804,9 +843,20 @@ def _file_cataloged(
     else:
         stem = sanitize_filename_stem(Path(queued_target.name).stem)
     document_date = analysis.document_date if analysis is not None else None
+    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=catdoc.dispatch.media_type)
+
+    # SERIES year subfolder, derived deterministically from the document's own
+    # date (document_dt — EXIF/content date, never the processing timestamp).
+    # The AI proposes only the ENTITY folder; the year is owned by the code.
+    series = bool(analysis.series) if analysis is not None else False
+    route_dir = _with_series_year(route_dir, series=series, year=document_dt.strftime("%Y"))
+
+    target_dir = paths.library_root / Path(*route_dir)
+    if not target_dir.exists():
+        emit(f"   created folder: {'/'.join(route_dir)}")
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     candidate_name = f"{stem}{queued_target.suffix}"
-    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=catdoc.dispatch.media_type)
     final_name = build_timestamped_filename(candidate_name, now_utc=document_dt)
     library_target = _ensure_unique_path(target_dir / final_name)
     move(str(queued_target), str(library_target))
@@ -818,6 +868,7 @@ def _file_cataloged(
     fiche: dict[str, Any] = {
         "name": stem if override_name else (analysis.name if analysis is not None else None),
         "document_date": document_date,
+        "series": series,
         "category_path": "/".join(route_dir) if is_routed else None,
         "alternatives": pending_options or (analysis.alternatives if analysis is not None else []),
         "summary": analysis.summary if analysis is not None else None,
@@ -1651,6 +1702,7 @@ def _regroup_existing_file(
     emit: ProgressFn,
     run_placed: set[str],
     run_symlinks: dict[str, Path],
+    series_year: bool = False,
 ) -> bool:
     """Move an existing LIBRARY_STORED file DEEPER into `dest_dir`, update the
     catalog and mirror copy, and leave a relative symlink at its old location.
@@ -1708,6 +1760,18 @@ def _regroup_existing_file(
     if record.get("status") != "LIBRARY_STORED":
         emit(f"   ⚠ regroup: {existing_ref!r} status={record.get('status')} ≠ LIBRARY_STORED — skipping")
         return False
+
+    # When the destination is a SERIES folder, the moved file lands in its OWN
+    # dated year subfolder (from its catalog date) — same deterministic rule as
+    # a freshly filed series document. A file already in its year folder then
+    # fails the deepen-only guard below and stays put (correct).
+    if series_year:
+        dest_route = _with_series_year(
+            dest_dir.relative_to(paths.library_root).parts,
+            series=True,
+            year=_fiche_year(record.get("content_json")),
+        )
+        dest_dir = paths.library_root / Path(*dest_route)
 
     try:
         depth_gain = dest_dir.relative_to(existing_path.parent)
@@ -2099,6 +2163,7 @@ def process_all_inbox_files(
                                         emit=emit,
                                         run_placed=run_placed,
                                         run_symlinks=run_symlinks,
+                                        series_year=bool(catdoc.analysis.series),
                                     )
                                     if ok:
                                         summary["regrouped"] += 1

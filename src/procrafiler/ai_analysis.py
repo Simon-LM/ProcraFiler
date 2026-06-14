@@ -53,6 +53,7 @@ class AnalysisResult:
     name: str | None
     document_date: str | None
     category_path: str | None
+    series: bool
     alternatives: list[str]
     summary: str | None
     keywords: list[str]
@@ -70,6 +71,7 @@ def _empty_result(*, provider: str, model: str, reason: str, raw_output: str = "
         name=None,
         document_date=None,
         category_path=None,
+        series=False,
         alternatives=[],
         summary=None,
         keywords=[],
@@ -123,15 +125,16 @@ def _build_analysis_prompt(
     return (
         "Read this document and file it. Return JSON only, with this exact schema:\n"
         "{\"name\": \"...\", \"date\": \"YYYY-MM-DD\"|null, \"category_path\": \"...\"|null, "
-        "\"alternatives\": [\"...\"], \"summary\": \"...\", \"keywords\": [\"...\"], "
-        "\"entities\": {}, \"language\": \"fr\"}.\n\n"
+        "\"series\": true|false, \"alternatives\": [\"...\"], \"summary\": \"...\", "
+        "\"keywords\": [\"...\"], \"entities\": {}, \"language\": \"fr\"}.\n\n"
         "Fields:\n"
         "- \"name\": a short, specific French title (no extension) identifying THIS exact document, "
         "named CONSISTENTLY so two documents of the SAME kind get the SAME structure. Lead with its "
         "most distinctive entity — the person, organization, or subject — then the key detail. Follow "
         "these patterns for common kinds, and keep the same spirit for others:\n"
         "    - CV/resume -> \"CV_<NOM>-<Prenom>\" — underscore after CV, family NAME in UPPERCASE "
-        "(+ \"_<target role>\" if stated), e.g. CV_LOUVEL-Simon_Developpeur-web\n"
+        "(+ \"_<target role>\" if stated), e.g. CV_LOUVEL-Simon_Developpeur-web (a CV is a SERIES: "
+        "set \"series\": true, category_path the kind folder \".../Employment/CV\")\n"
         "    - facture/bill -> \"Facture_<issuer>\" (+ object only if it adds information), e.g. Facture_EDF "
         "(NOT Facture_EDF-electricite: the issuer already implies it)\n"
         "    - bank statement -> \"Releve_<bank>\", e.g. Releve_BNP-Paribas\n"
@@ -156,19 +159,19 @@ def _build_analysis_prompt(
         "Only create a new subfolder (under a base) when none fits. If confident about the base but "
         "unsure about subfolders, return just the base. If you truly cannot tell, set it to null.\n"
         "  SERIES RULE: if the document is of an obviously RECURRING kind (meter reading, bank "
-        "statement, payslip, bill, tax notice, insurance policy…), file it as <ENTITY>/<YEAR>: a "
-        "series subfolder named after the document's ENTITY — its issuer/organism (e.g. EDF, "
-        "Enercoop, BNP-Paribas), or the kind itself when there is no issuer (e.g. Releves-eau) — "
-        "then a bare-YEAR subfolder for the document's year. ALWAYS add the year, even for a single "
-        "instance. Examples: \".../Energy/EDF/2026\", \".../Banking/BNP-Paribas/2025\", "
-        "\".../Housing/Releves-eau/2024\". Documents from DIFFERENT entities are DIFFERENT series "
-        "and go to DIFFERENT folders (an EDF bill and an Enercoop bill NEVER share a folder, even "
-        "though both are electricity bills). REUSE an existing <ENTITY>/<YEAR> path from the tree "
-        "below when one already fits.\n"
-        "  DATES IN FOLDER NAMES: the ENTITY (series) folder is NEVER dated — only its YEAR "
-        "subfolder carries the period, as a bare year (e.g. 2026), never a fuller date. The ONLY "
-        "place a full date appears is a one-off AFFAIR/event folder, at the START of its name (e.g. "
-        "\".../Housing/2025-08_Degats-eaux-cuisine\"), never at the end.\n"
+        "statement, payslip, bill, tax notice, insurance policy, CV…), set \"series\": true and make "
+        "category_path the document's ENTITY folder — its issuer/organism (e.g. .../Utilities/EDF, "
+        ".../Utilities/Enercoop, .../Banking/BNP-Paribas) or, when there is no issuer, the kind "
+        "itself (e.g. .../Utilities/Releves-eau, .../Employment/CV). Do NOT add a year — the system "
+        "appends the dated year subfolder itself from the document's date. Documents from DIFFERENT "
+        "entities are DIFFERENT series and go to DIFFERENT folders (an EDF bill and an Enercoop bill "
+        "NEVER share a folder, even though both are electricity bills). REUSE an existing entity "
+        "folder from the tree below when one already fits.\n"
+        "  NON-SERIES (\"series\": false): everything else. A one-off AFFAIR/event keeps its date in "
+        "the FOLDER name, at the START (e.g. \".../Housing/2025-08_Degats-eaux-cuisine\"), never at "
+        "the end. NEVER put a year in a category_path yourself — for a series the system adds it; "
+        "elsewhere it does not belong.\n"
+        "- \"series\": true only for an obviously recurring kind (see SERIES RULE); false otherwise.\n"
         "- \"alternatives\": up to 3 other plausible category paths (each under a base). Always provide "
         "some when category_path is null or you are unsure.\n"
         "- \"summary\": 1-2 sentences in French on what the document is and its key point.\n"
@@ -287,6 +290,7 @@ def analyze_content(
                     name=_clean_stem(payload.get("name")),
                     document_date=_extract_document_date(payload),
                     category_path=_clean_path(payload.get("category_path")),
+                    series=bool(payload.get("series")),
                     alternatives=_clean_path_list(payload.get("alternatives")),
                     summary=_clean_str(payload.get("summary")),
                     keywords=_clean_keyword_list(payload.get("keywords")),
