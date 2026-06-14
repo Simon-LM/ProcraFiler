@@ -32,7 +32,7 @@ class TestConfigLayout(unittest.TestCase):
 
             self.assertTrue((paths.library_root / "Personal" / "Administrative").exists())
             self.assertTrue((paths.library_root / "Personal" / "Administrative" / "Taxes").exists())
-            self.assertTrue((paths.library_root / "Personal" / "Administrative" / "Energy").exists())
+            self.assertTrue((paths.library_root / "Personal" / "Administrative" / "Utilities").exists())
             self.assertTrue((paths.library_root / "Personal" / "Hobbies").exists())
             self.assertTrue((paths.library_root / "Work" / "Employment" / "Payslips").exists())
             self.assertTrue((paths.library_root / "Work" / "Business" / "Clients").exists())

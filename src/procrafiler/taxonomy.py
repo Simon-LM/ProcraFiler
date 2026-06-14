@@ -21,7 +21,7 @@ BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Personal", "Administrative", "Insurance"),
     ("Personal", "Administrative", "Health"),
     ("Personal", "Administrative", "Housing"),
-    ("Personal", "Administrative", "Energy"),
+    ("Personal", "Administrative", "Utilities"),
     ("Personal", "Administrative", "Telecom"),
     ("Personal", "Administrative", "Vehicle"),
     ("Personal", "Education"),
@@ -153,6 +153,16 @@ def category_from_label(label: str) -> tuple[str, ...] | None:
     for relative_dir in classifiable_categories():
         if category_label(relative_dir) == label:
             return relative_dir
+    return None
+
+
+def base_category_for(relative_dir: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Return the LONGEST base category that is a prefix of `relative_dir`, or
+    None when it sits under no base (e.g. Manual_Review). Lets a caller tell an
+    ENTITY/affair subfolder (deeper than its base) from a bare base."""
+    for base in sorted(classifiable_categories(), key=len, reverse=True):
+        if tuple(relative_dir[: len(base)]) == base:
+            return base
     return None
 
 
