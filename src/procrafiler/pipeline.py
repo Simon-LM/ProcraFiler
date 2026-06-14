@@ -780,9 +780,12 @@ def _file_cataloged(
     now_utc: datetime | None,
     features: dict[str, bool],
     emit: ProgressFn,
+    override_name: str | None = None,
 ) -> ProcessResult:
     """Name, date, move the file into `route_dir`, persist its fiche, and mirror.
-    The route was decided by the caller (per-file or set-aware organize)."""
+    The route was decided by the caller (per-file or set-aware organize).
+    `override_name`, when given, replaces the analysis name as the file's stem —
+    used when grouping aligns a new file to the series it joins (3a)."""
     analysis = catdoc.analysis
     queued_target = catdoc.queued_target
     source = catdoc.source
@@ -794,7 +797,9 @@ def _file_cataloged(
         emit(f"   created folder: {'/'.join(route_dir)}")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    if analysis is not None and analysis.name:
+    if override_name:
+        stem = sanitize_filename_stem(override_name)
+    elif analysis is not None and analysis.name:
         stem = analysis.name
     else:
         stem = sanitize_filename_stem(Path(queued_target.name).stem)
@@ -811,7 +816,7 @@ def _file_cataloged(
     now_iso = _utc_iso(now_utc)
     is_routed = tuple(route_dir) != tuple(INTERIM_LIBRARY_DIR)
     fiche: dict[str, Any] = {
-        "name": analysis.name if analysis is not None else None,
+        "name": stem if override_name else (analysis.name if analysis is not None else None),
         "document_date": document_date,
         "category_path": "/".join(route_dir) if is_routed else None,
         "alternatives": pending_options or (analysis.alternatives if analysis is not None else []),
@@ -2042,6 +2047,9 @@ def process_all_inbox_files(
                 route_dir, pending_options, pending_reason = _route_from_analysis(
                     paths, catdoc, organized_path=organized_path, now_utc=now_utc, features=features, emit=emit
                 )
+                # 3a — set when grouping aligns this new file's name to the
+                # populated series it joins (so siblings match); None otherwise.
+                regroup_name: str | None = None
 
                 # M2+M3 — singleton-only grouping: show the AI the existing files
                 # along the candidate branches; it may confirm, or propose a DEEPER
@@ -2076,6 +2084,8 @@ def process_all_inbox_files(
                             if validated_gp is not None and deepens:
                                 route_dir = validated_gp
                                 dest_dir = paths.library_root / Path(*validated_gp)
+                                if grouping.name:
+                                    regroup_name = grouping.name
                                 for existing_ref in grouping.group_with:
                                     ok = _regroup_existing_file(
                                         paths,
@@ -2107,6 +2117,7 @@ def process_all_inbox_files(
                     now_utc=now_utc,
                     features=features,
                     emit=emit,
+                    override_name=regroup_name,
                 )
             except Exception as exc:  # noqa: BLE001
                 _record_error(exc)

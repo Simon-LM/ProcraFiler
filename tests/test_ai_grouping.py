@@ -55,7 +55,18 @@ class TestProposeGrouping(unittest.TestCase):
         self.assertFalse(result.used_fallback)
         self.assertEqual(result.path, "Personal/Administrative/Housing/Releves-eau")
         self.assertEqual(result.group_with, ["2026-01-15__Releve-eau-jan.pdf"])
+        self.assertIsNone(result.name)  # absent in JSON → keep the analysis name
         self.assertEqual(result.provider, "mistral")
+
+    def test_name_is_parsed_when_present(self) -> None:
+        # 3a: the model returns a consistent stem for the new file joining a series.
+        chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
+        raw = json.dumps(
+            {"path": "Personal/Administrative/Housing/Releves-eau", "group_with": [], "name": "Releve_eau"}
+        )
+        with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=raw):
+            result = propose_grouping(DOC, BRANCHES_ONE, chain=chain, retries=0)
+        self.assertEqual(result.name, "Releve_eau")
 
     def test_null_path_with_empty_group_with(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
@@ -103,15 +114,30 @@ class TestBuildGroupingPrompt(unittest.TestCase):
 
     def test_prompt_enforces_date_at_start_rule(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
-        self.assertIn("DATE goes at the START", prompt)
+        self.assertIn("DATE at the START", prompt)
         self.assertIn("NEVER at the end", prompt)
 
     def test_prompt_says_series_folders_are_never_dated(self) -> None:
         # Run 4 produced a wrongly dated series folder (2026_Releves-eau holding
         # 2024/2025 readings) because the example here taught dating series.
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
-        self.assertIn("SERIES folder (recurring kind) is NEVER dated", prompt)
+        self.assertIn("SERIES subfolder is named after its ENTITY", prompt)
+        self.assertIn("is NEVER dated", prompt)
         self.assertIn("Releves-eau/2026", prompt)  # bare-year subfolder inside the series
+
+    def test_prompt_forbids_grouping_across_entities(self) -> None:
+        # Run 6: an Enercoop bill was pulled into Energy/EDF. Different issuers
+        # are different series and must never share a folder.
+        prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
+        self.assertIn("DIFFERENT entities are DIFFERENT series", prompt)
+        self.assertIn("an EDF bill and an Enercoop bill", prompt)
+
+    def test_prompt_asks_for_consistent_name_when_joining_a_series(self) -> None:
+        # 3a: when the new file joins a populated series, name it like its
+        # siblings so the series stays internally consistent.
+        prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
+        self.assertIn("\"name\"", prompt)
+        self.assertIn("SAME structure as those existing files", prompt)
 
     def test_prompt_has_high_bar_rule(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
