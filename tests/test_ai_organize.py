@@ -105,10 +105,12 @@ class TestOrganizeSet(unittest.TestCase):
         self.assertIn("two base categories", prompt)         # R3 — no cross-base split
         self.assertIn("start of the folder name", prompt)    # R4 — date first
         self.assertIn("hallucinate", prompt)                 # R5 — photos unreliable
-        # Only one-off AFFAIRS are dated; a SERIES folder stays undated, a
-        # period inside it is a bare-year subfolder.
-        self.assertIn("series folder (recurring kind) is never dated", prompt)
-        self.assertIn("releves-eau/2026", prompt)
+        # A SERIES is filed as <ENTITY>/<YEAR>: an undated entity folder + a
+        # bare-year subfolder; different entities are different series.
+        self.assertIn("filed as <entity>/<year>", prompt)
+        self.assertIn("never dated", prompt)
+        self.assertIn("different entities are different series", prompt)
+        self.assertIn("energy/edf/2026", prompt)
 
     def test_prompt_has_no_hypothesis_block_without_a_drop_folder(self) -> None:
         prompt = _build_organize_prompt(DOCS, BASES, [], None)
