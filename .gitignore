@@ -21,6 +21,8 @@ venv/
 # Secrets (never commit runtime env files or keys)
 *.env
 !.env.example
+# intentionally-empty test fixture (offline guard), not a secret
+!tests/empty.env
 *.key
 *.pem
 

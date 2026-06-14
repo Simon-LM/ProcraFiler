@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 
-from procrafiler.ai_naming import parse_provider_chain, task_chain_from_env
+from procrafiler.ai_naming import _ai_throttle, parse_provider_chain, task_chain_from_env
 
 
 class TestProviderPlumbing(unittest.TestCase):
@@ -38,6 +38,34 @@ class TestProviderPlumbing(unittest.TestCase):
         # NAMING / CLASSIFICATION were merged into ANALYSIS and are no longer tasks.
         self.assertEqual(task_chain_from_env("NAMING"), [])
         self.assertEqual(task_chain_from_env("CLASSIFICATION"), [])
+
+
+class TestAiThrottle(unittest.TestCase):
+    """Configurable pause between real provider calls (GPU-friendly for Ollama)."""
+
+    def tearDown(self) -> None:
+        os.environ.pop("PROCRAFILER_AI_THROTTLE", None)
+
+    def _slept(self, value: str | None) -> list[float]:
+        if value is None:
+            os.environ.pop("PROCRAFILER_AI_THROTTLE", None)
+        else:
+            os.environ["PROCRAFILER_AI_THROTTLE"] = value
+        calls: list[float] = []
+        _ai_throttle(sleep_fn=calls.append)
+        return calls
+
+    def test_unset_does_not_sleep(self) -> None:
+        self.assertEqual(self._slept(None), [])
+
+    def test_zero_does_not_sleep(self) -> None:
+        self.assertEqual(self._slept("0"), [])
+
+    def test_invalid_does_not_sleep(self) -> None:
+        self.assertEqual(self._slept("abc"), [])
+
+    def test_positive_value_sleeps_that_long(self) -> None:
+        self.assertEqual(self._slept("1.5"), [1.5])
 
 
 if __name__ == "__main__":

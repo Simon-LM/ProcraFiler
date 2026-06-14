@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.error import HTTPError
@@ -146,7 +147,28 @@ def _extract_mistral_content(body: dict[str, Any]) -> str:
     return str(content).strip()
 
 
+def _ai_throttle(sleep_fn: Any = time.sleep) -> None:
+    """Optional pause before each real provider HTTP call.
+
+    Set `PROCRAFILER_AI_THROTTLE` to a number of seconds to space out calls —
+    useful when driving a LOCAL model (Ollama) to avoid overheating the GPU on
+    a long sequential run. Default (unset / 0 / invalid) = no pause, so Mistral
+    and production are unaffected. Mocked tests patch `_post_json`, so they never
+    reach this — only real network calls are throttled.
+    """
+    raw = os.environ.get("PROCRAFILER_AI_THROTTLE", "")
+    if not raw.strip():
+        return
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return
+    if seconds > 0:
+        sleep_fn(seconds)
+
+
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> tuple[int, bytes]:
+    _ai_throttle()
     data = json.dumps(payload).encode("utf-8")
     req = Request(url, data=data, method="POST")
     for k, v in headers.items():
@@ -195,13 +217,33 @@ def call_mistral_chat(prompt: str, model: str, timeout: int = 60, **api_params: 
     return _extract_mistral_content(body)
 
 
+def _ollama_num_ctx(default_value: int = 8192) -> int:
+    """Context window for Ollama chat. Ollama defaults to only 2048 tokens, which
+    silently TRUNCATES our long analysis prompts (a 6000-char document + rules) →
+    empty/garbage output. Override with `PROCRAFILER_OLLAMA_NUM_CTX` to trade VRAM
+    for context."""
+    raw = os.environ.get("PROCRAFILER_OLLAMA_NUM_CTX", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return default_value
+    return value if value > 0 else default_value
+
+
 def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
+    # `format: "json"` constrains Ollama to emit valid JSON. Every text task that
+    # uses this (analysis / organize / grouping) expects a JSON object, and small
+    # local models otherwise wrap or mangle it. `num_ctx` lifts the 2048-token
+    # default so the full prompt isn't truncated. Vision/OCR use a different
+    # function (free text), so they are unaffected.
     status_code, raw_content = _post_json(
         OLLAMA_CHAT_URL,
         payload={
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
+            "format": "json",
+            "options": {"num_ctx": _ollama_num_ctx()},
         },
         headers={"Content-Type": "application/json"},
         timeout=timeout,

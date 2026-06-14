@@ -24,6 +24,7 @@ from typing import Any
 
 from procrafiler.ai_naming import (  # type: ignore[reportMissingImports]
     MISTRAL_CHAT_URL,
+    OLLAMA_CHAT_URL,
     ChainEntry,
     ProviderCallError,
     RateLimitedError,
@@ -49,6 +50,12 @@ _DEFAULT_VISION_PROMPT = (
     "brièvement ce qu'elle représente. Réponds en français, en texte brut. "
     "Si c'est un document, restitue les informations clés (émetteur, type, "
     "date, montants)."
+)
+
+# OCR via a local vision model wants pure transcription, not a description.
+_DEFAULT_OCR_PROMPT = (
+    "Transcris fidèlement et intégralement tout le texte de cette page, en "
+    "français, en texte brut, sans commentaire ni mise en forme superflue."
 )
 
 _IMAGE_SUFFIX_TO_MIME = {
@@ -129,6 +136,83 @@ def call_mistral_ocr(path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT
     return _extract_ocr_text(body)
 
 
+def _ollama_vision_call(image_png: bytes, model: str, prompt: str, timeout: int) -> str:
+    """Send ONE image to an Ollama vision model via /api/chat, return its text.
+
+    Ollama's chat API takes images as raw base64 strings in the message's
+    `images` field (no data-URI prefix). Provider-agnostic in model: any
+    vision-capable Ollama model works (minicpm-v, qwen2.5vl, llama3.2-vision…),
+    selected purely by the chain entry — easy to swap for testing.
+    """
+    encoded = base64.b64encode(image_png).decode("ascii")
+    status_code, raw_content = _post_json(
+        OLLAMA_CHAT_URL,
+        payload={
+            "model": model,
+            "messages": [{"role": "user", "content": prompt, "images": [encoded]}],
+            "stream": False,
+        },
+        headers={"Content-Type": "application/json"},
+        timeout=timeout,
+    )
+    body = _safe_json_loads(raw_content)
+    if status_code >= 400:
+        raise ProviderCallError(f"OLLAMA_VISION_ERROR_{status_code}: {body}")
+    try:
+        content = body["message"]["content"]
+    except Exception as exc:  # noqa: BLE001
+        raise ProviderCallError(f"OLLAMA_VISION_BAD_RESPONSE: {exc}") from exc
+    return str(content).strip()
+
+
+def call_ollama_vision(
+    path: Path,
+    model: str,
+    prompt: str = _DEFAULT_VISION_PROMPT,
+    timeout: int = _DEFAULT_VISION_TIMEOUT,
+) -> str:
+    """Read a local IMAGE with an Ollama vision model (mirrors call_mistral_vision)."""
+    return _ollama_vision_call(path.read_bytes(), model, prompt, timeout)
+
+
+# Cap how many PDF pages we OCR through a local vision model, to bound latency.
+_OLLAMA_OCR_MAX_PAGES = 10
+
+
+def _render_pdf_to_pngs(path: Path, *, max_pages: int = _OLLAMA_OCR_MAX_PAGES, zoom: float = 2.0) -> list[bytes]:
+    """Render the first pages of a PDF to PNG bytes for vision-model OCR.
+
+    Ollama has no OCR endpoint like Mistral's; a scanned PDF is read by rendering
+    each page to an image and passing it to a vision model. Uses PyMuPDF; any
+    failure becomes a ProviderCallError so the chain falls back cleanly.
+    """
+    try:
+        import pymupdf  # PyMuPDF
+    except ImportError as exc:  # pragma: no cover - dependency presence
+        raise ProviderCallError("PDF_RENDER_UNAVAILABLE: PyMuPDF not installed") from exc
+    images: list[bytes] = []
+    try:
+        with pymupdf.open(path) as doc:
+            for index, page in enumerate(doc):
+                if index >= max_pages:
+                    break
+                pixmap = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+                images.append(pixmap.tobytes("png"))
+    except Exception as exc:  # noqa: BLE001
+        raise ProviderCallError(f"PDF_RENDER_FAILED: {exc}") from exc
+    return images
+
+
+def call_ollama_ocr(path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT) -> str:
+    """OCR a scanned PDF locally: render each page to an image, read it with an
+    Ollama vision model, and concatenate the transcriptions."""
+    pages = _render_pdf_to_pngs(path)
+    if not pages:
+        raise ProviderCallError("OCR_PDF_NO_PAGES")
+    parts = [_ollama_vision_call(png, model, _DEFAULT_OCR_PROMPT, timeout) for png in pages]
+    return "\n\n".join(part for part in parts if part.strip()).strip()
+
+
 def read_with_ocr(
     path: Path,
     *,
@@ -156,6 +240,8 @@ def read_with_ocr(
             try:
                 if entry.provider == "mistral":
                     text = call_mistral_ocr(path, entry.model, timeout=timeout)
+                elif entry.provider == "ollama":
+                    text = call_ollama_ocr(path, entry.model, timeout=timeout)
                 else:
                     raise ProviderCallError(f"unsupported_ocr_provider:{entry.provider}")
 
@@ -249,6 +335,8 @@ def read_with_vision(
             try:
                 if entry.provider == "mistral":
                     text = call_mistral_vision(path, entry.model, timeout=timeout)
+                elif entry.provider == "ollama":
+                    text = call_ollama_vision(path, entry.model, timeout=timeout)
                 else:
                     raise ProviderCallError(f"unsupported_vision_provider:{entry.provider}")
 

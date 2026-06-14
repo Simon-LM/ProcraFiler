@@ -13,6 +13,8 @@ from procrafiler.ai_reader import (
     _image_mime,
     call_mistral_ocr,
     call_mistral_vision,
+    call_ollama_ocr,
+    call_ollama_vision,
     read_with_ocr,
     read_with_vision,
 )
@@ -197,6 +199,102 @@ class TestReadWithVision(unittest.TestCase):
     def test_empty_result_falls_back(self) -> None:
         chain = [ChainEntry(provider="mistral", model="mistral-medium-latest")]
         with patch("procrafiler.ai_reader.call_mistral_vision", return_value=""):
+            result = read_with_vision(self.img, chain=chain, retries=0)
+        self.assertTrue(result.used_fallback)
+        self.assertIsNone(result.text)
+
+
+class TestCallOllamaVision(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.img = Path(self.tmp.name) / "photo.png"
+        self.img.write_bytes(b"\x89PNG\r\n fake image bytes")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_builds_ollama_image_payload_and_parses(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_post(url, payload, headers, timeout):  # noqa: ANN001, ANN202
+            captured["url"] = url
+            captured["payload"] = payload
+            return 200, b'{"message": {"content": "Facture EDF 84 EUR"}}'
+
+        with patch("procrafiler.ai_reader._post_json", side_effect=fake_post):
+            text = call_ollama_vision(self.img, "qwen2.5vl:7b")
+
+        self.assertEqual(text, "Facture EDF 84 EUR")
+        self.assertEqual(captured["url"], "http://localhost:11434/api/chat")
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        self.assertEqual(payload["model"], "qwen2.5vl:7b")
+        message = payload["messages"][0]
+        self.assertEqual(len(message["images"]), 1)  # the image rides as base64
+        self.assertNotIn("data:", message["images"][0])  # raw base64, no data-URI prefix
+        self.assertFalse(payload["stream"])
+
+    def test_http_error_raises(self) -> None:
+        with patch("procrafiler.ai_reader._post_json", return_value=(500, b"{}")):
+            with self.assertRaises(ProviderCallError):
+                call_ollama_vision(self.img, "qwen2.5vl:7b")
+
+
+class TestCallOllamaOcr(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.pdf = Path(self.tmp.name) / "scan.pdf"
+        self.pdf.write_bytes(b"%PDF-1.4 fake")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_renders_pages_and_concatenates(self) -> None:
+        # Two rendered pages → two vision calls → joined transcription.
+        with patch("procrafiler.ai_reader._render_pdf_to_pngs", return_value=[b"png1", b"png2"]):
+            with patch("procrafiler.ai_reader._ollama_vision_call", side_effect=["Page un", "Page deux"]) as vis:
+                text = call_ollama_ocr(self.pdf, "minicpm-v:latest")
+        self.assertEqual(text, "Page un\n\nPage deux")
+        self.assertEqual(vis.call_count, 2)
+
+    def test_no_pages_raises(self) -> None:
+        with patch("procrafiler.ai_reader._render_pdf_to_pngs", return_value=[]):
+            with self.assertRaises(ProviderCallError):
+                call_ollama_ocr(self.pdf, "minicpm-v:latest")
+
+
+class TestReadWithOllamaProviders(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.img = Path(self.tmp.name) / "photo.png"
+        self.img.write_bytes(b"img")
+        self.pdf = Path(self.tmp.name) / "scan.pdf"
+        self.pdf.write_bytes(b"pdf")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_vision_dispatches_to_ollama(self) -> None:
+        chain = [ChainEntry(provider="ollama", model="qwen2.5vl:7b")]
+        with patch("procrafiler.ai_reader.call_ollama_vision", return_value="Photo d'un compteur") as called:
+            result = read_with_vision(self.img, chain=chain, retries=0)
+        called.assert_called_once()
+        self.assertFalse(result.used_fallback)
+        self.assertEqual(result.provider, "ollama")
+        self.assertEqual(result.text, "Photo d'un compteur")
+
+    def test_ocr_dispatches_to_ollama(self) -> None:
+        chain = [ChainEntry(provider="ollama", model="minicpm-v:latest")]
+        with patch("procrafiler.ai_reader.call_ollama_ocr", return_value="Facture scannee") as called:
+            result = read_with_ocr(self.pdf, chain=chain, retries=0)
+        called.assert_called_once()
+        self.assertFalse(result.used_fallback)
+        self.assertEqual(result.provider, "ollama")
+        self.assertEqual(result.text, "Facture scannee")
+
+    def test_ollama_failure_falls_back(self) -> None:
+        chain = [ChainEntry(provider="ollama", model="qwen2.5vl:7b")]
+        with patch("procrafiler.ai_reader.call_ollama_vision", side_effect=ProviderCallError("boom")):
             result = read_with_vision(self.img, chain=chain, retries=0)
         self.assertTrue(result.used_fallback)
         self.assertIsNone(result.text)
