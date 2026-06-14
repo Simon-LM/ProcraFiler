@@ -94,7 +94,7 @@ The base library tree is organized by life **context** (Personal / Work) and the
 
 ```text
 Personal/
-    Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Energy  Telecom  Vehicle
+    Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Utilities  Telecom  Vehicle
     Education/
     Hobbies/
 Work/
