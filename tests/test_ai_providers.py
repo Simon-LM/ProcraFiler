@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
-from procrafiler.ai_naming import _ai_throttle, parse_provider_chain, task_chain_from_env
+from procrafiler.ai_naming import (
+    _ai_sampling_params,
+    _ai_throttle,
+    call_mistral_chat,
+    parse_provider_chain,
+    task_chain_from_env,
+)
 
 
 class TestProviderPlumbing(unittest.TestCase):
@@ -66,6 +73,49 @@ class TestAiThrottle(unittest.TestCase):
 
     def test_positive_value_sleeps_that_long(self) -> None:
         self.assertEqual(self._slept("1.5"), [1.5])
+
+
+class TestSamplingParams(unittest.TestCase):
+    """Temperature/top_p are configurable via the env; NEUTRAL (nothing sent) by
+    default so the model uses its own default — the reference baseline."""
+
+    def tearDown(self) -> None:
+        for key in ("PROCRAFILER_AI_TEMPERATURE", "PROCRAFILER_AI_TOP_P", "MISTRAL_API_KEY"):
+            os.environ.pop(key, None)
+
+    def test_unset_sends_nothing(self) -> None:
+        self.assertEqual(_ai_sampling_params(), {})
+
+    def test_temperature_and_top_p_parsed(self) -> None:
+        os.environ["PROCRAFILER_AI_TEMPERATURE"] = "0.3"
+        os.environ["PROCRAFILER_AI_TOP_P"] = "0.9"
+        self.assertEqual(_ai_sampling_params(), {"temperature": 0.3, "top_p": 0.9})
+
+    def test_invalid_value_is_ignored(self) -> None:
+        os.environ["PROCRAFILER_AI_TEMPERATURE"] = "abc"
+        self.assertEqual(_ai_sampling_params(), {})
+
+    def _capture_payload(self) -> dict:
+        captured: dict = {}
+
+        def fake_post(url, payload, headers, timeout):  # noqa: ANN001, ANN202
+            captured["payload"] = payload
+            return 200, b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        os.environ["MISTRAL_API_KEY"] = "test-key"
+        with patch("procrafiler.ai_naming._post_json", side_effect=fake_post):
+            call_mistral_chat("hi", "mistral-medium-latest", timeout=5)
+        return captured["payload"]
+
+    def test_call_omits_temperature_by_default(self) -> None:
+        payload = self._capture_payload()
+        self.assertNotIn("temperature", payload)
+        self.assertNotIn("top_p", payload)
+
+    def test_call_applies_env_temperature(self) -> None:
+        os.environ["PROCRAFILER_AI_TEMPERATURE"] = "0.3"
+        payload = self._capture_payload()
+        self.assertEqual(payload["temperature"], 0.3)
 
 
 if __name__ == "__main__":

@@ -138,6 +138,7 @@ Environment variables:
 - `PROCRAFILER_AI_SUPERVISOR_FALLBACK`
 - `PROCRAFILER_AI_TIMEOUT` / `PROCRAFILER_AI_RETRIES` (global defaults)
 - `PROCRAFILER_AI_ANALYSIS_TIMEOUT` / `PROCRAFILER_AI_ANALYSIS_RETRIES` (task override)
+- `PROCRAFILER_AI_TEMPERATURE` / `PROCRAFILER_AI_TOP_P` (Mistral sampling; **unset = the provider's own default**, the neutral baseline — set a float, e.g. `0.3`, to override globally)
 - `MISTRAL_API_KEY` (required for Mistral calls)
 
 ## Commands
