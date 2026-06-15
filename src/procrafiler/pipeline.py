@@ -223,6 +223,36 @@ def _with_series_year(
     return route_dir + (year,)
 
 
+def _with_series_entity(
+    route_dir: tuple[str, ...], *, series: bool, issuer: str | None, library_root: Path
+) -> tuple[str, ...]:
+    """Deterministic safety net for a SERIES the AI routed to a BARE BASE.
+
+    The AI normally proposes the entity folder itself (and reuses an existing one
+    from the tree — that is what keeps a series together over time). But when it
+    under-proposes — stopping at the base, leaving e.g. an EDF and an Enercoop
+    bill loose in `Utilities` for the grouping to wrongly merge — and we know the
+    issuer, append it as the entity folder so two issuers NEVER share a base
+    folder. Reuses an existing sibling that matches the issuer (case-insensitive)
+    to avoid a near-duplicate. No-op when not a series, when the route already has
+    an entity folder below its base, or when no issuer is known.
+    """
+    if not series or not issuer:
+        return route_dir
+    base = base_category_for(route_dir)
+    if base is None or len(route_dir) > len(base):
+        return route_dir  # no base, or already has an entity folder below the base
+    slug = sanitize_filename_stem(issuer)
+    if not slug:
+        return route_dir
+    base_dir = library_root / Path(*base)
+    if base_dir.is_dir():
+        for child in sorted(base_dir.iterdir()):
+            if child.is_dir() and child.name.lower() == slug.lower():
+                return base + (child.name,)  # reuse the existing issuer folder
+    return base + (slug,)
+
+
 def _fiche_year(content_json: Any) -> str | None:
     """Extract a 4-digit year from a stored fiche — the document's own date
     (document_date, else the resolved effective_date). Used to date an EXISTING
@@ -845,10 +875,16 @@ def _file_cataloged(
     document_date = analysis.document_date if analysis is not None else None
     document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=catdoc.dispatch.media_type)
 
-    # SERIES year subfolder, derived deterministically from the document's own
-    # date (document_dt — EXIF/content date, never the processing timestamp).
-    # The AI proposes only the ENTITY folder; the year is owned by the code.
+    # SERIES placement, owned by the code so it can't be dropped/guessed:
+    # 1) if the AI under-routed a series to a bare base, push it into its issuer
+    #    entity folder (so two issuers never share a base folder); then
+    # 2) append the dated year subfolder from the document's own date
+    #    (document_dt — EXIF/content date, never the processing timestamp).
     series = bool(analysis.series) if analysis is not None else False
+    issuer = analysis.entities.get("issuer") if analysis is not None and isinstance(analysis.entities, dict) else None
+    route_dir = _with_series_entity(
+        route_dir, series=series, issuer=issuer if isinstance(issuer, str) else None, library_root=paths.library_root
+    )
     route_dir = _with_series_year(route_dir, series=series, year=document_dt.strftime("%Y"))
 
     target_dir = paths.library_root / Path(*route_dir)
@@ -1066,7 +1102,9 @@ def _catalog_one_inbox_file(
     """Phase 1 (CATALOG) for ONE file: move it to the Queue, dedup, dispatch, and
     read+analyze it into a fiche — WITHOUT filing it into the library. Returns the
     `_CatalogedDoc` (ready for the file phase, per-file or set-aware), or a
-    terminal `ProcessResult` when the file is a duplicate or can't be dispatched.
+    terminal `ProcessResult` when the file is a duplicate. An undispatchable file
+    (unsupported/missing extension) becomes a no-analysis `_CatalogedDoc` that the
+    file phase places in Manual_Review — never left stranded in the Queue.
 
     `extra_known_hashes` lets a batch catch INTRA-run duplicates: in the two-phase
     flow every file is catalogued before any is persisted, so the caller passes the
@@ -1155,18 +1193,11 @@ def _catalog_one_inbox_file(
 
     dispatch = dispatch_for_filename(queued_target.name)
     if not dispatch.can_dispatch:
-        current_state = validate_transition(current_state, "USER_CONFIRMATION_REQUIRED")
-        now_iso = _utc_iso(now_utc)
-        repo.upsert_document(
-            doc_id=str(uuid4()),
-            sha256=sha256,
-            current_filename=queued_target.name,
-            current_path=str(queued_target),
-            status="USER_CONFIRMATION_REQUIRED",
-            updated_at_utc=now_iso,
-            flow_state=current_state,
-        )
-        _write_catalog_snapshot(paths, repo, now_utc, features=features)
+        # Unsupported/missing extension: no reader can open it, so the AI never
+        # sees it. Route it to Manual_Review (the catch-all for unreadable
+        # content) like an AI-unreadable file — a no-analysis _CatalogedDoc that
+        # the file phase places there. NEVER leave it stranded in the Queue
+        # (invisible to `review`, skipped by the next run).
         _append_action_log(
             paths,
             operation_id=operation_id,
@@ -1182,7 +1213,19 @@ def _catalog_one_inbox_file(
             features=features,
         )
         emit(f"   → manual review (unreadable: {dispatch.reason})")
-        return ProcessResult(current_state, mirror_failed=False)
+        return _CatalogedDoc(
+            queued_target=queued_target,
+            source=source,
+            source_folder=source_folder,
+            sha256=sha256,
+            dispatch=dispatch,
+            operation_id=operation_id,
+            current_state=validate_transition(current_state, "ROUTE_CONFIRMED"),
+            content_text=None,
+            read_via=None,
+            analysis=None,
+            max_depth=load_runtime_policy(paths).taxonomy_max_depth,
+        )
 
     current_state = validate_transition(current_state, "ROUTE_CONFIRMED")
 

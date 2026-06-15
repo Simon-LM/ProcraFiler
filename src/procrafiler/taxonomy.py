@@ -53,7 +53,7 @@ INTERIM_LIBRARY_DIR: tuple[str, ...] = ("Manual_Review",)
 # destination category. See docs/spec-mvp-v1.md §9-10.
 _GROUPED_MEDIA_TYPES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("pdf", ("pdf",)),
-    ("text", ("txt", "md", "rtf", "doc", "docx", "odt", "epub")),
+    ("text", ("txt", "md", "rtf", "doc", "docx", "odt", "epub", "srt", "sh")),
     ("office", ("xls", "xlsx", "ods", "csv", "tsv", "ppt", "pptx", "odp")),
     (
         "image",

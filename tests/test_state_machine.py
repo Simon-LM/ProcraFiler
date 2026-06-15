@@ -46,14 +46,17 @@ class TestStateMachinePersistence(unittest.TestCase):
         doc = next(d for d in repo.list_documents() if d["status"] == "LIBRARY_STORED")
         self.assertEqual(doc["flow_state"], "LIBRARY_STORED")
 
-    def test_manual_review_persists_flow_state(self) -> None:
+    def test_unsupported_extension_is_filed_in_manual_review(self) -> None:
+        # An undispatchable file (no reader) is filed in Manual_Review like any
+        # unreadable file — never stranded in the Queue.
         (self.paths.inbox_dir / "weird.unknownext").write_bytes(b"data")
         status = process_next_inbox_file(self.paths, now_utc=self.now)
-        self.assertEqual(status, "USER_CONFIRMATION_REQUIRED")
+        self.assertEqual(status, "LIBRARY_STORED")
 
         repo = CatalogRepository(self.paths.catalog_db_file)
         doc = next(iter(repo.list_documents()))
-        self.assertEqual(doc["flow_state"], "USER_CONFIRMATION_REQUIRED")
+        self.assertEqual(doc["flow_state"], "LIBRARY_STORED")
+        self.assertIn("Manual_Review", doc["current_path"])
 
     def test_duplicate_path_does_not_persist_a_document(self) -> None:
         (self.paths.inbox_dir / "first.pdf").write_bytes(b"same-content")

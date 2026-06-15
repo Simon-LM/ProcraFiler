@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from procrafiler.pipeline import _fiche_year, _with_series_year
+from procrafiler.pipeline import _fiche_year, _with_series_entity, _with_series_year
 from procrafiler.taxonomy import base_category_for
 
 
@@ -55,6 +57,47 @@ class TestWithSeriesYear(unittest.TestCase):
     def test_no_op_under_no_base(self) -> None:
         route = ("Manual_Review",)
         self.assertEqual(_with_series_year(route, series=True, year="2026"), route)
+
+
+class TestWithSeriesEntity(unittest.TestCase):
+    UTIL = ("Personal", "Administrative", "Utilities")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_appends_issuer_when_series_at_bare_base(self) -> None:
+        self.assertEqual(
+            _with_series_entity(self.UTIL, series=True, issuer="Enercoop", library_root=self.root),
+            (*self.UTIL, "Enercoop"),
+        )
+
+    def test_no_op_when_route_already_has_an_entity_folder(self) -> None:
+        route = (*self.UTIL, "EDF")
+        self.assertEqual(
+            _with_series_entity(route, series=True, issuer="EDF", library_root=self.root),
+            route,
+        )
+
+    def test_no_op_when_not_a_series_or_no_issuer(self) -> None:
+        self.assertEqual(_with_series_entity(self.UTIL, series=False, issuer="EDF", library_root=self.root), self.UTIL)
+        self.assertEqual(_with_series_entity(self.UTIL, series=True, issuer=None, library_root=self.root), self.UTIL)
+
+    def test_reuses_existing_sibling_case_insensitively(self) -> None:
+        # An EDF folder already exists; a bill whose issuer is "edf" reuses it
+        # rather than creating a near-duplicate.
+        (self.root / Path(*self.UTIL) / "EDF").mkdir(parents=True)
+        self.assertEqual(
+            _with_series_entity(self.UTIL, series=True, issuer="edf", library_root=self.root),
+            (*self.UTIL, "EDF"),
+        )
+
+    def test_no_op_under_no_base(self) -> None:
+        route = ("Manual_Review",)
+        self.assertEqual(_with_series_entity(route, series=True, issuer="EDF", library_root=self.root), route)
 
 
 class TestFicheYear(unittest.TestCase):
