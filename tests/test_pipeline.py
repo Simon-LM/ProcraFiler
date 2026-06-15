@@ -120,19 +120,26 @@ class TestPipeline(unittest.TestCase):
         mirror_files = [p for p in self.paths.mirror_root.rglob("*") if p.is_file()]
         self.assertEqual(len(mirror_files), 1)
 
-    def test_unknown_extension_stays_in_queue_with_manual_alert(self) -> None:
+    def _manual_review_files(self) -> list[Path]:
+        review_dir = self.paths.library_root / "Manual_Review"
+        return [p for p in review_dir.rglob("*") if p.is_file()] if review_dir.exists() else []
+
+    def test_unknown_extension_is_filed_in_manual_review(self) -> None:
+        # An unsupported extension can't be read, so it goes to Manual_Review
+        # (the catch-all for unreadable content) — NOT stranded in the Queue.
         source = self.paths.inbox_dir / "archive.weirdext"
         source.write_bytes(b"custom-binary")
 
         status: str = process_next_inbox_file(
             self.paths, now_utc=datetime(2026, 4, 2, 10, 12, 0, tzinfo=timezone.utc)
         )
-        self.assertEqual(status, "USER_CONFIRMATION_REQUIRED")
+        self.assertEqual(status, "LIBRARY_STORED")
 
         self.assertEqual(len(list(self.paths.inbox_dir.iterdir())), 0)
-        queue_files = list(self.paths.queue_dir.iterdir())
-        self.assertEqual(len(queue_files), 1)
-        self.assertEqual(queue_files[0].name, "archive.weirdext")
+        self.assertEqual(list(self.paths.queue_dir.iterdir()), [])  # nothing left behind
+        review_files = self._manual_review_files()
+        self.assertEqual(len(review_files), 1)
+        self.assertTrue(review_files[0].name.endswith("archive.weirdext"))
 
         events = [
             json.loads(line)
@@ -143,18 +150,19 @@ class TestPipeline(unittest.TestCase):
         self.assertTrue(manual_events)
         self.assertEqual(manual_events[0].get("reason"), "unknown_extension")
 
-    def test_no_extension_stays_in_queue_with_manual_alert(self) -> None:
+    def test_no_extension_is_filed_in_manual_review(self) -> None:
         source = self.paths.inbox_dir / "README"
         source.write_bytes(b"no-extension")
 
         status: str = process_next_inbox_file(
             self.paths, now_utc=datetime(2026, 4, 2, 10, 13, 0, tzinfo=timezone.utc)
         )
-        self.assertEqual(status, "USER_CONFIRMATION_REQUIRED")
+        self.assertEqual(status, "LIBRARY_STORED")
 
-        queue_files = list(self.paths.queue_dir.iterdir())
-        self.assertEqual(len(queue_files), 1)
-        self.assertEqual(queue_files[0].name, "README")
+        self.assertEqual(list(self.paths.queue_dir.iterdir()), [])
+        review_files = self._manual_review_files()
+        self.assertEqual(len(review_files), 1)
+        self.assertTrue(review_files[0].name.endswith("README"))
 
         events = [
             json.loads(line)

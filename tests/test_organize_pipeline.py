@@ -347,6 +347,40 @@ class TestSingletonGrouping(unittest.TestCase):
         filed = [p for p in year_dir.glob("*") if p.is_file()]
         self.assertEqual(len(filed), 1, "series file should be filed in its <Entity>/<Year> folder")
 
+    def test_series_at_bare_base_with_issuer_gets_entity_then_year(self) -> None:
+        # Bug 2: the AI under-routes a series to the bare base (Utilities) but
+        # supplies entities.issuer; the code pushes it into its issuer entity
+        # folder, then the year — so two issuers never share a base folder.
+        (self.paths.inbox_dir / "facture.txt").write_bytes(b"Facture Enercoop abonnement avril 2019")
+        analysis = json.dumps({
+            "name": "Facture_Enercoop",
+            "date": "2019-04-25",
+            "category_path": "Personal/Administrative/Utilities",
+            "series": True,
+            "entities": {"issuer": "Enercoop"},
+            "summary": "facture electricite",
+        })
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["processed"], 1)
+        target = self.paths.library_root / "Personal" / "Administrative" / "Utilities" / "Enercoop" / "2019"
+        self.assertEqual(len([p for p in target.glob("*") if p.is_file()]), 1)
+
+    def test_srt_file_is_read_as_text_and_classified(self) -> None:
+        # Bug 1: .srt is plain text — it must be read and classified, not sent
+        # to manual review for an unknown extension.
+        (self.paths.inbox_dir / "sous-titres.srt").write_bytes(
+            b"1\n00:00:01,000 --> 00:00:04,000\nBonjour le monde\n"
+        )
+        analysis = json.dumps({"name": "Sous-titres", "category_path": "Personal/Hobbies", "summary": "srt"})
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["processed"], 1)
+        self.assertEqual(len(self._files_under("Personal", "Hobbies")), 1)
+        self.assertEqual(self._files_under("Manual_Review"), [])
+
     def test_non_series_file_gets_no_year_subfolder(self) -> None:
         # series=false → the pipeline never appends a year; the file stays in the
         # folder the AI proposed.

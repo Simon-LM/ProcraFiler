@@ -170,6 +170,17 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("Utilities/EDF", prompt)
         self.assertNotIn("Utilities/EDF/2026", prompt)  # no year written by the AI
         self.assertIn("DIFFERENT entities are DIFFERENT series", prompt)
+        # Bug 2 (run 8): a series must give its entity folder, never the bare base,
+        # and supply the issuer (the code uses it as a deterministic fallback).
+        self.assertIn("NEVER stop at the bare base", prompt)
+        self.assertIn('"issuer"', prompt)
+
+    def test_prompt_reuse_requires_same_specific_subject(self) -> None:
+        # Bug 3 (run 8): don't nest unrelated items under an existing subfolder
+        # just because they share a broad parent category.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("MANIFESTLY the same subject", prompt)
+        self.assertIn("never nested one inside the other", prompt)
 
     def test_prompt_carries_filename_and_folder_as_hints(self) -> None:
         prompt = _build_analysis_prompt("x", BASES, [], original_filename="CV_Simon-LOUVEL.odt", source_folder="Dégats_eaux")

@@ -146,6 +146,14 @@ class TestBuildGroupingPrompt(unittest.TestCase):
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
         self.assertIn("HIGH BAR", prompt)
 
+    def test_prompt_high_bar_requires_same_specific_subject(self) -> None:
+        # Bug 3 (run 8): unrelated items under the same branch (a sound mixer vs
+        # a codev workshop, both Hobbies) must NOT be nested — same SPECIFIC
+        # subject only.
+        prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
+        self.assertIn("SAME SPECIFIC subject", prompt)
+        self.assertIn("separate siblings", prompt)
+
     def test_prompt_includes_document_name_and_summary(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
         self.assertIn("Releve-eau-mars", prompt)
