@@ -154,6 +154,13 @@ class TestBuildGroupingPrompt(unittest.TestCase):
         self.assertIn("SAME SPECIFIC subject", prompt)
         self.assertIn("separate siblings", prompt)
 
+    def test_prompt_shared_folder_named_by_common_subject(self) -> None:
+        # Run 9: a shared folder is named for the COMMON kind, never one item's
+        # brand (an SWR amp + a Soundcraft mixer → "Materiel-audio", not "SWR").
+        prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
+        self.assertIn("NAME A SHARED FOLDER BY WHAT ITS FILES HAVE IN COMMON", prompt)
+        self.assertIn("Materiel-audio", prompt)
+
     def test_prompt_includes_document_name_and_summary(self) -> None:
         prompt = _build_grouping_prompt(DOC, BRANCHES_ONE)
         self.assertIn("Releve-eau-mars", prompt)

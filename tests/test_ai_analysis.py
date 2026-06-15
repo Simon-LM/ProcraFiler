@@ -174,6 +174,9 @@ class TestAnalyzeContent(unittest.TestCase):
         # and supply the issuer (the code uses it as a deterministic fallback).
         self.assertIn("NEVER stop at the bare base", prompt)
         self.assertIn('"issuer"', prompt)
+        # Run 9: certificates/diplomas are a series too → <organism>/<year>.
+        self.assertIn("certificate/attestation/diploma", prompt)
+        self.assertIn("Education/OpenClassrooms", prompt)
 
     def test_prompt_reuse_requires_same_specific_subject(self) -> None:
         # Bug 3 (run 8): don't nest unrelated items under an existing subfolder
