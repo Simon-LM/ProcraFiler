@@ -216,7 +216,7 @@ def propose_grouping(
         for attempt in range(retry_count + 1):
             try:
                 if entry.provider == "mistral":
-                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout, temperature=0.0)
+                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout)
                 elif entry.provider == "ollama":
                     raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout)
                 else:

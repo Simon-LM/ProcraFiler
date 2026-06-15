@@ -147,6 +147,31 @@ def _extract_mistral_content(body: dict[str, Any]) -> str:
     return str(content).strip()
 
 
+def _ai_sampling_params() -> dict[str, float]:
+    """Sampling params for the Mistral chat calls, read from the environment.
+
+    By DEFAULT nothing is sent → Mistral applies its own (neutral) default — the
+    reference baseline. Set `PROCRAFILER_AI_TEMPERATURE` and/or
+    `PROCRAFILER_AI_TOP_P` to a float to override GLOBALLY (e.g. compare a neutral
+    run against 0.0 / 0.3 / 0.5 on the same inputs). A value that doesn't parse as
+    a float is ignored (that param is simply not sent). An explicit param passed
+    at the call site still wins, since it is applied after these.
+    """
+    params: dict[str, float] = {}
+    for env_key, api_key in (
+        ("PROCRAFILER_AI_TEMPERATURE", "temperature"),
+        ("PROCRAFILER_AI_TOP_P", "top_p"),
+    ):
+        raw = os.environ.get(env_key, "").strip()
+        if not raw:
+            continue
+        try:
+            params[api_key] = float(raw)
+        except ValueError:
+            pass
+    return params
+
+
 def _ai_throttle(sleep_fn: Any = time.sleep) -> None:
     """Optional pause before each real provider HTTP call.
 
@@ -196,7 +221,8 @@ def call_mistral_chat(prompt: str, model: str, timeout: int = 60, **api_params: 
         "messages": [{"role": "user", "content": prompt}],
         "model": model,
     }
-    payload.update(api_params)
+    payload.update(_ai_sampling_params())  # env-configured sampling; neutral (unset) by default
+    payload.update(api_params)  # an explicit call-site param still wins
 
     status_code, raw_content = _post_json(
         MISTRAL_CHAT_URL,
