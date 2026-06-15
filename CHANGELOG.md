@@ -10,6 +10,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **Certificates/diplomas are filed as a dated series, and a shared folder is named for its files' common subject — never after one item's brand (run-9 polish).** The ninth real sandbox run validated the run-8 fixes (empty Queue; `.srt`/`.sh` read & classified; `Utilities/Enercoop/2019` and `Utilities/EDF/2026` separate; `Banking/BNP-Paribas/2026`, `Telecom/Free-Mobile/2025`). Two prompt refinements:
+
+  **(Certificates are a series):** the SERIES RULE kinds list now includes *certificate/attestation/diploma*, so a diploma files under its organism + year (e.g. `Education/OpenClassrooms/2023/`) instead of piling flat in the organism folder.
+
+  **(Shared folders named by common subject):** the grouping wrongly created a folder named after one item's brand and pulled a different brand into it (a Soundcraft mixer manual landed in `Hobbies/SWR/`, named after the Blonde-II amp's brand). The grouping prompt now states the generalist rule: **name a shared folder by what its files have IN COMMON, never after one file's brand/model/title** — a folder named after a single entity is correct only when EVERY file in it is from that same entity (e.g. one issuer's bills); same-kind/different-brand items get a generic folder (e.g. `Materiel-audio`), never one brand. *(The grouping/organize calls already run at `temperature=0.0`, so this is a prompt-judgment fix, not a sampling one.)*
+
+  `tests/test_ai_analysis.py` and `tests/test_ai_grouping.py` updated (prompt-intent assertions). 299 tests green.
+
 - **Unsupported files go to Manual_Review instead of being stranded in the Queue, `.srt`/`.sh` are now read as text, different-issuer bills never share a folder, and unrelated items aren't nested under each other (run-8 fixes).** The eighth real sandbox run surfaced three problems:
 
   **(Bug 1 — files stuck in the Queue):** a file with an unsupported/missing extension was catalogued *at its Queue path* with status `USER_CONFIRMATION_REQUIRED` and **never moved** — it stayed physically in `Queue/`, invisible to `review` (which only surfaces `DECISION_PENDING`) and skipped by the next run (which iterates the Inbox, not the Queue) → stranded for good. Now an undispatchable file becomes a no-analysis `_CatalogedDoc` that the file phase places in **Manual_Review** (the catch-all for unreadable/unsupported content, status `LIBRARY_STORED`), exactly like an AI-unreadable file. The Queue is transient again (empty after a run). Separately, **`.srt` and `.sh` are added to the `text` media type** — they are plain text, so they are now read and classified normally instead of going to manual review. `tests/test_pipeline.py` and `tests/test_state_machine.py` updated (Manual_Review, not Queue); `tests/test_organize_pipeline.py` +1 (`.srt` read & classified).
