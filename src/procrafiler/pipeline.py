@@ -2184,11 +2184,21 @@ def process_all_inbox_files(
                         )
                         if not grouping.used_fallback and grouping.path is not None:
                             validated_gp = normalize_category_path(grouping.path, max_depth)
-                            branch_tuples = [tuple(label.split("/")) for label in resolved_dirs]
-                            deepens = validated_gp is not None and any(
-                                len(validated_gp) > len(b) and validated_gp[: len(b)] == b for b in branch_tuples
+                            # C (run 12): the grouping may only CONFIRM or DEEPEN the file's OWN
+                            # analysis route — to unite it with an existing series/affair AT or
+                            # UNDER it — never relocate it to a sibling or a different subject.
+                            # Honour the proposal only when route_dir is a prefix of it (equal =
+                            # confirm + pull existing files down; longer = deepen). This stops the
+                            # grouping from overriding a good classification (e.g. Hobbies/Musique
+                            # → Hobbies/Fougeres) and from reforming magnets, while keeping series
+                            # uniting intact.
+                            own = tuple(route_dir)
+                            within_own = (
+                                validated_gp is not None
+                                and len(validated_gp) >= len(own)
+                                and tuple(validated_gp[: len(own)]) == own
                             )
-                            if validated_gp is not None and deepens:
+                            if validated_gp is not None and within_own:
                                 route_dir = validated_gp
                                 dest_dir = paths.library_root / Path(*validated_gp)
                                 if grouping.name:
@@ -2211,10 +2221,10 @@ def process_all_inbox_files(
                                     if ok:
                                         summary["regrouped"] += 1
                             elif validated_gp is not None:
-                                # The model proposed a branch root or an unrelated
-                                # path: that's a flatten/cross-branch, not a series
-                                # subfolder — keep the analysis route untouched.
-                                emit("   grouping ignored (does not deepen a candidate branch)")
+                                # The model proposed a branch root, a sibling, or a
+                                # different subject — not a subfolder UNDER the file's
+                                # own route. Keep the analysis classification untouched.
+                                emit("   grouping ignored (must deepen the file's own folder)")
 
                 result = _file_cataloged(
                     paths,
