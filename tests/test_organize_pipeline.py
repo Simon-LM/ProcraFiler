@@ -501,6 +501,28 @@ class TestSingletonGrouping(unittest.TestCase):
         self.assertEqual(len(self._files_under("Personal", "Administrative", "Housing", "Releves-eau")), 1)
         self.assertTrue((housing_dir / "2026-01-01_00-00-00__Constat.txt").is_file())
 
+    def test_grouping_cannot_relocate_to_a_sibling_subject(self) -> None:
+        # C (run 12): the analysis classifies the file under Hobbies/Musique; the
+        # grouping tries to move it to a SIBLING subject (Hobbies/Photo). That is
+        # not a deepening of the file's own route → ignored. The file stays in
+        # Musique (no override, no magnet).
+        hobbies = self.paths.library_root / "Personal" / "Hobbies"
+        (hobbies / "Photo").mkdir(parents=True)
+        (hobbies / "Photo" / "2026-01-01_00-00-00__Existing.txt").write_bytes(b"x")  # branch non-empty
+
+        (self.paths.inbox_dir / "concert.txt").write_bytes(b"un evenement de musique")
+        analysis_raw = json.dumps({"name": "Concert", "category_path": "Personal/Hobbies/Musique", "summary": "musique"})
+        grouping_raw = json.dumps({"path": "Personal/Hobbies/Photo", "group_with": []})
+
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis_raw):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping_raw):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["processed"], 1)
+        self.assertEqual(len(self._files_under("Personal", "Hobbies", "Musique")), 1)  # stayed in Musique
+        # Photo only holds the pre-existing file — the new one was NOT relocated there.
+        self.assertEqual(len(self._files_under("Personal", "Hobbies", "Photo")), 1)
+
     def test_regroup_refuses_to_pull_a_file_out_of_its_subfolder(self) -> None:
         # G4: group_with cites a file living in a dated affair subfolder; the
         # proposed series folder is NOT a descendant of that subfolder → the

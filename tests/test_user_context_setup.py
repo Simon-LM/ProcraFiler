@@ -14,62 +14,72 @@ def _scripted(answers: list[str]):
     return lambda _prompt: next(it)
 
 
-def _sink() -> tuple[list[str], "object"]:
+def _sink() -> tuple[list[str], object]:
     lines: list[str] = []
     return lines, lines.append
 
 
+# The questionnaire is linear (no branching); 16 questions in order.
+def _answers(
+    *,
+    first="", last="", aliases="", professions="", employers="", businesses="",
+    work_names="", interests="", banks="", insurers="", energy="", telecom="",
+    housing="", vehicles="", household="", notes="",
+) -> list[str]:
+    return [
+        first, last, aliases, professions, employers, businesses, work_names,
+        interests, banks, insurers, energy, telecom, housing, vehicles, household, notes,
+    ]
+
+
 class TestCollectAnswers(unittest.TestCase):
-    def test_self_employed_path_asks_business_and_work_names(self) -> None:
-        # status "2" = self-employed → asks profession, business, work names (NOT employer).
-        ask = _scripted(
-            ["Alex", "Martin", "handle", "2", "Dev", "MyBiz", "ClientX, ProjY",
-             "1", "", "", "", "", "", "", "", "a note"]
-        )
+    def test_multi_value_fields_split_on_commas(self) -> None:
+        # A filing tool sees OLD documents → most fields are multi-value
+        # (current AND past). Commas separate them (names can contain spaces).
+        ask = _scripted(_answers(
+            first="Alex", last="Martin", aliases="alexm, am",
+            professions="Dev, Prof", employers="Acme, Globex", businesses="MyBiz",
+            work_names="ClientX, ProjY", interests="1, 3, voile",
+            banks="BNP Paribas, Crédit Agricole", telecom="Free, Orange",
+            housing="locataire, ancien propriétaire", household="Sam, Lou",
+        ))
         _, out = _sink()
         a = collect_answers(ask, out)
-        self.assertEqual(a["work_status"], "self")
-        self.assertEqual(a["business"], "MyBiz")
+        self.assertEqual(a["professions"], ["Dev", "Prof"])
+        self.assertEqual(a["employers"], ["Acme", "Globex"])
         self.assertEqual(a["work_names"], ["ClientX", "ProjY"])
-        self.assertEqual(a["interests"], ["Musique"])  # "1" → first option
-        self.assertNotIn("employer", a)
+        self.assertEqual(a["interests"], ["Musique", "Lecture", "voile"])  # 1,3 + free
+        self.assertEqual(a["banks"], ["BNP Paribas", "Crédit Agricole"])   # spaces kept
+        self.assertEqual(a["telecom"], ["Free", "Orange"])
+        self.assertEqual(a["housing"], ["locataire", "ancien propriétaire"])
+        self.assertEqual(a["household"], ["Sam", "Lou"])
 
-    def test_no_activity_path_skips_all_work_questions(self) -> None:
-        ask = _scripted(["Bo", "Lee", "", "4", "", "", "", "", "", "", "", "", ""])
+    def test_everything_skippable(self) -> None:
         _, out = _sink()
-        a = collect_answers(ask, out)
-        self.assertEqual(a["work_status"], "none")
-        for skipped in ("profession", "employer", "business", "work_names"):
-            self.assertNotIn(skipped, a)
-
-    def test_checklist_mixes_numbers_and_free_text(self) -> None:
-        ask = _scripted(["Bo", "Lee", "", "4", "1, 3, voile", "", "", "", "", "", "", "", ""])
-        _, out = _sink()
-        a = collect_answers(ask, out)
-        self.assertEqual(a["interests"], ["Musique", "Lecture", "voile"])
+        a = collect_answers(_scripted(_answers()), out)
+        self.assertEqual(a["professions"], [])
+        self.assertEqual(a["interests"], [])
+        self.assertEqual(a["notes"], "")
 
 
 class TestRenderContext(unittest.TestCase):
-    def test_renders_only_filled_fields(self) -> None:
-        text = render_context(
-            {
-                "first_name": "Alex", "last_name": "Martin",
-                "work_status": "self", "business": "MyBiz",
-                "work_names": ["ClientX", "ProjY"],
-                "interests": ["Musique", "Voile"],
-            }
-        )
+    def test_renders_history_fields(self) -> None:
+        text = render_context({
+            "first_name": "Alex", "last_name": "Martin",
+            "professions": ["Dev", "Prof"], "employers": ["Acme", "Globex"],
+            "work_names": ["ClientX"], "interests": ["Musique"],
+            "banks": ["BNP Paribas", "Crédit Agricole"],
+            "housing": ["locataire", "ancien propriétaire"],
+        })
         self.assertIn("My name is Alex Martin.", text)
-        self.assertIn("My business: MyBiz.", text)
-        self.assertIn("Names that mean my work: ClientX, ProjY.", text)
-        self.assertIn("My hobbies / interests: Musique, Voile.", text)
-        # No household section when nothing was filled.
-        self.assertNotIn("[Household]", text)
+        self.assertIn("Professions (current or past): Dev, Prof.", text)
+        self.assertIn("Employers (current or past): Acme, Globex.", text)
+        self.assertIn("Names that mean my work: ClientX.", text)
+        self.assertIn("Banks (current or past): BNP Paribas, Crédit Agricole.", text)
+        self.assertIn("Housing (current or past): locataire, ancien propriétaire.", text)
 
-    def test_empty_answers_render_minimal(self) -> None:
-        text = render_context({"work_status": "none"})
-        self.assertIn("no professional activity", text)
-        self.assertNotIn("[About me]", text)
+    def test_empty_renders_nothing(self) -> None:
+        self.assertEqual(render_context({}).strip(), "")
 
 
 class TestSetupContext(unittest.TestCase):
@@ -83,26 +93,19 @@ class TestSetupContext(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_save_writes_the_context_file(self) -> None:
-        ask = _scripted(
-            ["Alex", "Martin", "", "4", "2", "", "", "", "", "", "", "", "", "1"]  # last "1" = Enregistrer
-        )
+        ask = _scripted(_answers(first="Alex", last="Martin", professions="Dev") + ["1"])  # "1" = Enregistrer
         _, out = _sink()
         target = setup_context(ask=ask, out=out)
-        self.assertIsNotNone(target)
-        assert target is not None
         self.assertEqual(target, Path(self.tmp.name) / "context.md")
-        self.assertTrue(target.is_file())
+        assert target is not None
         body = target.read_text(encoding="utf-8")
         self.assertIn("Alex Martin", body)
-        self.assertIn("Sport", body)  # interests "2"
+        self.assertIn("Dev", body)
 
     def test_cancel_writes_nothing(self) -> None:
-        ask = _scripted(
-            ["Alex", "Martin", "", "4", "", "", "", "", "", "", "", "", "", "2"]  # last "2" = Annuler
-        )
+        ask = _scripted(_answers(first="Alex", last="Martin") + ["2"])  # "2" = Annuler
         _, out = _sink()
-        target = setup_context(ask=ask, out=out)
-        self.assertIsNone(target)
+        self.assertIsNone(setup_context(ask=ask, out=out))
         self.assertFalse((Path(self.tmp.name) / "context.md").exists())
 
 
