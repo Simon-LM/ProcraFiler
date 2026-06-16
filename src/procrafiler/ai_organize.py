@@ -119,7 +119,11 @@ def _build_organize_prompt(
             "Context about the user — use what they DECLARED here as your reference when deciding "
             "where these documents belong (which subjects are personal vs professional in their "
             "life, who they are); the documents' content still rules:\n"
-            f"{user_context}\n\n"
+            f"{user_context}\n"
+            "Names the context lists as the user's WORK (employer, business, clients, projects, tools) "
+            "make a related document lean Work — but their work is not limited to that list; clearly "
+            "professional content is Work regardless. Under a broad personal base like Hobbies, file by "
+            "SUBJECT (e.g. .../Hobbies/Musique), the user's interests being a guide, not a closed list.\n\n"
         )
     else:
         context_block = ""
