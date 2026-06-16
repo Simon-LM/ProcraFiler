@@ -151,7 +151,10 @@ procrafiler process-once --dry-run  # simulate, mutate nothing
 procrafiler process-all             # process every file currently in the Inbox
 procrafiler process-all --dry-run
 procrafiler review                  # resolve files the AI was unsure about (the decisions queue)
+procrafiler setup-context           # guided questionnaire → your context file (helps the AI file your docs)
 ```
+
+`setup-context` is a short, universal questionnaire (who you are, your work + the names that mean *your* work, your interests, your household) that writes your **context file** for you — no config to hand-edit. It only **guides** the AI (the document's content still decides), so a hobby you forgot or a project you didn't list is still handled from the content. Your answers stay on your machine (the context file is gitignored, never committed).
 
 Files you drop **together in a subfolder** are treated as a set: after the per-file pass, `process-all` runs a **set-aware organize pass** (Mistral medium, `PROCRAFILER_AI_ORGANIZE_*`) that groups them into a shared **dated affair/series folder** (e.g. a water-damage claim → `…/Insurance/Degats-eaux-2025-08/`, recurring meter readings → a series folder). With no organize chain configured it's a no-op. Loose files at the Inbox root are handled individually.
 

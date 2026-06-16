@@ -101,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
     feature_set.add_argument("feature", choices=list(FEATURE_NAMES), help="Feature name")
     feature_set.add_argument("state", choices=["on", "off"], help="Target state")
 
+    subparsers.add_parser(
+        "setup-context",
+        help="Guided questionnaire to build your context file (helps the AI file your documents)",
+    )
+
     return parser
 
 
@@ -360,6 +365,15 @@ def cmd_review() -> int:
     return 0
 
 
+def cmd_setup_context() -> int:
+    # Resolve input/print at call time so the questionnaire reads the real
+    # terminal (and tests can inject their own ask/out).
+    from procrafiler.user_context_setup import setup_context
+
+    setup_context(ask=input, out=print)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_runtime_env()
     parser = build_parser()
@@ -389,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_reconcile_snapshot()
     if args.command == "review":
         return cmd_review()
+    if args.command == "setup-context":
+        return cmd_setup_context()
 
     parser.print_help()
     return 1

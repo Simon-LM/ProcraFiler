@@ -55,6 +55,28 @@ def _clean(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+def active_context_path() -> Path | None:
+    """The file `load_user_context` would currently read (first existing
+    candidate in the lookup order), or None when none exists."""
+    for path in _candidate_paths():
+        if path.is_file():
+            return path
+    return None
+
+
+def default_context_write_path() -> Path:
+    """Where `setup-context` writes the context: the explicit
+    `PROCRAFILER_CONTEXT_FILE` if set, else the per-user config home
+    (`<PROCRAFILER_CONFIG_HOME>/context.md`)."""
+    explicit = os.environ.get("PROCRAFILER_CONTEXT_FILE")
+    if explicit:
+        return Path(explicit)
+    config_home = Path(
+        os.environ.get("PROCRAFILER_CONFIG_HOME", str(Path.home() / ".config" / "procrafiler"))
+    )
+    return config_home / "context.md"
+
+
 def load_user_context() -> str | None:
     """Return the cleaned user-context text (capped at ``MAX_CONTEXT_CHARS``), or
     None when no context file exists or it carries no real content."""

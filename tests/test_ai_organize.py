@@ -125,6 +125,11 @@ class TestOrganizeSet(unittest.TestCase):
         # Generalist rule: the organizer must use the declared context as its
         # reference for classification (not a narrow hobby/pro check).
         self.assertIn("DECLARED here as your reference", prompt)
+        # D/B (run 11): work-names route to Work but don't limit it; Hobbies is
+        # filed by subject. Both are guides, not closed lists.
+        self.assertIn("lists as the user's WORK", prompt)
+        self.assertIn("not limited to that list", prompt)
+        self.assertIn("file by", prompt)  # "...file by SUBJECT (.../Hobbies/Musique)"
 
     def test_prompt_has_no_user_context_block_by_default(self) -> None:
         self.assertNotIn("Context about the user", _build_organize_prompt(DOCS, BASES, [], "Degats_eaux"))

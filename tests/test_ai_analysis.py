@@ -185,6 +185,23 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("MANIFESTLY the same subject", prompt)
         self.assertIn("never nested one inside the other", prompt)
 
+    def test_prompt_subject_first_under_broad_base(self) -> None:
+        # B (run 11): under Hobbies, lead with a SUBJECT folder (from the content);
+        # declared interests guide, they don't constrain. Fixes the conservatory
+        # (event) landing in the audio-gear folder — both belong under Musique.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("SUBJECT-FIRST under a broad personal base", prompt)
+        self.assertIn("Hobbies/Musique", prompt)
+        self.assertIn("NOT a closed list", prompt)
+
+    def test_prompt_work_names_are_a_guide_not_a_limit(self) -> None:
+        # D (run 11): names the context lists as work route to Work, but work is
+        # not limited to that list — clearly professional content is Work anyway.
+        prompt = _build_analysis_prompt("x", BASES, [], user_context="I run a business named Acme.")
+        self.assertIn("mean the user's WORK", prompt)
+        self.assertIn("NOT", prompt)
+        self.assertIn("limited to that list", prompt)
+
     def test_prompt_carries_filename_and_folder_as_hints(self) -> None:
         prompt = _build_analysis_prompt("x", BASES, [], original_filename="CV_Simon-LOUVEL.odt", source_folder="Dégats_eaux")
         self.assertIn("CV_Simon-LOUVEL.odt", prompt)

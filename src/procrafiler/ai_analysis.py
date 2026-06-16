@@ -109,6 +109,10 @@ def _build_analysis_prompt(
             "above, not by how professional the content looks: if it concerns one of the user's stated "
             "HOBBIES it is Personal — even when the equipment, skill, or venue is professional-grade; "
             "only a document of the user's stated JOB or business leans Work.\n"
+            "If the context lists names (employer, business, clients, projects, tools) that mean the "
+            "user's WORK, a document about any of them leans Work too — but the user's work is NOT "
+            "limited to that list: judge clearly professional content as Work even when its name is "
+            "not listed.\n"
         )
     # The original filename and the folder the user dropped it in are HINTS, not
     # ground truth: the content stays authoritative, but these help when the
@@ -162,6 +166,13 @@ def _build_analysis_prompt(
         "other). If confident about the base but unsure about the subfolder, return just the base — "
         "EXCEPT for a series, whose entity subfolder is REQUIRED (see SERIES RULE). If you truly cannot "
         "tell, set it to null.\n"
+        "  SUBJECT-FIRST under a broad personal base: under a wide bucket like Hobbies, LEAD with a "
+        "SUBJECT subfolder named for the document's topic (e.g. .../Hobbies/Musique, "
+        ".../Hobbies/Jardinage), then any finer folder UNDER it. Infer the subject from the CONTENT; the "
+        "user's stated interests are a GUIDE for naming/consistency, NOT a closed list — a document "
+        "about a hobby they did not declare still gets its own subject subfolder. Never put an equipment "
+        "or one-off folder DIRECTLY under the broad base: audio gear AND a music event both belong under "
+        ".../Hobbies/Musique, not directly under Hobbies.\n"
         "  SERIES RULE: if the document is of an obviously RECURRING kind (meter reading, bank "
         "statement, payslip, bill, tax notice, insurance policy, CV, certificate/attestation/"
         "diploma…), set \"series\": true and make "
