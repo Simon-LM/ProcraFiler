@@ -194,6 +194,21 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("Hobbies/Musique", prompt)
         self.assertIn("NOT a closed list", prompt)
 
+    def test_prompt_forbids_subject_folder_as_catch_all_offers_divers(self) -> None:
+        # run-13: the analysis was dumping unrelated files (avatar, chat screenshot)
+        # into Hobbies/Musique just because the folder existed. A subject folder is
+        # not a catch-all; genuinely miscellaneous files go to <base>/Divers.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("NOT A CATCH-ALL", prompt)
+        self.assertIn("EXISTENCE of such a folder", prompt)
+        self.assertIn("Divers", prompt)
+
+    def test_prompt_work_name_is_not_pulled_by_an_existing_hobby_folder(self) -> None:
+        # run-13: LostInTab (a declared work name) was split between Work and
+        # Hobbies/Musique. A declared work-name must route to Work consistently.
+        prompt = _build_analysis_prompt("x", BASES, [], user_context="LostInTab is my business.")
+        self.assertIn("never let an existing hobby folder pull a work document", prompt)
+
     def test_prompt_work_names_are_a_guide_not_a_limit(self) -> None:
         # D (run 11): names the context lists as work route to Work, but work is
         # not limited to that list — clearly professional content is Work anyway.
