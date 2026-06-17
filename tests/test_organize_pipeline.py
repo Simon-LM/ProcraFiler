@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
-from procrafiler.pipeline import process_all_inbox_files
+from procrafiler.pipeline import _heal_double_nestings, process_all_inbox_files
 
 AFFAIR = "Personal/Administrative/Insurance/Degats-eaux-2025-08"
 
@@ -52,6 +52,30 @@ class TestOrganizePipeline(unittest.TestCase):
     def _files_under(self, *parts: str) -> list[Path]:
         base = self.paths.library_root.joinpath(*parts)
         return [p for p in base.rglob("*") if p.is_file() and not p.is_symlink()] if base.exists() else []
+
+    def test_heal_double_nestings_collapses_and_repoints_catalog(self) -> None:
+        # End-of-batch self-heal: a …/X/X folder is merged back into …/X, and the
+        # moved file's catalog path is repointed (no manual command needed).
+        lib = self.paths.library_root
+        old = lib / "Personal/Education/OpenClassrooms/OpenClassrooms/2025/cert.png"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_bytes(b"png")
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        repo.upsert_document(
+            doc_id="doc-1", sha256="abc", current_filename="cert.png",
+            current_path=str(old), status="LIBRARY_STORED",
+            updated_at_utc="2026-01-01T00:00:00+00:00", flow_state="LIBRARY_STORED",
+        )
+
+        healed = _heal_double_nestings(self.paths, now_utc=self.now, features={}, emit=lambda _m: None)
+
+        new = lib / "Personal/Education/OpenClassrooms/2025/cert.png"
+        self.assertEqual(healed, 1)
+        self.assertTrue(new.is_file())
+        self.assertFalse((lib / "Personal/Education/OpenClassrooms/OpenClassrooms").exists())
+        self.assertEqual(repo.find_by_current_path(str(new))["doc_id"], "doc-1")
+        self.assertIsNone(repo.find_by_current_path(str(old)))
 
     def test_set_is_grouped_into_a_dated_affair_folder(self) -> None:
         os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = "mistral:mistral-medium-latest"

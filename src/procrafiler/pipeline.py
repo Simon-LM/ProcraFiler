@@ -1966,6 +1966,60 @@ def _regroup_existing_file(
 ORGANIZE_MAX_SET = 80
 
 
+def _heal_double_nestings(
+    paths: RuntimePaths,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> int:
+    """Self-healing step run at the END of every batch: collapse any accidental
+    double-nesting (`…/X/X` → `…/X`) the grouping may have produced, and keep the
+    catalog in sync by repointing each moved file's path. No user action needed —
+    this is automatic, not a command to remember.
+
+    Only consecutive identical path segments are merged; folders that merely share
+    a name in different places are never touched (see `collapse_nesting`)."""
+    from procrafiler.collapse_nesting import collapse_double_nestings
+
+    report = collapse_double_nestings(paths.library_root, apply=True)
+    if not report.redundant_dirs:
+        return 0
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    now_iso = _utc_iso(now_utc)
+    root = paths.library_root
+    # A move's (src, dst) may be a FILE or a whole DIRECTORY (when a clean subtree
+    # was relocated wholesale). Repoint every catalog record at OR under src.
+    for src, dst in report.moves:
+        for record in repo.list_documents():
+            current = record.get("current_path")
+            if not current:
+                continue
+            try:
+                rel = Path(current).relative_to(src)
+            except ValueError:
+                continue
+            new_path = dst if rel == Path(".") else dst / rel
+            repo.upsert_document(
+                doc_id=str(record["doc_id"]),
+                sha256=str(record["sha256"]),
+                current_filename=new_path.name,
+                current_path=str(new_path),
+                status=str(record["status"]),
+                updated_at_utc=now_iso,
+                flow_state=record.get("flow_state"),
+                pending_decision=None,
+                content_json=record.get("content_json"),
+            )
+        emit(f"   healed nesting: {src.relative_to(root)} → {dst.relative_to(root)}")
+    for src, dst in report.conflicts:
+        emit(f"   ⚠ nesting collapse skipped (name collision): {src.relative_to(root)}")
+    _write_catalog_snapshot(paths, repo, now_utc, features=features)
+    return len(report.redundant_dirs)
+
+
 def process_all_inbox_files(
     paths: RuntimePaths,
     now_utc: datetime | None = None,
@@ -1984,6 +2038,7 @@ def process_all_inbox_files(
         "regrouped": 0,
         "errors": 0,
         "mirror_failures": 0,
+        "collapsed_nestings": 0,
         "total": 0,
     }
 
@@ -2246,6 +2301,14 @@ def process_all_inbox_files(
 
     # Tidy up: drop the now-empty Inbox subfolders the processed files left behind.
     _prune_empty_inbox_dirs(paths.inbox_dir)
+
+    # Self-heal: collapse any double-nesting this run's grouping may have produced.
+    try:
+        summary["collapsed_nestings"] = _heal_double_nestings(
+            paths, now_utc=now_utc, features=features, emit=emit
+        )
+    except Exception as exc:  # noqa: BLE001 — healing must never fail the batch
+        emit(f"   ⚠ nesting self-heal skipped: {exc}")
 
     _append_action_log(
         paths,

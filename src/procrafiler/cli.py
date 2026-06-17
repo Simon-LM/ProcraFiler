@@ -106,12 +106,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
     )
 
-    collapse = subparsers.add_parser(
-        "collapse-nesting",
-        help="Repair accidental double-nesting in the library (…/X/X -> …/X). Dry-run by default.",
-    )
-    collapse.add_argument("--apply", action="store_true", help="Actually merge and remove the redundant folders")
-
     return parser
 
 
@@ -380,33 +374,6 @@ def cmd_setup_context() -> int:
     return 0
 
 
-def cmd_collapse_nesting(apply: bool) -> int:
-    from procrafiler.collapse_nesting import collapse_double_nestings
-
-    paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
-    root = paths.library_root
-    report = collapse_double_nestings(root, apply=apply)
-
-    if not report.redundant_dirs:
-        print(f"No double-nesting found under {root}.")
-        return 0
-
-    verb = "Collapsed" if apply else "Would collapse"
-    print(f"{verb} {len(report.redundant_dirs)} double-nested folder(s) under {root}:")
-    for child in report.redundant_dirs:
-        print(f"- {child.relative_to(root)}  ->  {child.parent.relative_to(root)}")
-    for src, dst in report.moves:
-        print(f"  {'moved' if apply else 'move'}: {src.relative_to(root)} -> {dst.relative_to(root)}")
-    for src, dst in report.conflicts:
-        print(f"  ⚠ conflict (left in place): {src.relative_to(root)} — {dst.relative_to(root)} already exists")
-    if not apply:
-        print("Dry-run only. Re-run with --apply to perform the collapse.")
-    elif report.conflicts:
-        print("Some files were left in place due to name collisions; resolve them by hand.")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     load_runtime_env()
     parser = build_parser()
@@ -438,8 +405,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_review()
     if args.command == "setup-context":
         return cmd_setup_context()
-    if args.command == "collapse-nesting":
-        return cmd_collapse_nesting(args.apply)
 
     parser.print_help()
     return 1
