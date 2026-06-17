@@ -107,6 +107,20 @@ class TestReconcilePure(unittest.TestCase):
         self.assertEqual(plan.deleted, [])
         self.assertEqual(plan.new_files, [])
 
+    def test_rename_in_place_plus_copy_elsewhere_is_move_plus_duplicate(self) -> None:
+        # Edge case (real run): the catalogued path is gone (renamed in place) AND
+        # a copy of the same content appears elsewhere. One copy is taken as the
+        # move; the OTHER is a duplicate — never a brand-new file to re-ingest and
+        # re-timestamp (which produced a doubled prefix).
+        rows = [_row("/lib/CAF/2025__Facture_CAF.pdf", "hX")]
+        disk = [Path("/lib/Admin/AR.pdf"), Path("/lib/CAF/2025__AR_CAF.pdf")]
+        plan = reconcile(disk, rows, lambda _p: "hX")
+        self.assertEqual(len(plan.moved), 1)
+        self.assertEqual(len(plan.duplicates), 1)
+        self.assertEqual(plan.new_files, [])  # nothing re-ingested
+        _copy, original = plan.duplicates[0]
+        self.assertEqual(original["doc_id"], rows[0]["doc_id"])
+
 
 class TestRunRescanIntegration(unittest.TestCase):
     def setUp(self) -> None:

@@ -18,6 +18,13 @@ def _slugify_stem(stem: str) -> str:
     return normalized or "file"
 
 
+# The app's own timestamp prefix, `YYYY-MM-DD_HH-MM-SS__`. Stripped FIRST (before
+# slugify collapses the `__`) so re-naming a file that already carries it — e.g.
+# rescan ingesting a hand-placed file the user named in our own format — does not
+# double the prefix (`…__00-00-00__…`). Matched on the RAW stem.
+_TIMESTAMP_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}__")
+
+
 def _strip_leading_date(stem: str) -> str:
     """Drop a redundant date that LEADS the stem — the timestamp prefix already
     carries the date. Only a month-precision date (YYYY-MM or YYYY-MM-DD) is
@@ -28,6 +35,7 @@ def _strip_leading_date(stem: str) -> str:
 
 
 def sanitize_filename_stem(stem: str) -> str:
+    stem = _TIMESTAMP_PREFIX_RE.sub("", stem)
     return _strip_leading_date(_slugify_stem(stem))
 
 

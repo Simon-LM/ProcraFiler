@@ -8,6 +8,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **rescan no longer double-prefixes nor re-ingests a file on a rename-in-place + duplicate edge case (run-17).** Two complementary fixes:
+
+  **(A) reconcile:** when the catalogued path is gone (you renamed a file IN PLACE) *and* a copy of the same content appears elsewhere, rescan now takes one copy as the move and treats the other(s) as **duplicates** — never as brand-new files to read and re-timestamp. (Previously the second same-content file fell through to NEW ingestion, producing a spurious copy with a malformed name.)
+
+  **(B) naming:** `sanitize_filename_stem` now strips an existing **full** app timestamp prefix (`YYYY-MM-DD_HH-MM-SS__`) before a fresh one is applied — earlier only the `YYYY-MM-DD` date was removed, so a file already named in our format got a **doubled** prefix (`…__00-00-00__…`) on ingestion. The user's stem is preserved. `tests/test_rescan.py` +1, `tests/test_naming.py` +1. 340 tests green.
+
 ### Changed
 
 - **Image formats the vision model can't decode are no longer sent to it; large batches warn before the heavy work.** Two ingestion-polish changes (run-15 follow-up):

@@ -40,6 +40,15 @@ class TestNaming(unittest.TestCase):
         name = build_timestamped_filename("2025-08_Degats-eaux-cuisine.jpg", now_utc=ts)
         self.assertEqual(name, "2026-04-01_22-10-06__Degats-eaux-cuisine.jpg")
 
+    def test_existing_full_timestamp_prefix_is_not_doubled(self) -> None:
+        # rescan ingesting a file the user already named in our format must not
+        # double the prefix (run-17 produced …__00-00-00__…). The whole leading
+        # YYYY-MM-DD_HH-MM-SS__ is dropped before the fresh prefix is applied.
+        self.assertEqual(sanitize_filename_stem("2025-06-07_00-00-00__AR_CAF"), "AR_CAF")
+        ts = datetime(2025, 6, 7, 0, 0, 0, tzinfo=timezone.utc)
+        name = build_timestamped_filename("2025-06-07_00-00-00__AR_CAF.pdf", now_utc=ts)
+        self.assertEqual(name, "2025-06-07_00-00-00__AR_CAF.pdf")
+
 
 if __name__ == "__main__":
     unittest.main()
