@@ -44,13 +44,20 @@ binary in the taxonomy) is not in the document — it depends on the user's
       job, so dropping a file in the Inbox processes it without a manual command.
       Today processing is on-demand only (`process-once` / `process-all`).
 - [ ] **`library-untrash`** — a restore command (currently restore is a manual `mv`).
-- [ ] **`rescan`** — the pure-secretary sync, AUTOMATIC before every run (and standalone):
-      a file the user placed by hand in the library is READ IN FULL (complete fiche into
-      the catalog, for future search) and gets the timestamp prefix (the user's stem is
-      untouched). It tracks every file by its content fingerprint (sha256), so ANY hand
+- [~] **`rescan`** — the pure-secretary sync, AUTOMATIC before every run (and standalone).
+      **Phase 1 SHIPPED** (`procrafiler.rescan` + `run_rescan` + CLI `rescan`/`deleted-history`):
+      path-first matching (a still file is never hashed), moves/renames (incl. whole folders)
+      → catalog repointed, deletions → row kept marked `DELETED` + logged (no alert) +
+      `deleted-history` command, deliberate duplicates → catalogued reusing the original's
+      fiche + alerted + untouched, re-deposits → `DELETED` row revived. **Phase 2 PENDING:**
+      ingest a brand-new hand-placed file — READ IN FULL (complete fiche into the catalog, for
+      future search), add the timestamp prefix (date AND time; the user's stem untouched), and
+      place a recurring kind into its `<Entity>/<Year>/` year subfolder like the run does. (In-place
+      CONTENT edits — same name, new bytes — are out of scope by design.)
+      It tracks every file by its content fingerprint (sha256), so ANY hand
       reorganization is followed without AI: a file renamed or moved, or a whole FOLDER
       renamed or moved (every file inside keeps its sha256), just has its catalog path/name
-      updated — no re-reading, no re-classification, no re-naming. A deleted file is flagged.
+      updated — no re-reading, no re-classification, no re-naming.
       This is the supported way to fix an awkward auto-named folder (e.g. rename `CV_LM` →
       `CV` and rescan follows). The AI *understands*, it never *decides* — the user's
       location and name always win.

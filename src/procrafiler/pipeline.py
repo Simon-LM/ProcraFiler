@@ -1966,6 +1966,116 @@ def _regroup_existing_file(
 ORGANIZE_MAX_SET = 80
 
 
+def run_rescan(
+    paths: RuntimePaths,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> dict[str, int]:
+    """Pure-secretary sync (Phase 1): follow hand reorganization of the library
+    into the catalog — moves/renames (incl. whole folders), deletions (kept as
+    DELETED rows), deliberate duplicates, and re-deposits — WITHOUT any AI and
+    WITHOUT writing to the library. Brand-new hand-placed files are only detected
+    and counted here (full ingestion is Phase 2). Every action is logged."""
+    from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files
+
+    counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0}
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    rows = repo.list_documents()
+    plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256)
+    counts["new"] = len(plan.new_files)
+    if plan.is_empty:
+        return counts
+
+    now_iso = _utc_iso(now_utc)
+    op = str(uuid4())
+    root = paths.library_root
+
+    def _rel(path: Any) -> str:
+        try:
+            return str(Path(str(path)).relative_to(root))
+        except ValueError:
+            return str(path)
+
+    for row, new_path in plan.moved:
+        old_path = str(row.get("current_path"))
+        repo.upsert_document(
+            doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
+            current_filename=new_path.name, current_path=str(new_path),
+            status=str(row.get("status") or "LIBRARY_STORED"), updated_at_utc=now_iso,
+            flow_state=row.get("flow_state"), pending_decision=None,
+            content_json=row.get("content_json"),
+        )
+        counts["moved"] += 1
+        emit(f"   rescan moved: {_rel(old_path)} → {_rel(new_path)}")
+        _append_action_log(
+            paths, operation_id=op, action="library_file_moved", status="success",
+            message="File moved/renamed by hand; catalog path updated (no AI).",
+            now_utc=now_utc, path_before=old_path, path_after=str(new_path), features=features,
+        )
+
+    for row, new_path in plan.readded:
+        repo.upsert_document(
+            doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
+            current_filename=new_path.name, current_path=str(new_path),
+            status="LIBRARY_STORED", updated_at_utc=now_iso,
+            flow_state=row.get("flow_state"), pending_decision=None,
+            content_json=row.get("content_json"),
+        )
+        counts["readded"] += 1
+        emit(f"   rescan re-added: {_rel(new_path)}")
+        _append_action_log(
+            paths, operation_id=op, action="library_file_readded", status="success",
+            message="Previously deleted content re-deposited by hand; catalog row revived (no AI).",
+            now_utc=now_utc, path_after=str(new_path), features=features,
+        )
+
+    for copy_path, original in plan.duplicates:
+        repo.upsert_document(
+            doc_id=str(uuid4()), sha256=str(original["sha256"]),
+            current_filename=copy_path.name, current_path=str(copy_path),
+            status="LIBRARY_STORED", updated_at_utc=now_iso,
+            flow_state=original.get("flow_state"), pending_decision=None,
+            content_json=original.get("content_json"),
+        )
+        counts["duplicates"] += 1
+        emit(f"   rescan duplicate: {_rel(copy_path)} (copy of {_rel(original.get('current_path'))})")
+        _append_action_log(
+            paths, operation_id=op, action="library_duplicate_detected", status="success",
+            message=f"Hand-placed duplicate of {original.get('current_path')}; catalogued, not acted on.",
+            now_utc=now_utc, path_after=str(copy_path), features=features,
+            extra_fields={"duplicate_of": str(original.get("current_path"))},
+        )
+
+    for row in plan.deleted:
+        old_path = str(row.get("current_path"))
+        repo.upsert_document(
+            doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
+            current_filename=str(row.get("current_filename") or Path(old_path).name),
+            current_path=old_path, status=DELETED_STATUS, updated_at_utc=now_iso,
+            flow_state=row.get("flow_state"), pending_decision=None,
+            content_json=row.get("content_json"),
+        )
+        counts["deleted"] += 1
+        _append_action_log(
+            paths, operation_id=op, action="library_file_deleted", status="success",
+            message="File deleted from the library by hand; catalog row marked DELETED.",
+            now_utc=now_utc, path_before=old_path, features=features,
+        )
+
+    for new_path in plan.new_files:
+        _append_action_log(
+            paths, operation_id=op, action="library_new_file_detected", status="success",
+            message="New hand-placed file detected; awaiting full ingestion (rescan Phase 2).",
+            now_utc=now_utc, path_after=str(new_path), features=features,
+        )
+
+    _write_catalog_snapshot(paths, repo, now_utc, features=features)
+    return counts
+
+
 def _heal_double_nestings(
     paths: RuntimePaths,
     *,
@@ -2039,6 +2149,8 @@ def process_all_inbox_files(
         "errors": 0,
         "mirror_failures": 0,
         "collapsed_nestings": 0,
+        "rescan_moved": 0,
+        "rescan_new": 0,
         "total": 0,
     }
 
@@ -2078,6 +2190,15 @@ def process_all_inbox_files(
         return summary
 
     emit: ProgressFn = progress or (lambda _message: None)
+
+    # Pure-secretary sync FIRST: follow any hand reorganization of the library
+    # into the catalog before the AI makes new decisions. Never aborts the batch.
+    try:
+        rescan_counts = run_rescan(paths, now_utc=now_utc, features=features, emit=emit)
+        summary["rescan_moved"] = rescan_counts["moved"]
+        summary["rescan_new"] = rescan_counts["new"]
+    except Exception as exc:  # noqa: BLE001 — rescan must never fail the batch
+        emit(f"   ⚠ rescan skipped: {exc}")
 
     def _tally(result: ProcessResult, *, organized: bool = False) -> None:
         summary["total"] += 1

@@ -44,6 +44,7 @@ from procrafiler.pipeline import (
     LibraryTrashError,
     move_library_file_to_trash,
     process_all_inbox_files,
+    run_rescan,
     process_next_inbox_file,
     reconcile_catalog_snapshot,
     run_review,
@@ -105,6 +106,17 @@ def build_parser() -> argparse.ArgumentParser:
         "setup-context",
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
     )
+
+    subparsers.add_parser(
+        "rescan",
+        help="Follow hand reorganization of the library (moves/renames/deletes) into the catalog. No AI.",
+    )
+
+    deleted_history = subparsers.add_parser(
+        "deleted-history",
+        help="List library files deleted by hand (from the action log)",
+    )
+    deleted_history.add_argument("--limit", type=int, default=50, help="Most recent N entries (default: 50)")
 
     return parser
 
@@ -374,6 +386,53 @@ def cmd_setup_context() -> int:
     return 0
 
 
+def cmd_rescan() -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
+    try:
+        with runtime_lock(paths):
+            counts = run_rescan(paths, now_utc=now_utc, features=load_feature_settings(paths)["features"], emit=_live)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(
+        "Rescan: "
+        f"moved: {counts['moved']}, re-added: {counts['readded']}, "
+        f"duplicates: {counts['duplicates']}, deleted: {counts['deleted']}, "
+        f"new (await ingestion): {counts['new']}"
+    )
+    return 0
+
+
+def cmd_deleted_history(limit: int) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    log_file = paths.actions_log_file
+    if not log_file.exists():
+        print("No action log yet.")
+        return 0
+    entries: list[dict[str, object]] = []
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("action") == "library_file_deleted":
+            entries.append(event)
+    if not entries:
+        print("No library files have been deleted by hand.")
+        return 0
+    shown = entries[-limit:] if limit and limit > 0 else entries
+    print(f"Library files deleted by hand ({len(shown)} of {len(entries)}):")
+    for event in shown:
+        print(f"- {event.get('event_time_utc', '?')}  {event.get('path_before', '?')}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_runtime_env()
     parser = build_parser()
@@ -405,6 +464,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_review()
     if args.command == "setup-context":
         return cmd_setup_context()
+    if args.command == "rescan":
+        return cmd_rescan()
+    if args.command == "deleted-history":
+        return cmd_deleted_history(args.limit)
 
     parser.print_help()
     return 1

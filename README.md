@@ -160,16 +160,20 @@ Files you drop **together in a subfolder** are treated as a set: after the per-f
 
 When the AI cannot confidently place a file but has plausible candidates, it does not guess: the file is parked in the **decisions queue** (`Manual_Review`, status `DECISION_PENDING`) and `process-all` tells you how many are waiting. `procrafiler review` walks them one by one, showing the AI's options — you pick one, type a custom path (a new subfolder, or a brand-new top-level category, which is allowed only here), or skip. Only once you resolve a file is it re-filed and mirrored.
 
+When you reorganize the library **by hand** — rename a file, move it, or rename/move a whole folder — `process-all` first runs a **rescan** (also available standalone) that follows your changes into the catalog **without any AI**: it tracks each file by its content fingerprint, so a moved or renamed file (or every file in a renamed folder) just has its catalog path updated — never re-read, re-classified or re-named. **Your location and name always win.** A file you deleted by hand is recorded (and listable via `deleted-history`); a deliberate duplicate you placed is catalogued but never touched.
+
 Diagnostics and maintenance:
 
 ```bash
 procrafiler doctor                  # check paths, env, AI config, catalog, lock (exit non-zero on FAIL)
+procrafiler rescan                  # follow hand moves/renames/deletes in the library into the catalog (no AI)
+procrafiler deleted-history         # list library files you deleted by hand (from the action log)
 procrafiler reconcile-snapshot      # rebuild catalog_snapshot.json from the DB if they drifted
 procrafiler library-trash <path>    # move a library file to Library_Trash_Manual (you delete manually)
 procrafiler purge-mirror-trash      # delete old mirror backups from Mirror_Trash by TTL
 ```
 
-Mutating commands (`process-*`, `library-trash`, `purge-mirror-trash`) take a runtime lock, so two runs never race on the same Inbox.
+Mutating commands (`process-*`, `rescan`, `library-trash`, `purge-mirror-trash`) take a runtime lock, so two runs never race on the same Inbox.
 
 ## Feature Controls (Terminal)
 
