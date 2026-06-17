@@ -148,19 +148,43 @@ class TestRunRescanIntegration(unittest.TestCase):
         pass
 
     def test_moved_file_repoints_catalog(self) -> None:
+        # An already-prefixed file just dragged to a new folder: pure repoint, no
+        # rename (its prefix is valid and is never re-dated).
         lib = self.paths.library_root
-        new = lib / "Personal" / "Administrative" / "Banking" / "Releve.txt"
+        new = lib / "Personal" / "Administrative" / "Banking" / "2026-04-30_00-00-00__Releve.txt"
         new.parent.mkdir(parents=True, exist_ok=True)
         new.write_bytes(b"releve content")
-        old = lib / "Personal" / "Releve.txt"
+        old = lib / "Personal" / "2026-04-30_00-00-00__Releve.txt"
         self.repo.upsert_document(
-            doc_id="doc-1", sha256=_file_sha256(new), current_filename="Releve.txt",
+            doc_id="doc-1", sha256=_file_sha256(new), current_filename=new.name,
             current_path=str(old), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
         )
         counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
         self.assertEqual(counts["moved"], 1)
+        self.assertTrue(new.is_file())  # not renamed
         self.assertEqual(self.repo.find_by_current_path(str(new))["doc_id"], "doc-1")
         self.assertIsNone(self.repo.find_by_current_path(str(old)))
+
+    def test_renamed_file_without_prefix_gets_one_from_its_fiche(self) -> None:
+        # run-17: you renamed a filed doc to `AR.pdf` (no prefix). The horodatage
+        # is the app's — rescan re-applies it from the fiche date, keeping `AR`.
+        import json as _json
+        lib = self.paths.library_root
+        new = lib / "Personal" / "Administrative" / "AR.pdf"
+        new.parent.mkdir(parents=True, exist_ok=True)
+        new.write_bytes(b"caf content")
+        old = lib / "Personal" / "Administrative" / "Housing" / "CAF" / "2025-06-07_00-00-00__Facture_CAF.pdf"
+        self.repo.upsert_document(
+            doc_id="doc-caf", sha256=_file_sha256(new), current_filename="AR.pdf",
+            current_path=str(old), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+            content_json=_json.dumps({"effective_date": "2025-06-07"}),
+        )
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["moved"], 1)
+        prefixed = new.parent / "2025-06-07_00-00-00__AR.pdf"
+        self.assertTrue(prefixed.is_file())
+        self.assertFalse(new.exists())
+        self.assertEqual(self.repo.find_by_current_path(str(prefixed))["doc_id"], "doc-caf")
 
     def test_deleted_file_marks_row_and_logs(self) -> None:
         old = self.paths.library_root / "Personal" / "Gone.txt"

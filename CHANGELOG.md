@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **rescan now ENSURES the timestamp prefix on every library file — the horodatage is the app's job (spec/backlog).** Previously a file you moved/renamed without the prefix (e.g. `…__Facture_CAF.pdf` → `AR.pdf`) kept your name verbatim and stayed prefix-less, and a hand-placed duplicate was left untouched. Now any **moved / re-added / duplicate** file that lacks the canonical `YYYY-MM-DD_HH-MM-SS__` prefix gets one — built from its catalogued **fiche date** (no AI), keeping your stem (`AR.pdf` → `2025-06-07_00-00-00__AR.pdf`). A file that already carries a valid prefix is **never re-dated** (a plain drag-to-reorganize stays a pure catalog repoint). A duplicate is still never deduplicated/symlinked/reorganized — it just receives the prefix like any library file. New `naming.has_timestamp_prefix` + `_ensure_timestamp_prefix` / `_fiche_effective_dt` in the pipeline. `tests/test_rescan.py` +1, `tests/test_naming.py` unchanged. 341 tests green.
+
 ### Fixed
 
 - **rescan no longer double-prefixes nor re-ingests a file on a rename-in-place + duplicate edge case (run-17).** Two complementary fixes:

@@ -39,6 +39,13 @@ def sanitize_filename_stem(stem: str) -> str:
     return _strip_leading_date(_slugify_stem(stem))
 
 
+def has_timestamp_prefix(name: str) -> bool:
+    """True when `name` already carries the app's `YYYY-MM-DD_HH-MM-SS__` prefix —
+    so rescan can ENSURE the prefix on a file that lacks one without re-stamping
+    (and re-dating) one that already has it."""
+    return bool(_TIMESTAMP_PREFIX_RE.match(name))
+
+
 def build_timestamped_filename(original_name: str, now_utc: datetime | None = None) -> str:
     """Build an MVP-compliant UTC-prefixed filename.
 
