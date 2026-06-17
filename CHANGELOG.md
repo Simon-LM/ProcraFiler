@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **Base-tree folders are English-only again: `Reseaux-sociaux` → `Social-media`, `Divers` → `Misc`.** The base taxonomy is English throughout (`Personal`, `Banking`, `Housing`, `Utilities`, `Education`, `Hobbies`…); two folders added in this cycle had slipped into French. Renamed in the taxonomy and in the analysis/organize prompts so new files use the English names. (Folders already created under the old names in an existing library are not auto-migrated — they'll simply stop being added to.) Tests updated; 323 tests green.
+
 ### Added
 
 - **A `Personal/Reseaux-sociaux` subject for social-media / online content, plus a questionnaire question about content you create (run-14 follow-up).** Avatars, profile pictures, memes, thumbnails, screenshots of social posts/chats, and the user's own videos/posts now have a real home — instead of being absorbed by an unrelated hobby folder (run-14: an avatar and a personal video landed in `Hobbies/Musique`). New base folder `Personal/Reseaux-sociaux`; the analysis and organize prompts route social/online content there — UNLESS it is clearly the user's declared **job/business**, in which case it leans Work (routing by declared context, not a fixed rule). `setup-context` gains an "online content you create (platforms / handles)" question, rendered as an `[Online content]` context line so the AI recognises when the user actively makes content. `tests/test_user_context_setup.py` +1, `tests/test_ai_analysis.py` +1. 317 tests green.

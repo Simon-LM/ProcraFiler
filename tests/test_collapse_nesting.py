@@ -30,14 +30,14 @@ class TestCollapseNesting(unittest.TestCase):
         self.assertEqual(report.conflicts, [])
 
     def test_same_name_in_different_places_is_left_alone(self) -> None:
-        # Divers under Personal AND under Work is normal — never touched.
-        self._touch("Personal", "Divers", "a.txt")
-        self._touch("Work", "Divers", "b.txt")
+        # Misc under Personal AND under Work is normal — never touched.
+        self._touch("Personal", "Misc", "a.txt")
+        self._touch("Work", "Misc", "b.txt")
         self._touch("Personal", "Administrative", "Factures", "c.txt")
         self.assertEqual(find_double_nestings(self.root), [])
         collapse_double_nestings(self.root, apply=True)
-        self.assertTrue((self.root / "Personal/Divers/a.txt").is_file())
-        self.assertTrue((self.root / "Work/Divers/b.txt").is_file())
+        self.assertTrue((self.root / "Personal/Misc/a.txt").is_file())
+        self.assertTrue((self.root / "Work/Misc/b.txt").is_file())
 
     def test_triple_nesting_collapses_inside_out(self) -> None:
         self._touch("X", "X", "X", "deep.txt")
