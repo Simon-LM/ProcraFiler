@@ -21,6 +21,37 @@ def _row(path: str, sha: str, status: str = "LIBRARY_STORED", doc_id: str | None
     }
 
 
+class TestWalkLibraryFiles(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _touch(self, *parts: str) -> Path:
+        p = self.root.joinpath(*parts)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+        return p
+
+    def test_skips_hidden_files_and_dirs(self) -> None:
+        doc = self._touch("Personal", "note.txt")
+        self._touch("Personal", ".hidden.txt")
+        self._touch("Personal", ".config", "settings.ini")
+        self.assertEqual(walk_library_files(self.root), [doc])
+
+    def test_never_descends_into_a_git_repo(self) -> None:
+        # The run-15 disaster: a dropped folder containing a .git had its repo
+        # internals AND working tree timestamped. The whole repo is left alone.
+        doc = self._touch("Personal", "keep.txt")
+        self._touch("Work", "Backup", "repo", ".git", "HEAD")
+        self._touch("Work", "Backup", "repo", ".git", "objects", "ab", "deadbeef")
+        self._touch("Work", "Backup", "repo", "src", "main.py")  # working tree
+        self._touch("Work", "Backup", "repo", "README.md")
+        self.assertEqual(walk_library_files(self.root), [doc])
+
+
 class TestReconcilePure(unittest.TestCase):
     def test_known_path_is_untouched_and_never_hashed(self) -> None:
         hashed: list[Path] = []

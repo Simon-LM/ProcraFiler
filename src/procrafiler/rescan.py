@@ -49,11 +49,33 @@ class RescanPlan:
 
 
 def walk_library_files(library_root: Path) -> list[Path]:
-    """Every REAL file under the library (no symlinks, sorted). The library's
-    trash and the mirror live OUTSIDE ``library_root``, so they are not seen."""
+    """Every REAL DOCUMENT file under the library (sorted). Excluded, because they
+    are never loose documents and renaming them would do harm:
+
+    - symlinks (the library's internal back-references);
+    - hidden files and anything under a hidden directory (`.git`, `.config`, …) —
+      touching a `.git` internal would corrupt the repository;
+    - any file inside a VERSION-CONTROL REPOSITORY (a directory that contains a
+      `.git`): the user dropped a repo as a UNIT, not a pile of files to file —
+      timestamping its working tree would break it. The whole subtree is left
+      alone.
+
+    The library's trash and the mirror live OUTSIDE ``library_root`` already."""
     if not library_root.exists():
         return []
-    return sorted(p for p in library_root.rglob("*") if p.is_file() and not p.is_symlink())
+    all_paths = list(library_root.rglob("*"))
+    # A repo root is the parent of a `.git` entry (a dir, or a file for worktrees).
+    repo_roots = [p.parent for p in all_paths if p.name == ".git"]
+    files: list[Path] = []
+    for p in all_paths:
+        if not p.is_file() or p.is_symlink():
+            continue
+        if any(part.startswith(".") for part in p.relative_to(library_root).parts):
+            continue  # hidden file, or under a hidden dir (e.g. .git internals)
+        if any(p.is_relative_to(root) for root in repo_roots):
+            continue  # inside a VCS repository — leave the unit untouched
+        files.append(p)
+    return sorted(files)
 
 
 def reconcile(
