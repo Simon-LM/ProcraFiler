@@ -122,8 +122,14 @@ def _build_organize_prompt(
             f"{user_context}\n"
             "Names the context lists as the user's WORK (employer, business, clients, projects, tools) "
             "make a related document lean Work — but their work is not limited to that list; clearly "
-            "professional content is Work regardless. Under a broad personal base like Hobbies, file by "
-            "SUBJECT (e.g. .../Hobbies/Musique), the user's interests being a guide, not a closed list.\n\n"
+            "professional content is Work regardless. Apply this consistently: a document mentioning a "
+            "declared work-name goes under Work even when an existing Hobbies folder looks related — an "
+            "existing hobby folder must never pull a work document in. Under a broad personal base like "
+            "Hobbies, file by SUBJECT (e.g. .../Hobbies/Musique), the user's interests being a guide, "
+            "not a closed list. A subject folder is NOT a catch-all: file there only when the content "
+            "is clearly about that subject — the mere existence of the folder is not a reason. A "
+            "genuinely miscellaneous document (no clear subject, no series) goes to \"<base>/Divers\" "
+            "(e.g. Personal/Divers), used only as a last resort.\n\n"
         )
     else:
         context_block = ""

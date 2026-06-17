@@ -10,6 +10,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **The analysis no longer turns an existing subject folder into a catch-all magnet, declared work-names route to Work consistently, and a `Divers` folder absorbs the genuinely miscellaneous (run-13).** Once the grouping guard (#51) stopped the grouping from overriding the analysis, the remaining misfiles came from the **analysis itself**: ambiguous files (an avatar, a chat screenshot, a subtitle file) were dropped into `Hobbies/Musique` just because that folder existed, and a declared work-name (LostInTab) was split between `Work/Business` and `Hobbies/Musique`. Three prompt/taxonomy changes (analysis + organize):
+
+  **(Anti-magnet):** a subject folder is explicitly **not a catch-all** — file under `…/Hobbies/<subject>` (or any existing subject folder) only when the CONTENT is clearly about that subject; the mere existence of the folder in the tree is not a reason.
+
+  **(Firm work routing):** a document mentioning a declared work-name belongs under Work **even when an existing Hobbies folder looks related** — an existing hobby folder must never pull a work document in. Applied the same way every time (work is still not _limited_ to the declared list — clearly professional content is Work regardless).
+
+  **(`Divers` catch-all):** new base folders `Personal/Divers` and `Work/Divers` give the genuinely miscellaneous (no clear subject, no series) a home instead of an unrelated existing folder — used only as a LAST RESORT. `tests/test_ai_analysis.py` +2. 315 tests green.
+
 - **The `setup-context` questionnaire asks about housing as two distinct, place-anchored questions.** The single "Logement (propriétaire, locataire…)" question — which conflated legal status with the home itself and didn't say what to type — is split into **rented homes** and **owned properties** (both current and past, comma-separated), each asking for a **place label (city or street)** so the AI can recognise the home a document refers to (a lease/rent receipt vs a deed/property tax). Answer keys `housing` → `rentals` + `properties`; rendered as "Rented homes … by place" / "Owned properties … by place". `tests/test_user_context_setup.py` updated. 313 tests green.
 
 - **Singleton grouping can no longer override a good classification, and the `setup-context` questionnaire now captures document HISTORY (run-12).** Two changes:

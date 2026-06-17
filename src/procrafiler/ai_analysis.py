@@ -112,7 +112,9 @@ def _build_analysis_prompt(
             "If the context lists names (employer, business, clients, projects, tools) that mean the "
             "user's WORK, a document about any of them leans Work too — but the user's work is NOT "
             "limited to that list: judge clearly professional content as Work even when its name is "
-            "not listed.\n"
+            "not listed. Apply this the SAME WAY every time: a document mentioning a declared "
+            "work-name belongs under Work even when an existing Personal/Hobbies folder looks related "
+            "— never let an existing hobby folder pull a work document into it.\n"
         )
     # The original filename and the folder the user dropped it in are HINTS, not
     # ground truth: the content stays authoritative, but these help when the
@@ -173,6 +175,14 @@ def _build_analysis_prompt(
         "about a hobby they did not declare still gets its own subject subfolder. Never put an equipment "
         "or one-off folder DIRECTLY under the broad base: audio gear AND a music event both belong under "
         ".../Hobbies/Musique, not directly under Hobbies.\n"
+        "  NOT A CATCH-ALL: only file under .../Hobbies/<subject> (or any existing subject folder) when "
+        "the CONTENT is clearly about that subject. The mere EXISTENCE of such a folder in the tree is "
+        "NOT a reason to send an unrelated file there — an avatar image, a chat screenshot, a random "
+        "note do NOT become Music just because a Musique folder exists. When a document fits no clear "
+        "subject and is no series, file it in the catch-all \"<base>/Divers\" (e.g. Personal/Divers, "
+        "Work/Divers) rather than forcing it under an unrelated existing folder — but use Divers only "
+        "as a LAST RESORT, when you genuinely cannot name a subject; a clearly-themed document still "
+        "gets its own subject folder.\n"
         "  SERIES RULE: if the document is of an obviously RECURRING kind (meter reading, bank "
         "statement, payslip, bill, tax notice, insurance policy, CV, certificate/attestation/"
         "diploma…), set \"series\": true and make "
