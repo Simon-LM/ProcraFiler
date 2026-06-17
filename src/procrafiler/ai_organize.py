@@ -129,7 +129,10 @@ def _build_organize_prompt(
             "not a closed list. A subject folder is NOT a catch-all: file there only when the content "
             "is clearly about that subject — the mere existence of the folder is not a reason. A "
             "genuinely miscellaneous document (no clear subject, no series) goes to \"<base>/Divers\" "
-            "(e.g. Personal/Divers), used only as a last resort.\n\n"
+            "(e.g. Personal/Divers), used only as a last resort. Social-media / online content — "
+            "avatars, memes, thumbnails, screenshots of social posts, the user's own videos/posts — "
+            "goes under \"Personal/Reseaux-sociaux\" (not a hobby, not Divers), unless it is clearly "
+            "the user's declared job/business (then Work).\n\n"
         )
     else:
         context_block = ""

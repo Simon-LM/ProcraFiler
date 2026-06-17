@@ -203,6 +203,13 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("EXISTENCE of such a folder", prompt)
         self.assertIn("Divers", prompt)
 
+    def test_prompt_routes_social_content_to_reseaux_sociaux(self) -> None:
+        # run-14 follow-up: an avatar / a personal video must land under a real
+        # social-media subject, not in Musique and not in Divers.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("Personal/Reseaux-sociaux", prompt)
+        self.assertIn("avatars", prompt)
+
     def test_prompt_work_name_is_not_pulled_by_an_existing_hobby_folder(self) -> None:
         # run-13: LostInTab (a declared work name) was split between Work and
         # Hobbies/Musique. A declared work-name must route to Work consistently.

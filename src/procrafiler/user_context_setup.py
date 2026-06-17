@@ -91,6 +91,7 @@ def collect_answers(ask: AskFn, out: OutFn) -> dict[str, Any]:
 
     out("\n3/5 · Tes centres d'intérêt   (crée seulement ces dossiers-là)")
     a["interests"] = _checklist(ask, out, INTERESTS)
+    a["online_content"] = _csv(ask, out, "Tu crées / publies du contenu en ligne ? (vidéos, posts, streams, podcasts — plateformes ou pseudos)")
 
     out("\n4/5 · Ton foyer   (optionnel — Entrée pour passer)")
     a["banks"] = _csv(ask, out, "Banque(s), actuelles et passées ?")
@@ -140,6 +141,13 @@ def render_context(a: dict[str, Any]) -> str:
 
     if a.get("interests"):
         lines += ["[My interests]", "My hobbies / interests: " + ", ".join(a["interests"]) + ".", ""]
+
+    if a.get("online_content"):
+        lines += [
+            "[Online content]",
+            "I create or publish online content on/as: " + ", ".join(a["online_content"]) + ".",
+            "",
+        ]
 
     household: list[str] = []
     _line(household, "Banks (current or past)", a.get("banks"))
