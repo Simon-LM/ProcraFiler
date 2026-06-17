@@ -97,7 +97,8 @@ def collect_answers(ask: AskFn, out: OutFn) -> dict[str, Any]:
     a["insurers"] = _csv(ask, out, "Assurance(s) ?")
     a["energy"] = _csv(ask, out, "Énergie / eau — fournisseurs actuels et passés ?")
     a["telecom"] = _csv(ask, out, "Téléphone / internet — fournisseurs (plusieurs possibles) ?")
-    a["housing"] = _csv(ask, out, "Logement, actuel et passé (propriétaire, locataire…) ?")
+    a["rentals"] = _csv(ask, out, "Logements en location, actuels et passés ? (ville ou rue — pour reconnaître baux, quittances, états des lieux)")
+    a["properties"] = _csv(ask, out, "Biens immobiliers que tu possèdes / as possédés ? (ville ou rue — pour reconnaître actes, taxe foncière, prêt)")
     a["vehicles"] = _csv(ask, out, "Véhicule(s) ? (ex: voiture, moto)")
     a["household"] = _csv(ask, out, "Prénoms du foyer (conjoint, enfants…) ?")
 
@@ -145,7 +146,8 @@ def render_context(a: dict[str, Any]) -> str:
     _line(household, "Insurers", a.get("insurers"))
     _line(household, "Energy/water providers (current or past)", a.get("energy"))
     _line(household, "Phone/internet providers", a.get("telecom"))
-    _line(household, "Housing (current or past)", a.get("housing"))
+    _line(household, "Rented homes (current or past), by place", a.get("rentals"))
+    _line(household, "Owned properties (current or past), by place", a.get("properties"))
     _line(household, "Vehicles", a.get("vehicles"))
     _line(household, "Household members", a.get("household"))
     if household:

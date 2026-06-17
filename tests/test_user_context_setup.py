@@ -19,16 +19,17 @@ def _sink() -> tuple[list[str], object]:
     return lines, lines.append
 
 
-# The questionnaire is linear (no branching); 16 questions in order.
+# The questionnaire is linear (no branching); 17 questions in order.
 def _answers(
     *,
     first="", last="", aliases="", professions="", employers="", businesses="",
     work_names="", interests="", banks="", insurers="", energy="", telecom="",
-    housing="", vehicles="", household="", notes="",
+    rentals="", properties="", vehicles="", household="", notes="",
 ) -> list[str]:
     return [
         first, last, aliases, professions, employers, businesses, work_names,
-        interests, banks, insurers, energy, telecom, housing, vehicles, household, notes,
+        interests, banks, insurers, energy, telecom, rentals, properties,
+        vehicles, household, notes,
     ]
 
 
@@ -41,7 +42,7 @@ class TestCollectAnswers(unittest.TestCase):
             professions="Dev, Prof", employers="Acme, Globex", businesses="MyBiz",
             work_names="ClientX, ProjY", interests="1, 3, voile",
             banks="BNP Paribas, Crédit Agricole", telecom="Free, Orange",
-            housing="locataire, ancien propriétaire", household="Sam, Lou",
+            rentals="Annoville, Fougères", properties="Paris 11e", household="Sam, Lou",
         ))
         _, out = _sink()
         a = collect_answers(ask, out)
@@ -51,7 +52,8 @@ class TestCollectAnswers(unittest.TestCase):
         self.assertEqual(a["interests"], ["Musique", "Lecture", "voile"])  # 1,3 + free
         self.assertEqual(a["banks"], ["BNP Paribas", "Crédit Agricole"])   # spaces kept
         self.assertEqual(a["telecom"], ["Free", "Orange"])
-        self.assertEqual(a["housing"], ["locataire", "ancien propriétaire"])
+        self.assertEqual(a["rentals"], ["Annoville", "Fougères"])          # place labels
+        self.assertEqual(a["properties"], ["Paris 11e"])
         self.assertEqual(a["household"], ["Sam", "Lou"])
 
     def test_everything_skippable(self) -> None:
@@ -69,14 +71,15 @@ class TestRenderContext(unittest.TestCase):
             "professions": ["Dev", "Prof"], "employers": ["Acme", "Globex"],
             "work_names": ["ClientX"], "interests": ["Musique"],
             "banks": ["BNP Paribas", "Crédit Agricole"],
-            "housing": ["locataire", "ancien propriétaire"],
+            "rentals": ["Annoville", "Fougères"], "properties": ["Paris 11e"],
         })
         self.assertIn("My name is Alex Martin.", text)
         self.assertIn("Professions (current or past): Dev, Prof.", text)
         self.assertIn("Employers (current or past): Acme, Globex.", text)
         self.assertIn("Names that mean my work: ClientX.", text)
         self.assertIn("Banks (current or past): BNP Paribas, Crédit Agricole.", text)
-        self.assertIn("Housing (current or past): locataire, ancien propriétaire.", text)
+        self.assertIn("Rented homes (current or past), by place: Annoville, Fougères.", text)
+        self.assertIn("Owned properties (current or past), by place: Paris 11e.", text)
 
     def test_empty_renders_nothing(self) -> None:
         self.assertEqual(render_context({}).strip(), "")
