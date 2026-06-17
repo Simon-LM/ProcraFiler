@@ -113,16 +113,24 @@ def reconcile(
         deleted_by_hash[str(r.get("sha256"))].append(r)
 
     claimed_gone: set[int] = set()
+    moved_by_hash: dict[str, Row] = {}  # the row matched as a move, per content
     for path in unknown_disk:
         digest = sha256_of(path)
         moved_candidates = gone_by_hash.get(digest)
         if moved_candidates:
             row = moved_candidates.pop(0)
             claimed_gone.add(id(row))
+            moved_by_hash[digest] = row
             plan.moved.append((row, path))
             continue
-        if digest in present_by_hash:
-            plan.duplicates.append((path, present_by_hash[digest]))
+        # Content already in the catalog but this file is NOT the one chosen as
+        # the move → it's a duplicate, never a re-ingestion. Covers the edge case
+        # where the user renames a file IN PLACE *and* drops a copy of it
+        # elsewhere: the catalogued path is gone, one copy is taken as the move,
+        # the other(s) are duplicates of it — not brand-new files to timestamp.
+        original = present_by_hash.get(digest) or moved_by_hash.get(digest)
+        if original is not None:
+            plan.duplicates.append((path, original))
             continue
         readd_candidates = deleted_by_hash.get(digest)
         if readd_candidates:
