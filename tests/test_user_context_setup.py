@@ -19,17 +19,17 @@ def _sink() -> tuple[list[str], object]:
     return lines, lines.append
 
 
-# The questionnaire is linear (no branching); 17 questions in order.
+# The questionnaire is linear (no branching); 18 questions in order.
 def _answers(
     *,
     first="", last="", aliases="", professions="", employers="", businesses="",
-    work_names="", interests="", banks="", insurers="", energy="", telecom="",
-    rentals="", properties="", vehicles="", household="", notes="",
+    work_names="", interests="", online_content="", banks="", insurers="", energy="",
+    telecom="", rentals="", properties="", vehicles="", household="", notes="",
 ) -> list[str]:
     return [
         first, last, aliases, professions, employers, businesses, work_names,
-        interests, banks, insurers, energy, telecom, rentals, properties,
-        vehicles, household, notes,
+        interests, online_content, banks, insurers, energy, telecom, rentals,
+        properties, vehicles, household, notes,
     ]
 
 
@@ -80,6 +80,11 @@ class TestRenderContext(unittest.TestCase):
         self.assertIn("Banks (current or past): BNP Paribas, Crédit Agricole.", text)
         self.assertIn("Rented homes (current or past), by place: Annoville, Fougères.", text)
         self.assertIn("Owned properties (current or past), by place: Paris 11e.", text)
+
+    def test_renders_online_content(self) -> None:
+        text = render_context({"online_content": ["YouTube @alex", "TikTok"]})
+        self.assertIn("[Online content]", text)
+        self.assertIn("I create or publish online content on/as: YouTube @alex, TikTok.", text)
 
     def test_empty_renders_nothing(self) -> None:
         self.assertEqual(render_context({}).strip(), "")

@@ -26,6 +26,7 @@ BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Personal", "Administrative", "Vehicle"),
     ("Personal", "Education"),
     ("Personal", "Hobbies"),
+    ("Personal", "Reseaux-sociaux"),
     ("Personal", "Divers"),
     ("Work",),
     ("Work", "Employment"),
