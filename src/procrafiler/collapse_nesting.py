@@ -7,7 +7,7 @@ merges the inner folder back up into its parent.
 
 SAFETY — it ONLY touches a directory whose name EQUALS its immediate parent's
 name (``…/X/X`` -> ``…/X``). Two folders that merely SHARE a name in DIFFERENT
-places (a ``Divers`` under Personal AND a ``Divers`` under Work, several
+places (a ``Misc`` under Personal AND a ``Misc`` under Work, several
 ``Factures`` folders…) are perfectly normal and are NEVER matched: the rule is
 purely "consecutive identical segments on the same path". Existing files are
 never overwritten — a name collision is reported, not resolved by clobbering.

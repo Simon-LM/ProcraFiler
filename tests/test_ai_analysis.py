@@ -194,20 +194,20 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("Hobbies/Musique", prompt)
         self.assertIn("NOT a closed list", prompt)
 
-    def test_prompt_forbids_subject_folder_as_catch_all_offers_divers(self) -> None:
+    def test_prompt_forbids_subject_folder_as_catch_all_offers_misc(self) -> None:
         # run-13: the analysis was dumping unrelated files (avatar, chat screenshot)
         # into Hobbies/Musique just because the folder existed. A subject folder is
-        # not a catch-all; genuinely miscellaneous files go to <base>/Divers.
+        # not a catch-all; genuinely miscellaneous files go to <base>/Misc.
         prompt = _build_analysis_prompt("contenu", BASES, [])
         self.assertIn("NOT A CATCH-ALL", prompt)
         self.assertIn("EXISTENCE of such a folder", prompt)
-        self.assertIn("Divers", prompt)
+        self.assertIn("Misc", prompt)
 
-    def test_prompt_routes_social_content_to_reseaux_sociaux(self) -> None:
+    def test_prompt_routes_social_content_to_social_media(self) -> None:
         # run-14 follow-up: an avatar / a personal video must land under a real
-        # social-media subject, not in Musique and not in Divers.
+        # social-media subject, not in Musique and not in Misc.
         prompt = _build_analysis_prompt("contenu", BASES, [])
-        self.assertIn("Personal/Reseaux-sociaux", prompt)
+        self.assertIn("Personal/Social-media", prompt)
         self.assertIn("avatars", prompt)
 
     def test_prompt_work_name_is_not_pulled_by_an_existing_hobby_folder(self) -> None:
