@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **rescan never descends into hidden directories or version-control repositories (critical).** On a real run, a folder containing a `.git` was dropped in the library; rescan Phase 2 walked into it and timestamped/catalogued the repo's internals (objects, hooks, refs, `HEAD`) and working tree — corrupting the repository and flooding the catalog. `walk_library_files` now excludes: symlinks (already), **hidden files and anything under a hidden directory** (`.git`, `.config`, …), and **every file inside a VCS repository** (a directory containing a `.git`) — a dropped repo is a UNIT, left entirely untouched, not a pile of files to file. `tests/test_rescan.py` +2. 337 tests green.
+
 ### Changed
 
 - **Base-tree folders are English-only again: `Reseaux-sociaux` → `Social-media`, `Divers` → `Misc`.** The base taxonomy is English throughout (`Personal`, `Banking`, `Housing`, `Utilities`, `Education`, `Hobbies`…); two folders added in this cycle had slipped into French. Renamed in the taxonomy and in the analysis/organize prompts so new files use the English names. (Folders already created under the old names in an existing library are not auto-migrated — they'll simply stop being added to.) Tests updated; 323 tests green.
