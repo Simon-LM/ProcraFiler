@@ -8,6 +8,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **Image formats the vision model can't decode are no longer sent to it; large batches warn before the heavy work.** Two ingestion-polish changes (run-15 follow-up):
+
+  **(No wasted vision call):** editor files (`.xcf`, `.psd`), camera RAW (`.cr2`, `.nef`, …) and vector (`.svg`) were classified `media_type=image` and sent to the vision model, which rejects them (HTTP 400). They're now gated by a `VISION_READABLE_EXTENSIONS` set (JPEG, PNG, WEBP, GIF, BMP, TIFF, HEIF, AVIF, MPO) — a non-decodable image stays `media_type=image` (so EXIF capture dates still work) but is **not** sent to vision: it's just timestamped and catalogued, no AI call, no error. New `taxonomy.is_vision_readable`.
+
+  **(Large-batch heads-up):** when a single run has many files to read with AI (≥ `LARGE_BATCH_WARN` = 25) — a big Inbox drop, or many new hand-placed library files for rescan to ingest — it now prints a one-line warning that it may take a while and use API/local compute. **Nothing is gated** (files still get classified, as you asked); it's only a heads-up. `tests/test_content_reader.py` +1. 338 tests green.
+
 ### Fixed
 
 - **rescan never descends into hidden directories or version-control repositories (critical).** On a real run, a folder containing a `.git` was dropped in the library; rescan Phase 2 walked into it and timestamped/catalogued the repo's internals (objects, hooks, refs, `HEAD`) and working tree — corrupting the repository and flooding the catalog. `walk_library_files` now excludes: symlinks (already), **hidden files and anything under a hidden directory** (`.git`, `.config`, …), and **every file inside a VCS repository** (a directory containing a `.git`) — a dropped repo is a UNIT, left entirely untouched, not a pile of files to file. `tests/test_rescan.py` +2. 337 tests green.

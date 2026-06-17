@@ -102,6 +102,15 @@ class TestContentReader(unittest.TestCase):
         self.assertTrue(result.needs_ai_reader)
         self.assertEqual(result.reader_hint, READER_HINT_VISION)
 
+    def test_non_vision_image_format_is_not_sent_to_vision(self) -> None:
+        # .xcf / .psd / RAW can't be decoded by the vision model — don't waste a
+        # call. Still media_type "image" (EXIF dates keep working), but no reader.
+        for name in ("drawing.xcf", "photo.cr2", "layered.psd", "vector.svg"):
+            result = extract_text_content(self._write(name, b"\x00\x01"), "image")
+            self.assertEqual(result.reason, "image_not_vision_readable", name)
+            self.assertFalse(result.needs_ai_reader, name)
+            self.assertIsNone(result.reader_hint, name)
+
     def test_unsupported_media_type(self) -> None:
         path = self._write("archive.zip", b"PK\x03\x04")
         result = extract_text_content(path, "archive")

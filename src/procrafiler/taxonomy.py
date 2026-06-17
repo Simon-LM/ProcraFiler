@@ -115,6 +115,22 @@ _EXTENSION_TO_MEDIA_TYPE: dict[str, str] = {
 }
 
 
+# Image extensions the vision model can actually decode (Mistral accepts JPEG,
+# PNG, WEBP, GIF, MPO, HEIF, AVIF, BMP, TIFF). Other "image" formats — editor
+# files (.xcf, .psd), camera RAW (.cr2, .nef…), vector (.svg) — are still
+# media_type "image" (so EXIF capture dates keep working), but are NOT sent to
+# vision: that call only errors and wastes a request. They are timestamped and
+# catalogued without an AI read.
+VISION_READABLE_EXTENSIONS: frozenset[str] = frozenset(
+    {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "mpo"}
+)
+
+
+def is_vision_readable(extension: str) -> bool:
+    """True when the vision model can decode this image extension (dot optional)."""
+    return extension.lower().lstrip(".") in VISION_READABLE_EXTENSIONS
+
+
 @dataclass(frozen=True)
 class DispatchDecision:
     """Result of the technical dispatch step.
