@@ -400,7 +400,7 @@ def cmd_rescan() -> int:
         "Rescan: "
         f"moved: {counts['moved']}, re-added: {counts['readded']}, "
         f"duplicates: {counts['duplicates']}, deleted: {counts['deleted']}, "
-        f"new (await ingestion): {counts['new']}"
+        f"new ingested: {counts['new']}"
     )
     return 0
 

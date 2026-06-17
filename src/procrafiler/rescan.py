@@ -11,7 +11,7 @@ Matching is PATH-FIRST so a still file is never hashed:
     * matches a live row whose old path vanished  -> MOVED (repoint, zero AI);
     * matches a live row still present elsewhere   -> DUPLICATE (deliberate copy);
     * matches a row previously marked DELETED      -> RE-ADD (revive, zero AI);
-    * matches nothing                              -> NEW (deferred to ingestion).
+    * matches nothing                              -> NEW (read in full + timestamped).
 - a live row whose path is gone and whose content reappeared nowhere -> DELETED.
 
 So hashing scales with the NUMBER OF CHANGED files, never the library size. This

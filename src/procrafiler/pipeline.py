@@ -1966,6 +1966,112 @@ def _regroup_existing_file(
 ORGANIZE_MAX_SET = 80
 
 
+def _ingest_new_library_file(
+    paths: RuntimePaths,
+    file_path: Path,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> None:
+    """Rescan Phase 2 — a brand-new file the user placed by hand is READ IN FULL
+    (its fiche goes to the catalog, for search), gets the timestamp prefix (date
+    AND time; the user's stem is kept verbatim), and — for a recurring kind — is
+    descended into its `<Entity>/<Year>/` subfolder exactly like the run.
+
+    The user's FOLDER is the anchor: rescan never re-classifies into a different
+    category; it only applies the dating/series convention UNDER where the file
+    already lives (a new EDF bill dropped in `Utilities/EDF/` lands in
+    `Utilities/EDF/2026/`). Unreadable kinds are still timestamped and catalogued
+    with an empty fiche — never sent to manual review (the user chose the spot)."""
+    op = str(uuid4())
+    sha256 = _file_sha256(file_path)
+    dispatch = dispatch_for_filename(file_path.name)
+
+    analysis = None
+    read_via: str | None = None
+    if dispatch.can_dispatch:
+        catdoc = _read_and_analyze(
+            paths,
+            queued_target=file_path,
+            source=file_path,
+            source_folder=file_path.parent.name,
+            sha256=sha256,
+            dispatch=dispatch,
+            operation_id=op,
+            current_state="ROUTE_CONFIRMED",
+            now_utc=now_utc,
+            features=features,
+            emit=emit,
+        )
+        analysis = catdoc.analysis
+        read_via = catdoc.read_via
+    else:
+        emit(f"   read: unreadable kind ({file_path.name}) — timestamped, not classified")
+
+    # The user's location WINS: anchor at the file's current folder; only apply
+    # the run's deterministic series entity/year refinement under it.
+    user_route = file_path.parent.relative_to(paths.library_root).parts
+    series = bool(analysis.series) if analysis is not None else False
+    document_date = analysis.document_date if analysis is not None else None
+    document_dt = _resolve_document_date(document_date, file_path, now_utc, media_type=dispatch.media_type)
+    issuer = analysis.entities.get("issuer") if analysis is not None and isinstance(analysis.entities, dict) else None
+    route_dir = _with_series_entity(
+        user_route, series=series, issuer=issuer if isinstance(issuer, str) else None, library_root=paths.library_root
+    )
+    route_dir = _with_series_year(route_dir, series=series, year=document_dt.strftime("%Y"))
+
+    target_dir = paths.library_root / Path(*route_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    final_name = build_timestamped_filename(file_path.name, now_utc=document_dt)
+    library_target = _ensure_unique_path(target_dir / final_name)
+    if library_target != file_path:
+        move(str(file_path), str(library_target))
+    emit(f"   rescan ingested: {file_path.name} → {library_target.relative_to(paths.library_root)}")
+
+    now_iso = _utc_iso(now_utc)
+    route_label = "/".join(route_dir)
+    fiche: dict[str, Any] = {
+        "name": analysis.name if analysis is not None else None,
+        "document_date": document_date,
+        "series": series,
+        "category_path": route_label or None,
+        "alternatives": analysis.alternatives if analysis is not None else [],
+        "summary": analysis.summary if analysis is not None else None,
+        "keywords": analysis.keywords if analysis is not None else [],
+        "entities": analysis.entities if analysis is not None else {},
+        "language": analysis.language if analysis is not None else None,
+        "source_folder": user_route[-1] if user_route else None,
+        "original_filename": file_path.name,
+        "effective_date": document_dt.strftime("%Y-%m-%d"),
+        "read_via": read_via,
+        "provider": analysis.provider if analysis is not None else None,
+        "model": analysis.model if analysis is not None else None,
+        "analyzed_at": now_iso,
+        "hand_placed": True,
+    }
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    repo.upsert_document(
+        doc_id=str(uuid4()),
+        sha256=sha256,
+        current_filename=library_target.name,
+        current_path=str(library_target),
+        status="LIBRARY_STORED",
+        updated_at_utc=now_iso,
+        flow_state="LIBRARY_STORED",
+        pending_decision=None,
+        content_json=json.dumps(fiche, ensure_ascii=True),
+    )
+    _append_action_log(
+        paths, operation_id=op, action="library_file_ingested", status="success",
+        message="Hand-placed new file read in full and timestamped (rescan Phase 2).",
+        now_utc=now_utc, path_before=str(file_path), path_after=str(library_target),
+        extra_fields={"target_route": route_label, "series": series}, features=features,
+    )
+    _sync_to_mirror(paths, operation_id=op, library_file=library_target, now_utc=now_utc, features=features)
+
+
 def run_rescan(
     paths: RuntimePaths,
     *,
@@ -1973,11 +2079,13 @@ def run_rescan(
     features: dict[str, bool],
     emit: ProgressFn,
 ) -> dict[str, int]:
-    """Pure-secretary sync (Phase 1): follow hand reorganization of the library
-    into the catalog — moves/renames (incl. whole folders), deletions (kept as
-    DELETED rows), deliberate duplicates, and re-deposits — WITHOUT any AI and
-    WITHOUT writing to the library. Brand-new hand-placed files are only detected
-    and counted here (full ingestion is Phase 2). Every action is logged."""
+    """Secretary sync: follow hand reorganization of the library into the catalog.
+
+    Phase 1 (no AI): moves/renames (incl. whole folders) repoint the catalog,
+    deletions become DELETED rows, deliberate duplicates are catalogued, deleted
+    content re-deposited is revived. Phase 2: a brand-new hand-placed file is read
+    in full, timestamped, and (for a series) descended into its year subfolder.
+    Every action is logged; the user's location and name always win."""
     from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files
 
     counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0}
@@ -1985,7 +2093,6 @@ def run_rescan(
     repo.init_schema()
     rows = repo.list_documents()
     plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256)
-    counts["new"] = len(plan.new_files)
     if plan.is_empty:
         return counts
 
@@ -2066,11 +2173,16 @@ def run_rescan(
         )
 
     for new_path in plan.new_files:
-        _append_action_log(
-            paths, operation_id=op, action="library_new_file_detected", status="success",
-            message="New hand-placed file detected; awaiting full ingestion (rescan Phase 2).",
-            now_utc=now_utc, path_after=str(new_path), features=features,
-        )
+        try:
+            _ingest_new_library_file(paths, new_path, now_utc=now_utc, features=features, emit=emit)
+            counts["new"] += 1
+        except Exception as exc:  # noqa: BLE001 — one bad file must not abort the sync
+            emit(f"   ⚠ rescan ingest skipped ({new_path.name}): {exc}")
+            _append_action_log(
+                paths, operation_id=op, action="library_ingest_error", status="error",
+                message=f"Failed to ingest hand-placed file: {exc}",
+                now_utc=now_utc, path_before=str(new_path), features=features,
+            )
 
     _write_catalog_snapshot(paths, repo, now_utc, features=features)
     return counts

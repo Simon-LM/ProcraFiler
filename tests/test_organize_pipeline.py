@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
-from procrafiler.pipeline import _heal_double_nestings, process_all_inbox_files
+from procrafiler.pipeline import _file_sha256, _heal_double_nestings, process_all_inbox_files
 
 AFFAIR = "Personal/Administrative/Insurance/Degats-eaux-2025-08"
 
@@ -510,7 +510,16 @@ class TestSingletonGrouping(unittest.TestCase):
         housing = "Personal/Administrative/Housing"
         series = f"{housing}/Releves-eau"
         housing_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing"
-        (housing_dir / "2026-01-01_00-00-00__Constat.txt").write_bytes(b"x")  # branch non-empty → grouping runs
+        seeded = housing_dir / "2026-01-01_00-00-00__Constat.txt"
+        seeded.write_bytes(b"x")  # branch non-empty → grouping runs
+        # An already-filed library file is catalogued, so the start-of-batch
+        # rescan recognises it (by path) and leaves it alone.
+        seed_repo = CatalogRepository(self.paths.catalog_db_file)
+        seed_repo.init_schema()
+        seed_repo.upsert_document(
+            doc_id="seed-constat", sha256=_file_sha256(seeded), current_filename=seeded.name,
+            current_path=str(seeded), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+        )
 
         (self.paths.inbox_dir / "releve.txt").write_bytes(b"Releve compteur eau")
         analysis_raw = json.dumps({"name": "Releve-eau", "category_path": series, "summary": "compteur"})
