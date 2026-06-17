@@ -25,6 +25,8 @@ from pathlib import Path
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
+from procrafiler.taxonomy import is_vision_readable
+
 # pypdf logs warnings (e.g. "invalid pdf header", "EOF marker not found") for
 # malformed PDFs. We already handle those by routing the file to OCR, so the
 # warnings are redundant noise — keep our output clean.
@@ -101,8 +103,15 @@ def extract_text_content(path: Path, media_type: str) -> ContentExtraction:
     if media_type == "pdf":
         return _read_pdf(path)
     if media_type == "image":
+        if is_vision_readable(path.suffix):
+            return ContentExtraction(
+                "image", text=None, needs_ai_reader=True, reader_hint=READER_HINT_VISION, reason="image_needs_vision"
+            )
+        # A format the vision model cannot decode (.xcf, .psd, RAW, .svg…): do NOT
+        # send it — that only errors. It is still media_type "image" so any EXIF
+        # capture date keeps working; it is just timestamped + catalogued, no AI.
         return ContentExtraction(
-            "image", text=None, needs_ai_reader=True, reader_hint=READER_HINT_VISION, reason="image_needs_vision"
+            "image", text=None, needs_ai_reader=False, reader_hint=None, reason="image_not_vision_readable"
         )
     return ContentExtraction(
         media_type, text=None, needs_ai_reader=False, reader_hint=None, reason="unsupported_local_extraction"

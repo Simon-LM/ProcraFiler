@@ -1965,6 +1965,11 @@ def _regroup_existing_file(
 # Normal folders stay well under it and are organized in ONE call (whole set).
 ORGANIZE_MAX_SET = 80
 
+# Above this many files in one go, warn the user before the heavy work: each file
+# is read by AI (API cost, or local CPU/GPU time). It is only a HEADS-UP — nothing
+# is gated; library files still get classified like an Inbox batch.
+LARGE_BATCH_WARN = 25
+
 
 def _ingest_new_library_file(
     paths: RuntimePaths,
@@ -2172,6 +2177,11 @@ def run_rescan(
             now_utc=now_utc, path_before=old_path, features=features,
         )
 
+    if len(plan.new_files) >= LARGE_BATCH_WARN:
+        emit(
+            f"   ⚠ {len(plan.new_files)} new hand-placed files to read & catalog — "
+            "this may take a while and use AI (API cost, or local CPU/GPU)."
+        )
     for new_path in plan.new_files:
         try:
             _ingest_new_library_file(paths, new_path, now_utc=now_utc, features=features, emit=emit)
@@ -2366,6 +2376,13 @@ def process_all_inbox_files(
     # Each top-level subfolder = one set; each loose root file = its own singleton.
     work_sets: list[tuple[str, list[Path]]] = [(top, members) for top, members in folder_sets.items()]
     work_sets += [("", [loose]) for loose in singletons]
+
+    inbox_total = sum(len(members) for _, members in work_sets)
+    if inbox_total >= LARGE_BATCH_WARN:
+        emit(
+            f"   ⚠ {inbox_total} files in the Inbox to read & classify — "
+            "this may take a while and use AI (API cost, or local CPU/GPU)."
+        )
 
     organize_chain = task_chain_from_env("ORGANIZE")
     max_depth = load_runtime_policy(paths).taxonomy_max_depth
