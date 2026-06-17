@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
@@ -93,7 +94,8 @@ class TestRunRescanIntegration(unittest.TestCase):
 
     def tearDown(self) -> None:
         for key in ("PROCRAFILER_WORKSPACE_DIR", "PROCRAFILER_LIBRARY_DIR",
-                    "PROCRAFILER_LIBRARY_MIRROR_DIR", "PROCRAFILER_HOME", "PROCRAFILER_CONFIG_HOME"):
+                    "PROCRAFILER_LIBRARY_MIRROR_DIR", "PROCRAFILER_HOME", "PROCRAFILER_CONFIG_HOME",
+                    "PROCRAFILER_AI_ANALYSIS_PRIMARY"):
             os.environ.pop(key, None)
         self.tmp.cleanup()
 
@@ -128,6 +130,43 @@ class TestRunRescanIntegration(unittest.TestCase):
         self.assertIn("library_file_deleted", log)
         actions = [json.loads(line)["action"] for line in log.splitlines() if line.strip()]
         self.assertIn("library_file_deleted", actions)
+
+    def test_new_file_is_ingested_with_timestamp_prefix(self) -> None:
+        # Phase 2: a brand-new hand-placed file (no AI chain → minimal fiche) is
+        # timestamped in place, the user's stem kept, and catalogued.
+        folder = self.paths.library_root / "Personal" / "Misc"
+        folder.mkdir(parents=True, exist_ok=True)
+        placed = folder / "Ma note.txt"
+        placed.write_text("une note libre", encoding="utf-8")
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["new"], 1)
+        self.assertFalse(placed.exists())  # renamed (prefix added)
+        ingested = [p for p in folder.iterdir() if p.name.endswith("__Ma-note.txt")]
+        self.assertEqual(len(ingested), 1)
+        row = self.repo.find_by_current_path(str(ingested[0]))
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "LIBRARY_STORED")
+        self.assertIn("library_file_ingested", self.paths.actions_log_file.read_text(encoding="utf-8"))
+
+    def test_new_series_file_descends_into_year_subfolder(self) -> None:
+        # Phase 2: a new series file placed by hand in its entity folder is dated
+        # into <Entity>/<Year>/, exactly like the run — the user's folder anchors it.
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
+        edf = self.paths.library_root / "Personal" / "Administrative" / "Utilities" / "EDF"
+        edf.mkdir(parents=True, exist_ok=True)
+        (edf / "facture.txt").write_text("facture edf avril", encoding="utf-8")
+        fiche = json.dumps({
+            "name": "Facture_EDF", "date": "2026-04-05",
+            "category_path": "Personal/Administrative/Utilities", "series": True,
+            "alternatives": [], "summary": "Facture EDF avril.", "keywords": ["facture", "edf"],
+            "entities": {"issuer": "EDF"}, "language": "fr",
+        })
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=fiche):
+            counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["new"], 1)
+        target = edf / "2026" / "2026-04-05_00-00-00__facture.txt"
+        self.assertTrue(target.is_file())
+        self.assertIsNotNone(self.repo.find_by_current_path(str(target)))
 
     def test_clean_library_is_a_noop(self) -> None:
         keep = self.paths.library_root / "Personal" / "Keep.txt"

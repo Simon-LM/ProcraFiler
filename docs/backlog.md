@@ -44,16 +44,17 @@ binary in the taxonomy) is not in the document — it depends on the user's
       job, so dropping a file in the Inbox processes it without a manual command.
       Today processing is on-demand only (`process-once` / `process-all`).
 - [ ] **`library-untrash`** — a restore command (currently restore is a manual `mv`).
-- [~] **`rescan`** — the pure-secretary sync, AUTOMATIC before every run (and standalone).
-      **Phase 1 SHIPPED** (`procrafiler.rescan` + `run_rescan` + CLI `rescan`/`deleted-history`):
-      path-first matching (a still file is never hashed), moves/renames (incl. whole folders)
-      → catalog repointed, deletions → row kept marked `DELETED` + logged (no alert) +
-      `deleted-history` command, deliberate duplicates → catalogued reusing the original's
-      fiche + alerted + untouched, re-deposits → `DELETED` row revived. **Phase 2 PENDING:**
-      ingest a brand-new hand-placed file — READ IN FULL (complete fiche into the catalog, for
-      future search), add the timestamp prefix (date AND time; the user's stem untouched), and
-      place a recurring kind into its `<Entity>/<Year>/` year subfolder like the run does. (In-place
-      CONTENT edits — same name, new bytes — are out of scope by design.)
+- [x] **`rescan`** — the secretary sync, AUTOMATIC before every run (and standalone). **SHIPPED**
+      (`procrafiler.rescan` + `run_rescan` + `_ingest_new_library_file` + CLI `rescan`/`deleted-history`).
+      **Phase 1** (no AI): path-first matching (a still file is never hashed), moves/renames (incl.
+      whole folders) → catalog repointed, deletions → row kept marked `DELETED` + logged (no alert) +
+      `deleted-history` command, deliberate duplicates → catalogued reusing the original's fiche +
+      untouched, re-deposits → `DELETED` row revived. **Phase 2**: a brand-new hand-placed file is
+      READ IN FULL (fiche into the catalog, for search), gets the timestamp prefix (date AND time;
+      the user's stem untouched), and a recurring kind is descended into its `<Entity>/<Year>/`
+      subfolder like the run — anchored at the user's folder (never re-classified). Unreadable kinds
+      are timestamped + catalogued with an empty fiche, never sent to manual review. (In-place CONTENT
+      edits — same name, new bytes — are out of scope by design.)
       It tracks every file by its content fingerprint (sha256), so ANY hand
       reorganization is followed without AI: a file renamed or moved, or a whole FOLDER
       renamed or moved (every file inside keeps its sha256), just has its catalog path/name
