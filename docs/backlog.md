@@ -62,11 +62,13 @@ binary in the taxonomy) is not in the document — it depends on the user's
       This is the supported way to fix an awkward auto-named folder (e.g. rename `CV_LM` →
       `CV` and rescan follows). The AI *understands*, it never *decides* — the user's
       location and name always win.
-      **Duplicate policy (decided 2026-06-13):** a hand-placed file whose sha256 already
-      exists in the catalog is a deliberate copy — rescan CATALOGS it anyway (reusing the
-      original's fiche, zero AI call), ALERTS ("duplicate of `<original path>`" in the
-      summary + a `library_duplicate_detected` action-log event), and NEVER acts on it —
-      no deletion, no symlink substitution, no reorganization. The Inbox/library asymmetry
+      **Duplicate policy (decided 2026-06-13, refined run-17):** a hand-placed file whose
+      sha256 already exists in the catalog is a deliberate copy — rescan CATALOGS it anyway
+      (reusing the original's fiche, zero AI call), ALERTS ("duplicate of `<original path>`"
+      in the summary + a `library_duplicate_detected` action-log event), and is never
+      DEDUPLICATED — no deletion, no symlink substitution, no reorganization. It DOES receive
+      the timestamp prefix though (horodatage is the app's, applied to every library file).
+      The Inbox/library asymmetry
       is deliberate: an Inbox file is *to be processed* (duplicate → trash), a library file
       is the user's sovereign choice (duplicate → reported, untouched). Today such a file
       is simply invisible (sha256 dedup is Inbox-only; the catalog has no unique constraint

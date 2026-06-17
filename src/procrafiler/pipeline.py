@@ -29,7 +29,7 @@ from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignor
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
-from procrafiler.naming import build_timestamped_filename, sanitize_filename_stem
+from procrafiler.naming import build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
     base_category_for,
@@ -2077,6 +2077,42 @@ def _ingest_new_library_file(
     _sync_to_mirror(paths, operation_id=op, library_file=library_target, now_utc=now_utc, features=features)
 
 
+def _fiche_effective_dt(content_json: Any, fallback_path: Path, now_utc: datetime | None) -> datetime:
+    """The date to (re)build a file's timestamp prefix from, taken from its stored
+    fiche (no AI): the document's effective/own date, else the file's mtime, else
+    now. Used by rescan to RE-DATE a hand-named file consistently with the run."""
+    fiche: dict[str, Any] = {}
+    if content_json:
+        try:
+            parsed = json.loads(content_json)
+            fiche = parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            fiche = {}
+    for key in ("effective_date", "document_date"):
+        raw = fiche.get(key)
+        if isinstance(raw, str) and raw.strip():
+            try:
+                return datetime.strptime(raw.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+    try:
+        return datetime.fromtimestamp(fallback_path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return now_utc or datetime.now(timezone.utc)
+
+
+def _ensure_timestamp_prefix(path: Path, dt: datetime) -> Path:
+    """Make sure a library file carries the app's timestamp prefix — the
+    horodatage is OWNED BY THE APP (spec/backlog): any file lacking it gets one
+    (the user's stem is kept). A file that already carries a valid prefix is left
+    untouched (never re-dated). Renames on disk and returns the final path."""
+    if has_timestamp_prefix(path.name):
+        return path
+    target = _ensure_unique_path(path.parent / build_timestamped_filename(path.name, now_utc=dt))
+    move(str(path), str(target))
+    return target
+
+
 def run_rescan(
     paths: RuntimePaths,
     *,
@@ -2089,8 +2125,10 @@ def run_rescan(
     Phase 1 (no AI): moves/renames (incl. whole folders) repoint the catalog,
     deletions become DELETED rows, deliberate duplicates are catalogued, deleted
     content re-deposited is revived. Phase 2: a brand-new hand-placed file is read
-    in full, timestamped, and (for a series) descended into its year subfolder.
-    Every action is logged; the user's location and name always win."""
+    in full and (for a series) descended into its year subfolder. The HORODATAGE is
+    the app's: any moved/re-added/duplicate file lacking the timestamp prefix gets
+    one (from its fiche date, keeping the user's stem); a file that already carries
+    a valid prefix is never re-dated. Every action is logged; location + stem win."""
     from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files
 
     counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0}
@@ -2113,51 +2151,57 @@ def run_rescan(
 
     for row, new_path in plan.moved:
         old_path = str(row.get("current_path"))
+        final_path = _ensure_timestamp_prefix(new_path, _fiche_effective_dt(row.get("content_json"), new_path, now_utc))
         repo.upsert_document(
             doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
-            current_filename=new_path.name, current_path=str(new_path),
+            current_filename=final_path.name, current_path=str(final_path),
             status=str(row.get("status") or "LIBRARY_STORED"), updated_at_utc=now_iso,
             flow_state=row.get("flow_state"), pending_decision=None,
             content_json=row.get("content_json"),
         )
         counts["moved"] += 1
-        emit(f"   rescan moved: {_rel(old_path)} → {_rel(new_path)}")
+        emit(f"   rescan moved: {_rel(old_path)} → {_rel(final_path)}")
         _append_action_log(
             paths, operation_id=op, action="library_file_moved", status="success",
-            message="File moved/renamed by hand; catalog path updated (no AI).",
-            now_utc=now_utc, path_before=old_path, path_after=str(new_path), features=features,
+            message="File moved/renamed by hand; catalog path updated, timestamp prefix ensured (no AI).",
+            now_utc=now_utc, path_before=old_path, path_after=str(final_path), features=features,
         )
 
     for row, new_path in plan.readded:
+        final_path = _ensure_timestamp_prefix(new_path, _fiche_effective_dt(row.get("content_json"), new_path, now_utc))
         repo.upsert_document(
             doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
-            current_filename=new_path.name, current_path=str(new_path),
+            current_filename=final_path.name, current_path=str(final_path),
             status="LIBRARY_STORED", updated_at_utc=now_iso,
             flow_state=row.get("flow_state"), pending_decision=None,
             content_json=row.get("content_json"),
         )
         counts["readded"] += 1
-        emit(f"   rescan re-added: {_rel(new_path)}")
+        emit(f"   rescan re-added: {_rel(final_path)}")
         _append_action_log(
             paths, operation_id=op, action="library_file_readded", status="success",
-            message="Previously deleted content re-deposited by hand; catalog row revived (no AI).",
-            now_utc=now_utc, path_after=str(new_path), features=features,
+            message="Previously deleted content re-deposited by hand; catalog row revived, prefix ensured (no AI).",
+            now_utc=now_utc, path_after=str(final_path), features=features,
         )
 
     for copy_path, original in plan.duplicates:
+        # A duplicate is still never deduplicated / symlinked / reorganized — but
+        # the horodatage is the app's, so it gets the timestamp prefix like any
+        # library file (from the original's fiche date).
+        final_path = _ensure_timestamp_prefix(copy_path, _fiche_effective_dt(original.get("content_json"), copy_path, now_utc))
         repo.upsert_document(
             doc_id=str(uuid4()), sha256=str(original["sha256"]),
-            current_filename=copy_path.name, current_path=str(copy_path),
+            current_filename=final_path.name, current_path=str(final_path),
             status="LIBRARY_STORED", updated_at_utc=now_iso,
             flow_state=original.get("flow_state"), pending_decision=None,
             content_json=original.get("content_json"),
         )
         counts["duplicates"] += 1
-        emit(f"   rescan duplicate: {_rel(copy_path)} (copy of {_rel(original.get('current_path'))})")
+        emit(f"   rescan duplicate: {_rel(final_path)} (copy of {_rel(original.get('current_path'))})")
         _append_action_log(
             paths, operation_id=op, action="library_duplicate_detected", status="success",
-            message=f"Hand-placed duplicate of {original.get('current_path')}; catalogued, not acted on.",
-            now_utc=now_utc, path_after=str(copy_path), features=features,
+            message=f"Hand-placed duplicate of {original.get('current_path')}; catalogued + timestamped, not deduplicated.",
+            now_utc=now_utc, path_after=str(final_path), features=features,
             extra_fields={"duplicate_of": str(original.get("current_path"))},
         )
 
