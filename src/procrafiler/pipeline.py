@@ -1970,6 +1970,93 @@ ORGANIZE_MAX_SET = 80
 # is gated; library files still get classified like an Inbox batch.
 LARGE_BATCH_WARN = 25
 
+# Index-only pass (VCS repos): which media types are worth reading into the
+# catalog for search, and a size ceiling. A repo working tree is mostly small
+# text docs (.md/.txt/.sh) and code; we index the readable documents and skip
+# binaries/images/huge files. The files themselves are NEVER renamed or moved.
+INDEXABLE_MEDIA_TYPES = ("text", "pdf")
+INDEX_MAX_BYTES = 2_000_000
+
+
+def _index_repo_file_in_place(
+    paths: RuntimePaths,
+    file_path: Path,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> bool:
+    """Index a VCS-repo working-tree document INTO THE CATALOG for search, WITHOUT
+    touching it — no rename, no move, no timestamp prefix (that would break the
+    repo). Only readable document types under the size ceiling are read; anything
+    else is skipped. Returns True when a row was written."""
+    dispatch = dispatch_for_filename(file_path.name)
+    if dispatch.media_type not in INDEXABLE_MEDIA_TYPES:
+        return False
+    try:
+        if file_path.stat().st_size > INDEX_MAX_BYTES:
+            return False
+    except OSError:
+        return False
+
+    op = str(uuid4())
+    sha256 = _file_sha256(file_path)
+    catdoc = _read_and_analyze(
+        paths,
+        queued_target=file_path,
+        source=file_path,
+        source_folder=file_path.parent.name,
+        sha256=sha256,
+        dispatch=dispatch,
+        operation_id=op,
+        current_state="ROUTE_CONFIRMED",
+        now_utc=now_utc,
+        features=features,
+        emit=emit,
+    )
+    if not catdoc.content_text or not catdoc.content_text.strip():
+        return False  # nothing readable extracted — don't catalog an empty fiche
+
+    analysis = catdoc.analysis
+    now_iso = _utc_iso(now_utc)
+    folder = "/".join(file_path.parent.relative_to(paths.library_root).parts)
+    fiche: dict[str, Any] = {
+        "name": file_path.stem,
+        "document_date": analysis.document_date if analysis is not None else None,
+        "series": False,
+        "category_path": folder or None,
+        "summary": analysis.summary if analysis is not None else None,
+        "keywords": analysis.keywords if analysis is not None else [],
+        "entities": analysis.entities if analysis is not None else {},
+        "language": analysis.language if analysis is not None else None,
+        "original_filename": file_path.name,
+        "read_via": catdoc.read_via,
+        "provider": analysis.provider if analysis is not None else None,
+        "model": analysis.model if analysis is not None else None,
+        "analyzed_at": now_iso,
+        "indexed_in_place": True,  # read for search only; the file is left untouched
+    }
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    repo.upsert_document(
+        doc_id=str(uuid4()),
+        sha256=sha256,
+        current_filename=file_path.name,
+        current_path=str(file_path),
+        status="LIBRARY_STORED",
+        updated_at_utc=now_iso,
+        flow_state="LIBRARY_STORED",
+        pending_decision=None,
+        content_json=json.dumps(fiche, ensure_ascii=True),
+    )
+    emit(f"   rescan indexed (in place): {file_path.relative_to(paths.library_root)}")
+    _append_action_log(
+        paths, operation_id=op, action="library_file_indexed", status="success",
+        message="VCS-repo document indexed in place for search (not renamed/moved).",
+        now_utc=now_utc, path_after=str(file_path), features=features,
+    )
+    return True
+
 
 def _ingest_new_library_file(
     paths: RuntimePaths,
@@ -2128,15 +2215,20 @@ def run_rescan(
     in full and (for a series) descended into its year subfolder. The HORODATAGE is
     the app's: any moved/re-added/duplicate file lacking the timestamp prefix gets
     one (from its fiche date, keeping the user's stem); a file that already carries
-    a valid prefix is never re-dated. Every action is logged; location + stem win."""
-    from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files
+    a valid prefix is never re-dated. A VCS repository (a dir with a `.git`) is left
+    untouched as a unit, but its readable documents are INDEXED in place into the
+    catalog for search. Every action is logged; location + stem win."""
+    from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files, walk_repo_files
 
-    counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0}
+    counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0}
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
     rows = repo.list_documents()
     plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256)
-    if plan.is_empty:
+    # VCS-repo working-tree docs not yet catalogued (by path) → index in place.
+    known_paths = {str(r.get("current_path")) for r in rows}
+    repo_to_index = [p for p in walk_repo_files(paths.library_root) if str(p) not in known_paths]
+    if plan.is_empty and not repo_to_index:
         return counts
 
     now_iso = _utc_iso(now_utc)
@@ -2236,6 +2328,25 @@ def run_rescan(
                 paths, operation_id=op, action="library_ingest_error", status="error",
                 message=f"Failed to ingest hand-placed file: {exc}",
                 now_utc=now_utc, path_before=str(new_path), features=features,
+            )
+
+    # Index-only pass: read VCS-repo documents into the catalog for search, never
+    # touching the files (no rename/move/date — that would break the repo).
+    if len(repo_to_index) >= LARGE_BATCH_WARN:
+        emit(
+            f"   ⚠ {len(repo_to_index)} repo documents to index for search — "
+            "this may take a while and use AI (API cost, or local CPU/GPU)."
+        )
+    for repo_file in repo_to_index:
+        try:
+            if _index_repo_file_in_place(paths, repo_file, now_utc=now_utc, features=features, emit=emit):
+                counts["indexed"] += 1
+        except Exception as exc:  # noqa: BLE001 — one bad file must not abort the sync
+            emit(f"   ⚠ rescan index skipped ({repo_file.name}): {exc}")
+            _append_action_log(
+                paths, operation_id=op, action="library_index_error", status="error",
+                message=f"Failed to index repo file: {exc}",
+                now_utc=now_utc, path_before=str(repo_file), features=features,
             )
 
     _write_catalog_snapshot(paths, repo, now_utc, features=features)

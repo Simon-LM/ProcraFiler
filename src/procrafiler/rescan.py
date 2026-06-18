@@ -78,6 +78,29 @@ def walk_library_files(library_root: Path) -> list[Path]:
     return sorted(files)
 
 
+def walk_repo_files(library_root: Path) -> list[Path]:
+    """Working-tree files INSIDE a VCS repository (a directory containing a
+    `.git`), excluding the `.git` internals and hidden files. These are the
+    counterpart of `walk_library_files`: they are NEVER renamed, moved or dated
+    (that would break the repo), but their readable documents can be INDEXED into
+    the catalog for search (see the pipeline's index-only pass)."""
+    if not library_root.exists():
+        return []
+    all_paths = list(library_root.rglob("*"))
+    repo_roots = [p.parent for p in all_paths if p.name == ".git"]
+    if not repo_roots:
+        return []
+    files: list[Path] = []
+    for p in all_paths:
+        if not p.is_file() or p.is_symlink():
+            continue
+        if any(part.startswith(".") for part in p.relative_to(library_root).parts):
+            continue  # hidden / .git internals — never indexed
+        if any(p.is_relative_to(root) for root in repo_roots):
+            files.append(p)
+    return sorted(files)
+
+
 def reconcile(
     disk_files: list[Path],
     rows: list[Row],

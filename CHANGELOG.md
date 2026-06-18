@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **rescan now INDEXES the documents inside a git repository for search, without touching the repo.** Previously a dropped folder containing a `.git` was skipped entirely (run-15 fix #60) — which protected the repo but also left its real documents (e.g. a backup's `PRA.md`, `GUIDE-…md`) **invisible to search**. rescan now separates the two gestes: the repo is still **never renamed / moved / dated** (that would break it; `.git` internals stay ignored), but its **readable working-tree documents** (media types text/pdf, under a 2 MB ceiling) are **read into the catalog in place** with an `indexed_in_place: true` fiche, so the repo's contents are findable. Binaries/images/large files are skipped; a large repo prints the same heads-up as a large batch. New `rescan.walk_repo_files` + `_index_repo_file_in_place`; CLI summary gains `repo docs indexed`. `tests/test_rescan.py` +4. 344 tests green.
+
 ### Changed
 
 - **rescan now ENSURES the timestamp prefix on every library file — the horodatage is the app's job (spec/backlog).** Previously a file you moved/renamed without the prefix (e.g. `…__Facture_CAF.pdf` → `AR.pdf`) kept your name verbatim and stayed prefix-less, and a hand-placed duplicate was left untouched. Now any **moved / re-added / duplicate** file that lacks the canonical `YYYY-MM-DD_HH-MM-SS__` prefix gets one — built from its catalogued **fiche date** (no AI), keeping your stem (`AR.pdf` → `2025-06-07_00-00-00__AR.pdf`). A file that already carries a valid prefix is **never re-dated** (a plain drag-to-reorganize stays a pure catalog repoint). A duplicate is still never deduplicated/symlinked/reorganized — it just receives the prefix like any library file. New `naming.has_timestamp_prefix` + `_ensure_timestamp_prefix` / `_fiche_effective_dt` in the pipeline. `tests/test_rescan.py` +1, `tests/test_naming.py` unchanged. 341 tests green.
