@@ -11,7 +11,7 @@ from unittest.mock import patch
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 from procrafiler.pipeline import _file_sha256, run_rescan
-from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files
+from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files, walk_repo_files
 
 
 def _row(path: str, sha: str, status: str = "LIBRARY_STORED", doc_id: str | None = None) -> dict:
@@ -50,6 +50,20 @@ class TestWalkLibraryFiles(unittest.TestCase):
         self._touch("Work", "Backup", "repo", "src", "main.py")  # working tree
         self._touch("Work", "Backup", "repo", "README.md")
         self.assertEqual(walk_library_files(self.root), [doc])
+
+    def test_walk_repo_files_returns_working_tree_not_git_internals(self) -> None:
+        # The counterpart: the repo's working-tree docs (for index-only), never
+        # the .git internals or hidden files, and nothing outside a repo.
+        self._touch("Personal", "keep.txt")  # outside any repo → not here
+        self._touch("Work", "repo", ".git", "HEAD")
+        self._touch("Work", "repo", ".git", "objects", "ab", "deadbeef")
+        readme = self._touch("Work", "repo", "README.md")
+        src = self._touch("Work", "repo", "src", "main.py")
+        self.assertEqual(walk_repo_files(self.root), sorted([readme, src]))
+
+    def test_walk_repo_files_empty_without_repos(self) -> None:
+        self._touch("Personal", "a.txt")
+        self.assertEqual(walk_repo_files(self.root), [])
 
 
 class TestReconcilePure(unittest.TestCase):
@@ -186,6 +200,23 @@ class TestRunRescanIntegration(unittest.TestCase):
         self.assertFalse(new.exists())
         self.assertEqual(self.repo.find_by_current_path(str(prefixed))["doc_id"], "doc-caf")
 
+    def test_repo_document_is_indexed_in_place_not_renamed(self) -> None:
+        # A git repo's working-tree doc is read into the catalog for search but
+        # NEVER renamed/moved/dated; .git internals are not catalogued.
+        repo_dir = self.paths.library_root / "Work" / "Business" / "VPS" / "Backup" / "repo"
+        (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+        (repo_dir / ".git" / "HEAD").write_text("ref: refs/heads/main", encoding="utf-8")
+        guide = repo_dir / "GUIDE.md"
+        guide.write_text("# Guide\nRevocation procedure for SSH keys.", encoding="utf-8")
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["indexed"], 1)
+        self.assertTrue(guide.is_file())  # untouched, same name and place
+        row = self.repo.find_by_current_path(str(guide))
+        self.assertIsNotNone(row)
+        self.assertIn("indexed_in_place", row["content_json"])
+        # .git internals are never catalogued
+        self.assertIsNone(self.repo.find_by_current_path(str(repo_dir / ".git" / "HEAD")))
+
     def test_deleted_file_marks_row_and_logs(self) -> None:
         old = self.paths.library_root / "Personal" / "Gone.txt"
         self.repo.upsert_document(
@@ -246,7 +277,7 @@ class TestRunRescanIntegration(unittest.TestCase):
             current_path=str(keep), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
         )
         counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
-        self.assertEqual(counts, {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0})
+        self.assertEqual(counts, {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0})
 
 
 if __name__ == "__main__":
