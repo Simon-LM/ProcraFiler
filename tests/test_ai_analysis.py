@@ -203,12 +203,21 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertIn("EXISTENCE of such a folder", prompt)
         self.assertIn("Misc", prompt)
 
-    def test_prompt_routes_social_content_to_social_media(self) -> None:
-        # run-14 follow-up: an avatar / a personal video must land under a real
-        # social-media subject, not in Musique and not in Misc.
+    def test_prompt_routes_published_content_to_social_media_by_intent(self) -> None:
+        # run-18: a made-for-audience graphic (e.g. an AI-generated comparison) is
+        # social content, not a "Photo". The rule is INTENT (record vs published
+        # content), not form — an image is not Photo just because it's an image.
         prompt = _build_analysis_prompt("contenu", BASES, [])
         self.assertIn("Personal/Social-media", prompt)
-        self.assertIn("avatars", prompt)
+        self.assertIn("RECORD vs PUBLISHED CONTENT", prompt)
+        self.assertIn("NOT \"Photo\" merely because it is an image", prompt)
+
+    def test_prompt_defers_personal_vs_work_ambiguity_to_review(self) -> None:
+        # run-18: when it's clearly social content but Personal vs Work can't be
+        # told, don't guess — null category + both as alternatives → decisions queue.
+        prompt = _build_analysis_prompt("contenu", BASES, [])
+        self.assertIn("CANNOT tell Personal from Work", prompt)
+        self.assertIn("category_path null", prompt)
 
     def test_prompt_work_name_is_not_pulled_by_an_existing_hobby_folder(self) -> None:
         # run-13: LostInTab (a declared work name) was split between Work and
