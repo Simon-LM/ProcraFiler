@@ -1978,7 +1978,7 @@ INDEXABLE_MEDIA_TYPES = ("text", "pdf")
 INDEX_MAX_BYTES = 2_000_000
 
 
-def _index_repo_file_in_place(
+def _index_preserve_file_in_place(
     paths: RuntimePaths,
     file_path: Path,
     *,
@@ -1986,10 +1986,11 @@ def _index_repo_file_in_place(
     features: dict[str, bool],
     emit: ProgressFn,
 ) -> bool:
-    """Index a VCS-repo working-tree document INTO THE CATALOG for search, WITHOUT
-    touching it — no rename, no move, no timestamp prefix (that would break the
-    repo). Only readable document types under the size ceiling are read; anything
-    else is skipped. Returns True when a row was written."""
+    """Index a PRESERVE-ZONE document (a VCS repo's working tree, or an Archive
+    folder) INTO THE CATALOG for search, WITHOUT touching it — no rename, no move,
+    no timestamp prefix (that would defeat the point). Only readable document types
+    under the size ceiling are read; anything else is skipped. Returns True when a
+    row was written."""
     dispatch = dispatch_for_filename(file_path.name)
     if dispatch.media_type not in INDEXABLE_MEDIA_TYPES:
         return False
@@ -2052,7 +2053,7 @@ def _index_repo_file_in_place(
     emit(f"   rescan indexed (in place): {file_path.relative_to(paths.library_root)}")
     _append_action_log(
         paths, operation_id=op, action="library_file_indexed", status="success",
-        message="VCS-repo document indexed in place for search (not renamed/moved).",
+        message="Preserve-zone document indexed in place for search (not renamed/moved).",
         now_utc=now_utc, path_after=str(file_path), features=features,
     )
     return True
@@ -2215,19 +2216,19 @@ def run_rescan(
     in full and (for a series) descended into its year subfolder. The HORODATAGE is
     the app's: any moved/re-added/duplicate file lacking the timestamp prefix gets
     one (from its fiche date, keeping the user's stem); a file that already carries
-    a valid prefix is never re-dated. A VCS repository (a dir with a `.git`) is left
-    untouched as a unit, but its readable documents are INDEXED in place into the
-    catalog for search. Every action is logged; location + stem win."""
-    from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files, walk_repo_files
+    a valid prefix is never re-dated. A PRESERVE ZONE (a VCS repository, or an
+    Archive folder) is left untouched as a unit, but its readable documents are
+    INDEXED in place into the catalog for search. Every action is logged."""
+    from procrafiler.rescan import DELETED_STATUS, reconcile, walk_indexable_files, walk_library_files
 
     counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0}
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
     rows = repo.list_documents()
     plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256)
-    # VCS-repo working-tree docs not yet catalogued (by path) → index in place.
+    # Preserve-zone docs (VCS repos + Archive folders) not yet catalogued → index.
     known_paths = {str(r.get("current_path")) for r in rows}
-    repo_to_index = [p for p in walk_repo_files(paths.library_root) if str(p) not in known_paths]
+    repo_to_index = [p for p in walk_indexable_files(paths.library_root) if str(p) not in known_paths]
     if plan.is_empty and not repo_to_index:
         return counts
 
@@ -2330,16 +2331,16 @@ def run_rescan(
                 now_utc=now_utc, path_before=str(new_path), features=features,
             )
 
-    # Index-only pass: read VCS-repo documents into the catalog for search, never
-    # touching the files (no rename/move/date — that would break the repo).
+    # Index-only pass: read preserve-zone documents (repos + Archive) into the
+    # catalog for search, never touching the files (no rename/move/date).
     if len(repo_to_index) >= LARGE_BATCH_WARN:
         emit(
-            f"   ⚠ {len(repo_to_index)} repo documents to index for search — "
+            f"   ⚠ {len(repo_to_index)} preserved documents to index for search — "
             "this may take a while and use AI (API cost, or local CPU/GPU)."
         )
     for repo_file in repo_to_index:
         try:
-            if _index_repo_file_in_place(paths, repo_file, now_utc=now_utc, features=features, emit=emit):
+            if _index_preserve_file_in_place(paths, repo_file, now_utc=now_utc, features=features, emit=emit):
                 counts["indexed"] += 1
         except Exception as exc:  # noqa: BLE001 — one bad file must not abort the sync
             emit(f"   ⚠ rescan index skipped ({repo_file.name}): {exc}")

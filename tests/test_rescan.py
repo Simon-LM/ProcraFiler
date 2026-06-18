@@ -11,7 +11,7 @@ from unittest.mock import patch
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 from procrafiler.pipeline import _file_sha256, run_rescan
-from procrafiler.rescan import DELETED_STATUS, reconcile, walk_library_files, walk_repo_files
+from procrafiler.rescan import DELETED_STATUS, reconcile, walk_indexable_files, walk_library_files
 
 
 def _row(path: str, sha: str, status: str = "LIBRARY_STORED", doc_id: str | None = None) -> dict:
@@ -51,19 +51,25 @@ class TestWalkLibraryFiles(unittest.TestCase):
         self._touch("Work", "Backup", "repo", "README.md")
         self.assertEqual(walk_library_files(self.root), [doc])
 
-    def test_walk_repo_files_returns_working_tree_not_git_internals(self) -> None:
-        # The counterpart: the repo's working-tree docs (for index-only), never
-        # the .git internals or hidden files, and nothing outside a repo.
-        self._touch("Personal", "keep.txt")  # outside any repo → not here
+    def test_indexable_files_are_repo_working_tree_and_archive(self) -> None:
+        # Preserve zones for index-only: a repo's working tree (not .git internals)
+        # AND Archive folder contents — but never our own Archive note, hidden
+        # files, or anything outside a preserve zone.
+        self._touch("Personal", "keep.txt")  # normal file → not indexable here
         self._touch("Work", "repo", ".git", "HEAD")
-        self._touch("Work", "repo", ".git", "objects", "ab", "deadbeef")
         readme = self._touch("Work", "repo", "README.md")
         src = self._touch("Work", "repo", "src", "main.py")
-        self.assertEqual(walk_repo_files(self.root), sorted([readme, src]))
+        arch = self._touch("Personal", "Archive", "old-invoice.pdf")
+        self.assertEqual(walk_indexable_files(self.root), sorted([arch, readme, src]))
 
-    def test_walk_repo_files_empty_without_repos(self) -> None:
+    def test_archive_files_are_excluded_from_the_normal_walk(self) -> None:
+        normal = self._touch("Personal", "doc.txt")
+        self._touch("Personal", "Archive", "kept.txt")  # preserve → not in normal walk
+        self.assertEqual(walk_library_files(self.root), [normal])
+
+    def test_indexable_empty_without_preserve_zones(self) -> None:
         self._touch("Personal", "a.txt")
-        self.assertEqual(walk_repo_files(self.root), [])
+        self.assertEqual(walk_indexable_files(self.root), [])
 
 
 class TestReconcilePure(unittest.TestCase):
@@ -216,6 +222,19 @@ class TestRunRescanIntegration(unittest.TestCase):
         self.assertIn("indexed_in_place", row["content_json"])
         # .git internals are never catalogued
         self.assertIsNone(self.repo.find_by_current_path(str(repo_dir / ".git" / "HEAD")))
+
+    def test_archive_file_is_indexed_in_place_not_renamed(self) -> None:
+        # An Archive folder is a preserve zone like a repo: contents are read into
+        # the catalog for search but never renamed/moved/dated.
+        kept = self.paths.library_root / "Personal" / "Archive" / "vieux-dossier" / "notes.txt"
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        kept.write_text("anciennes notes a retrouver", encoding="utf-8")
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["indexed"], 1)
+        self.assertTrue(kept.is_file())  # untouched, same name and place
+        row = self.repo.find_by_current_path(str(kept))
+        self.assertIsNotNone(row)
+        self.assertIn("indexed_in_place", row["content_json"])
 
     def test_deleted_file_marks_row_and_logs(self) -> None:
         old = self.paths.library_root / "Personal" / "Gone.txt"

@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from procrafiler.taxonomy import is_in_archive
+
 # Catalog status for a row whose file the user deleted by hand. The row is KEPT
 # (the fiche stays, the history is rich, and a re-deposit of the same content is
 # recognised) — it is simply no longer considered present on disk.
@@ -48,23 +50,28 @@ class RescanPlan:
         return not (self.moved or self.readded or self.duplicates or self.deleted or self.new_files)
 
 
+def _is_in_preserve_zone(path: Path, library_root: Path, repo_roots: list[Path]) -> bool:
+    """A PRESERVE ZONE is kept exactly as the user arranged it — never renamed,
+    moved or dated — but indexed for search. Two kinds: a VCS repository (a dir
+    containing a `.git`) and an Archive folder (the user's own keep-as-is area)."""
+    if any(path.is_relative_to(root) for root in repo_roots):
+        return True
+    return is_in_archive(path.relative_to(library_root).parts)
+
+
 def walk_library_files(library_root: Path) -> list[Path]:
-    """Every REAL DOCUMENT file under the library (sorted). Excluded, because they
-    are never loose documents and renaming them would do harm:
+    """Every REAL DOCUMENT file under the library that the normal flow may file
+    (sorted). Excluded, because filing/renaming them would do harm:
 
     - symlinks (the library's internal back-references);
-    - hidden files and anything under a hidden directory (`.git`, `.config`, …) —
-      touching a `.git` internal would corrupt the repository;
-    - any file inside a VERSION-CONTROL REPOSITORY (a directory that contains a
-      `.git`): the user dropped a repo as a UNIT, not a pile of files to file —
-      timestamping its working tree would break it. The whole subtree is left
-      alone.
+    - hidden files and anything under a hidden directory (`.git`, `.config`, …);
+    - anything inside a PRESERVE ZONE — a VCS repository or an Archive folder —
+      which is kept as the user arranged it (see `walk_indexable_files`).
 
     The library's trash and the mirror live OUTSIDE ``library_root`` already."""
     if not library_root.exists():
         return []
     all_paths = list(library_root.rglob("*"))
-    # A repo root is the parent of a `.git` entry (a dir, or a file for worktrees).
     repo_roots = [p.parent for p in all_paths if p.name == ".git"]
     files: list[Path] = []
     for p in all_paths:
@@ -72,31 +79,28 @@ def walk_library_files(library_root: Path) -> list[Path]:
             continue
         if any(part.startswith(".") for part in p.relative_to(library_root).parts):
             continue  # hidden file, or under a hidden dir (e.g. .git internals)
-        if any(p.is_relative_to(root) for root in repo_roots):
-            continue  # inside a VCS repository — leave the unit untouched
+        if _is_in_preserve_zone(p, library_root, repo_roots):
+            continue  # VCS repo or Archive — left exactly as the user arranged it
         files.append(p)
     return sorted(files)
 
 
-def walk_repo_files(library_root: Path) -> list[Path]:
-    """Working-tree files INSIDE a VCS repository (a directory containing a
-    `.git`), excluding the `.git` internals and hidden files. These are the
-    counterpart of `walk_library_files`: they are NEVER renamed, moved or dated
-    (that would break the repo), but their readable documents can be INDEXED into
-    the catalog for search (see the pipeline's index-only pass)."""
+def walk_indexable_files(library_root: Path) -> list[Path]:
+    """Files inside a PRESERVE ZONE (a VCS repository or an Archive folder),
+    excluding `.git` internals, hidden files and the app's own Archive note. These
+    are NEVER renamed/moved/dated, but their readable documents are INDEXED into
+    the catalog for search (the pipeline filters by type/size)."""
     if not library_root.exists():
         return []
     all_paths = list(library_root.rglob("*"))
     repo_roots = [p.parent for p in all_paths if p.name == ".git"]
-    if not repo_roots:
-        return []
     files: list[Path] = []
     for p in all_paths:
         if not p.is_file() or p.is_symlink():
             continue
         if any(part.startswith(".") for part in p.relative_to(library_root).parts):
             continue  # hidden / .git internals — never indexed
-        if any(p.is_relative_to(root) for root in repo_roots):
+        if _is_in_preserve_zone(p, library_root, repo_roots):
             files.append(p)
     return sorted(files)
 
