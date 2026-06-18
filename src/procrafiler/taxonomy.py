@@ -28,6 +28,7 @@ BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Personal", "Hobbies"),
     ("Personal", "Social-media"),
     ("Personal", "Misc"),
+    ("Personal", "Archive"),
     ("Work",),
     ("Work", "Employment"),
     ("Work", "Employment", "Administrative"),
@@ -38,8 +39,28 @@ BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Work", "Business", "Expenses"),
     ("Work", "Business", "Clients"),
     ("Work", "Misc"),
+    ("Work", "Archive"),
     ("Manual_Review",),
 )
+
+
+# ARCHIVE folders are USER zones, not AI targets. They are scaffolded (visible, so
+# the user can drop backups / snapshots / old folders in them) but excluded from
+# the categories the AI may choose (like Manual_Review) — archiving is the user's
+# deliberate act, never an AI decision, and this avoids re-creating a catch-all
+# magnet. rescan treats everything under an Archive folder as a PRESERVE ZONE:
+# indexed for search, but never renamed/moved/reorganized (same as a VCS repo).
+# (Their purpose is documented in README.md; we keep the folders empty like the
+# rest of the base tree rather than littering each one with a note file.)
+ARCHIVE_BASE_DIRECTORIES: tuple[tuple[str, ...], ...] = (
+    ("Personal", "Archive"),
+    ("Work", "Archive"),
+)
+
+
+def is_in_archive(relative_parts: tuple[str, ...]) -> bool:
+    """True when a library-relative path lives under one of the Archive folders."""
+    return any(tuple(relative_parts[: len(base)]) == base for base in ARCHIVE_BASE_DIRECTORIES)
 
 
 # The safe catch-all destination. A file lands here when its content can't be
@@ -161,10 +182,14 @@ def category_label(relative_dir: tuple[str, ...]) -> str:
     return "/".join(relative_dir)
 
 
+_NON_CLASSIFIABLE: frozenset[tuple[str, ...]] = frozenset((INTERIM_LIBRARY_DIR, *ARCHIVE_BASE_DIRECTORIES))
+
+
 def classifiable_categories() -> tuple[tuple[str, ...], ...]:
-    """Semantic categories the AI may choose from — every base directory except
-    the interim review bucket (which is the fallback, not a real category)."""
-    return tuple(d for d in BASE_LIBRARY_DIRECTORIES if d != INTERIM_LIBRARY_DIR)
+    """Semantic categories the AI may choose from — every base directory EXCEPT
+    the interim review bucket (the fallback, not a real category) and the Archive
+    folders (user-only preserve zones; the AI never files there)."""
+    return tuple(d for d in BASE_LIBRARY_DIRECTORIES if d not in _NON_CLASSIFIABLE)
 
 
 def category_from_label(label: str) -> tuple[str, ...] | None:

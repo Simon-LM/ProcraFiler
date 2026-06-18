@@ -55,13 +55,15 @@ binary in the taxonomy) is not in the document — it depends on the user's
       subfolder like the run — anchored at the user's folder (never re-classified). Unreadable kinds
       are timestamped + catalogued with an empty fiche, never sent to manual review. (In-place CONTENT
       edits — same name, new bytes — are out of scope by design.)
-      **VCS repos (index-only):** a folder that is a git repository (contains a `.git`) is left
-      UNTOUCHED as a unit — never renamed/moved/dated (that would break it) — but its readable
-      working-tree documents (media types text/pdf, under a size ceiling) are READ INTO THE CATALOG
-      in place for search (`indexed_in_place: true`), so the repo's contents are findable. `.git`
-      internals and hidden files are never read. (Trigger = presence of a `.git`; a future option could
-      add a user marker / `backup`-named folders. Auto-dating backup folders was deliberately NOT done
-      — it's reorganization; the user names a backup with a date themselves and rescan preserves it.)
+      **PRESERVE ZONES (index-only):** a git repository (a dir with a `.git`) OR an `Archive` folder
+      (`Personal/Archive`, `Work/Archive`) is left UNTOUCHED as a unit — never renamed/moved/dated
+      (that would break it / defeat the point) — but its readable documents (media types text/pdf,
+      under a size ceiling) are READ INTO THE CATALOG in place for search (`indexed_in_place: true`),
+      so the contents are findable. `.git` internals and hidden files are never read. Archive folders
+      are scaffolded + visible but EXCLUDED from the AI's classifiable categories (archiving is the
+      user's act, never the AI's — avoids a catch-all magnet). Auto-dating backup folders was
+      deliberately NOT done — it's reorganization; the user names a backup with a date themselves and
+      rescan preserves it. (No note file is dropped in Archive — documented in README.md instead.)
       It tracks every file by its content fingerprint (sha256), so ANY hand
       reorganization is followed without AI: a file renamed or moved, or a whole FOLDER
       renamed or moved (every file inside keeps its sha256), just has its catalog path/name

@@ -96,14 +96,18 @@ The base library tree is organized by life **context** (Personal / Work) and the
 Personal/
     Administrative/   Identity  Taxes  Banking  Insurance  Health  Housing  Utilities  Telecom  Vehicle
     Education/
-    Hobbies/
+    Hobbies/   Social-media   Misc
+    Archive/          # your keep-as-is zone (see below) — the AI never files here
 Work/
     Employment/   Administrative  Payslips
-    Business/     Administrative  Invoices  Expenses  Clients
+    Business/     Administrative  Invoices  Expenses  Clients  Misc
+    Archive/          # your keep-as-is zone — the AI never files here
 Manual_Review/    # safe catch-all (uncertain / unreadable)
 ```
 
 There are **no format buckets**: a photographed receipt saved as `.jpg` is classified by what it *contains* (→ `Personal/Administrative/...`), while a holiday photo goes to its event (`Personal/Trip-Spain-2025`). The format only decides which reader extracts the content, never the destination. Cross-cutting views ("all my bills") come from the catalog fiche (keywords/entities) and soft-links, not by duplicating folders. The taxonomy is a sane default you can adapt.
+
+**`Archive/` (Personal and Work) is your preserve zone.** Drop in anything you want kept **exactly as you arranged it** — backups, snapshots, old folders, a git repository. The AI **never files anything here on its own** (it's not a classification target — archiving is your deliberate act, and this avoids a catch-all magnet). `rescan` treats everything under `Archive/` like a git repository: it **reads the readable documents inside for search** (they enter the catalog) but **never renames, moves or reorganizes** them.
 
 ## AI Analysis (MVP)
 
