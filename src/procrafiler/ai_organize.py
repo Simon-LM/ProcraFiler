@@ -129,10 +129,11 @@ def _build_organize_prompt(
             "not a closed list. A subject folder is NOT a catch-all: file there only when the content "
             "is clearly about that subject — the mere existence of the folder is not a reason. A "
             "genuinely miscellaneous document (no clear subject, no series) goes to \"<base>/Misc\" "
-            "(e.g. Personal/Misc), used only as a last resort. Social-media / online content — "
-            "avatars, memes, thumbnails, screenshots of social posts, the user's own videos/posts — "
-            "goes under \"Personal/Social-media\" (not a hobby, not Misc), unless it is clearly "
-            "the user's declared job/business (then Work).\n\n"
+            "(e.g. Personal/Misc), used only as a last resort. Judge images by INTENT, not form: a "
+            "personal RECORD (a photo of a moment, a scan) is filed by its subject, but CONTENT MADE FOR "
+            "AN AUDIENCE — a designed/AI-generated visual, a meme, an infographic, a comparison, a post, "
+            "an avatar — goes under \"Personal/Social-media\" (an image is not \"Photo\" just because it "
+            "is an image), unless it is clearly the user's declared job/business (then Work).\n\n"
         )
     else:
         context_block = ""
