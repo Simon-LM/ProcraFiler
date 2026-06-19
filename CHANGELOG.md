@@ -8,6 +8,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-19
+
+First tagged version — the usable base: AI-first ingestion, reading (text/PDF/OCR/vision), content-driven naming and classification, the two-phase set-aware organize, the catalog + snapshot + mirror, `setup-context`, neutral configurable AI sampling, the full `rescan` (moves/renames/deletes/duplicates, hand-placed ingestion, horodatage enforcement, VCS-repo + Archive index-only preserve zones), and the classification refinements below.
+
 ### Changed
 
 - **Images are classified by INTENT, not form — a made-for-audience visual is social content, not a "Photo" (run-18).** An AI-generated comparison graphic (a `ChatGPT Image …png`) was filed under `Hobbies/Photo` because the analysis judged it by its form ("it's an image") rather than its intent. The analysis/organize prompts now lead with one **generalist** distinction (no per-type rulebook): a personal **RECORD** (a photo of a real moment, a scan) is filed by its subject, but **CONTENT MADE FOR AN AUDIENCE** (a designed or AI-generated visual, a meme, an infographic, a comparison, a post, an avatar, a social screenshot) goes under `Personal/Social-media` — *"an image is NOT Photo merely because it is an image"* (which also re-closes the Photo image-magnet). And when it's clearly published/social content but **Personal vs Work can't be told** from content + context, the analysis no longer guesses: it returns `category_path: null` with **both** `Personal/Social-media` and the matching Work folder as alternatives, so the file goes to the decisions queue for you to resolve. `tests/test_ai_analysis.py` +1. 347 tests green.
