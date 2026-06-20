@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **`search` — find your documents by content, offline (Search Slice 1).** A `procrafiler search <terms>` command queries the per-document **fiche** already in the catalog (name, keywords, entities, summary) via SQLite **FTS5** — no re-reading, no AI, no network. Results are ranked by relevance (BM25; the name/keywords weigh more than the summary), **accent-insensitive** (`impot` finds `impôt`), and shown as an accessible list (name · category · date · matching snippet · path). A temporary index is built from the catalog at query time, so it's always consistent and there's nothing to migrate. Covers every filed document, including Archive/VCS preserve-zone docs indexed in place. (Deep full-text search over the documents' body — hidden `.txt` sidecars for OCR/vision text + a persistent index — is the next slice.) New `procrafiler.search`; CLI `search`. `tests/test_search.py` +6. 353 tests green.
+
 ## [0.2.0] - 2026-06-19 — Rescan
 
 When you reorganize the library by hand, the catalog now follows — with no AI; and "preserve zones" (git repos, Archive folders) are indexed for search without being touched.

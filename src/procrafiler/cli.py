@@ -107,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
     )
 
+    search_p = subparsers.add_parser(
+        "search",
+        help="Search your library by content (offline, over the catalog fiche)",
+    )
+    search_p.add_argument("query", nargs="+", help="search terms")
+    search_p.add_argument("--limit", type=int, default=20, help="max results (default: 20)")
+
     subparsers.add_parser(
         "rescan",
         help="Follow hand reorganization of the library (moves/renames/deletes) into the catalog. No AI.",
@@ -386,6 +393,34 @@ def cmd_setup_context() -> int:
     return 0
 
 
+def cmd_search(terms: list[str], limit: int) -> int:
+    from procrafiler.search import search_catalog
+
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    query = " ".join(terms)
+    hits = search_catalog(paths.catalog_db_file, query, limit=limit)
+    if not hits:
+        print(f"No results for: {query}")
+        return 0
+    print(f"{len(hits)} result(s) for: {query}")
+    for hit in hits:
+        try:
+            location = str(Path(hit.path).relative_to(paths.library_root))
+        except ValueError:
+            location = hit.path
+        header = f"\n• {hit.name}"
+        if hit.category_path:
+            header += f"   [{hit.category_path}]"
+        if hit.date:
+            header += f"   {hit.date}"
+        print(header)
+        if hit.snippet:
+            print(f"  {hit.snippet}")
+        print(f"  {location}")
+    return 0
+
+
 def cmd_rescan() -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -464,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_review()
     if args.command == "setup-context":
         return cmd_setup_context()
+    if args.command == "search":
+        return cmd_search(args.query, args.limit)
     if args.command == "rescan":
         return cmd_rescan()
     if args.command == "deleted-history":

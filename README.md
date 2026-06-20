@@ -156,6 +156,7 @@ procrafiler process-all             # process every file currently in the Inbox
 procrafiler process-all --dry-run
 procrafiler review                  # resolve files the AI was unsure about (the decisions queue)
 procrafiler setup-context           # guided questionnaire → your context file (helps the AI file your docs)
+procrafiler search <terms>          # find documents by content (offline, ranked; e.g. `search facture edf`)
 ```
 
 `setup-context` is a short, universal questionnaire (who you are, your work + the names that mean *your* work, your interests, your household) that writes your **context file** for you — no config to hand-edit. It only **guides** the AI (the document's content still decides), so a hobby you forgot or a project you didn't list is still handled from the content. Your answers stay on your machine (the context file is gitignored, never committed).
