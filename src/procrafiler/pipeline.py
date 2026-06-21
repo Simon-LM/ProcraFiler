@@ -1013,10 +1013,12 @@ def _file_cataloged(
         features=features,
     )
 
+    # The AI-extracted text exists only now (read time); keep its sidecar even for
+    # a file parked in review — `resolve_pending_decision` moves it on resolution.
+    _write_text_sidecar(library_target, catdoc.read_via, catdoc.content_text)
     if is_pending:
         return ProcessResult(current_state, mirror_failed=False, pending=True, library_path=str(library_target))
 
-    _write_text_sidecar(library_target, catdoc.read_via, catdoc.content_text)
     mirror_status = _sync_to_mirror(
         paths,
         operation_id=catdoc.operation_id,
@@ -1511,6 +1513,7 @@ def resolve_pending_decision(
     target_dir.mkdir(parents=True, exist_ok=True)
     library_target = _ensure_unique_path(target_dir / source.name)
     move(str(source), str(library_target))
+    _move_text_sidecar(source, library_target)  # the hidden text copy follows out of review
 
     # Keep the document fiche, but update its category_path to reflect the
     # resolved destination (the AI proposed; the user decided).

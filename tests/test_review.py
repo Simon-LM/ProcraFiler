@@ -191,6 +191,21 @@ class TestResolveDirect(_PipelineTestCase):
         with self.assertRaises(PendingDecisionError):
             resolve_pending_decision(self.paths, record, "Personal/Administrative/Banking", now_utc=self.now)
 
+    def test_sidecar_follows_a_resolved_file(self) -> None:
+        # A vision/OCR file parked in review has a hidden text sidecar; resolving
+        # it must move the sidecar out of review with the document.
+        self._process({"category_path": None, "alternatives": ["Personal/Administrative/Banking"]})
+        record = self._repo().list_pending_decisions()[0]
+        parked = Path(str(record["current_path"]))
+        (parked.parent / ("." + parked.name + ".txt")).write_text("vision text", encoding="utf-8")
+        route = resolve_pending_decision(self.paths, record, "Personal/Administrative/Banking", now_utc=self.now)
+        dest = self.paths.library_root.joinpath(*route)
+        doc = next(p for p in dest.iterdir() if p.is_file() and not p.name.startswith("."))
+        new_sidecar = dest / ("." + doc.name + ".txt")
+        self.assertTrue(new_sidecar.is_file())
+        self.assertEqual(new_sidecar.read_text(encoding="utf-8"), "vision text")
+        self.assertFalse((parked.parent / ("." + parked.name + ".txt")).exists())
+
 
 if __name__ == "__main__":
     unittest.main()
