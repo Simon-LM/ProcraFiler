@@ -17,6 +17,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- **A file you send to `review` now also gets its hidden text sidecar.** The OCR/vision text exists only at read time, but the sidecar was written *after* a parked (decision-queue) file returned early — so a document you resolved via `review` had no sidecar and would be invisible to the upcoming deep search. The sidecar is now written before parking (next to the file in `Manual_Review`), and `resolve_pending_decision` moves it out with the document when you resolve. `tests/test_review.py` +1. 362 tests green.
+
 - **rescan now syncs the catalogued NAME to your filename, so search shows the name you chose.** When you renamed a filed document by hand (e.g. `Facture_CAF` → `AR_CAF`), rescan updated the file's path but left the fiche's `name` at the AI's original value — so `search` displayed the stale name. rescan now ensures the fiche `name` follows the on-disk filename stem (the user's filename is authoritative for the catalogued name too, not just the path) — no AI, no re-reading. Runs on every rescan, fixing already-renamed files and all future renames; a no-op for files the app named. The document's keywords/content are untouched, so it stays findable by what it's about. CLI rescan summary gains `names synced`. `tests/test_rescan.py` +1. 354 tests green.
 
 ## [0.2.0] - 2026-06-19 — Rescan
