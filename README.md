@@ -167,6 +167,8 @@ When the AI cannot confidently place a file but has plausible candidates, it doe
 
 When you reorganize the library **by hand** — rename a file, move it, or rename/move a whole folder — `process-all` first runs a **rescan** (also available standalone) that follows your changes into the catalog **without any AI**: it tracks each file by its content fingerprint, so a moved or renamed file (or every file in a renamed folder) just has its catalog path updated — never re-read, re-classified or re-named. **Your location and name always win** — the one thing the app owns is the **timestamp prefix**: any file that lacks it (e.g. one you renamed without it) gets it back from its catalogued date, keeping your name. A file you deleted by hand is recorded (and listable via `deleted-history`); a deliberate duplicate you placed is catalogued but never touched. A genuinely **new** file you drop into the library is read once (its fiche enters the catalog, for search), gets the **timestamp prefix** (your stem kept), and — if it's a recurring kind — is dated into its `…/<Entity>/<Year>/` subfolder like the run; it stays in the folder you chose. A **git repository** you drop in (a folder with a `.git`) is left **untouched as a unit** — never renamed or reorganized — but its readable documents (`.md`, `.txt`, `.pdf`…) are **indexed in place** into the catalog so they're searchable too.
 
+For a document whose text could only be read by AI (OCR on a scanned PDF, vision on an image), the extracted text is kept once in a small **hidden sidecar** next to it (`.<filename>.txt`) so future content search never re-reads it; rescan moves that sidecar with its document.
+
 Diagnostics and maintenance:
 
 ```bash

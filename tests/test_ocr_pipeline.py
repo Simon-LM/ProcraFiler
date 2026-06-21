@@ -56,7 +56,10 @@ class TestOcrPipeline(unittest.TestCase):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        banque_files = [p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*") if p.is_file()]
+        banque_files = [
+            p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*")
+            if p.is_file() and not p.name.startswith(".")  # exclude the hidden text sidecar
+        ]
         self.assertEqual(len(banque_files), 1)
 
         events = self._events()
@@ -87,7 +90,10 @@ class TestOcrPipeline(unittest.TestCase):
                 status = process_next_inbox_file(self.paths, now_utc=self.now)
 
         self.assertEqual(status, "LIBRARY_STORED")
-        banque_files = [p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*") if p.is_file()]
+        banque_files = [
+            p for p in (self.paths.library_root / "Personal/Administrative/Banking").rglob("*")
+            if p.is_file() and not p.name.startswith(".")  # exclude the hidden text sidecar
+        ]
         self.assertEqual(len(banque_files), 1)
         events = self._events()
         self.assertTrue(any(e["action"] == "vision_read_success" for e in events))
