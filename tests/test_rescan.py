@@ -301,6 +301,27 @@ class TestRunRescanIntegration(unittest.TestCase):
             {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0, "renamed": 0},
         )
 
+    def test_moved_document_carries_its_hidden_text_sidecar(self) -> None:
+        # Slice 2: a scanned/vision doc has a hidden .txt sidecar; when you move
+        # the document by hand, rescan moves the sidecar with it.
+        lib = self.paths.library_root
+        new = lib / "Work" / "2026-01-01_00-00-00__Scan.pdf"
+        new.parent.mkdir(parents=True, exist_ok=True)
+        new.write_bytes(b"scan content")
+        old = lib / "Personal" / "2026-01-01_00-00-00__Scan.pdf"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old_sidecar = old.parent / ".2026-01-01_00-00-00__Scan.pdf.txt"
+        old_sidecar.write_text("ocr transcription", encoding="utf-8")
+        self.repo.upsert_document(
+            doc_id="doc-scan", sha256=_file_sha256(new), current_filename=new.name,
+            current_path=str(old), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+        )
+        run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        new_sidecar = new.parent / ".2026-01-01_00-00-00__Scan.pdf.txt"
+        self.assertTrue(new_sidecar.is_file())
+        self.assertEqual(new_sidecar.read_text(encoding="utf-8"), "ocr transcription")
+        self.assertFalse(old_sidecar.exists())
+
     def test_renamed_file_syncs_the_fiche_name(self) -> None:
         # run-19: you renamed Facture_CAF -> AR_CAF by hand. rescan must make the
         # catalogued name follow the file (so search shows your name, not the AI's).

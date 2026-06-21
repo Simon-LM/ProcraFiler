@@ -9,13 +9,15 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Hidden text sidecars for OCR/vision documents (Search Slice 2).** When a document's text could only be obtained by AI — OCR for a scanned PDF, vision for an image — that extracted text is now kept **once** in a hidden sidecar next to the file (`.<filename>.txt`). Plain text files and readable PDFs get **no** sidecar (their text is free to re-extract). This preserves the costly text on disk (respecting "process once"), so the upcoming deep search (Slice 3) can read a scan's/photo's content without ever re-OCR/re-vision. The sidecar is hidden (rescan's walk ignores it, it's never treated as a document); **rescan moves it with its document** when you reorganize by hand, and removes it when you delete the document. Written by the run and by rescan's ingestion. New `_write_text_sidecar` / `_move_text_sidecar` / `_remove_text_sidecar`. `tests/test_sidecars.py` +6, `tests/test_rescan.py` +1. 361 tests green.
+
+- **`search` — find your documents by content, offline (Search Slice 1).** A `procrafiler search <terms>` command queries the per-document **fiche** already in the catalog (name, keywords, entities, summary) via SQLite **FTS5** — no re-reading, no AI, no network. Results are ranked by relevance (BM25; the name/keywords weigh more than the summary), **accent-insensitive** (`impot` finds `impôt`), and shown as an accessible list (name · category · date · matching snippet · path). A temporary index is built from the catalog at query time, so it's always consistent and there's nothing to migrate. Covers every filed document, including Archive/VCS preserve-zone docs indexed in place. (Deep full-text search over the documents' body — hidden `.txt` sidecars for OCR/vision text + a persistent index — is the next slice.) New `procrafiler.search`; CLI `search`. `tests/test_search.py` +6. 353 tests green.
+
 ### Fixed
 
 - **rescan now syncs the catalogued NAME to your filename, so search shows the name you chose.** When you renamed a filed document by hand (e.g. `Facture_CAF` → `AR_CAF`), rescan updated the file's path but left the fiche's `name` at the AI's original value — so `search` displayed the stale name. rescan now ensures the fiche `name` follows the on-disk filename stem (the user's filename is authoritative for the catalogued name too, not just the path) — no AI, no re-reading. Runs on every rescan, fixing already-renamed files and all future renames; a no-op for files the app named. The document's keywords/content are untouched, so it stays findable by what it's about. CLI rescan summary gains `names synced`. `tests/test_rescan.py` +1. 354 tests green.
-
-### Added
-
-- **`search` — find your documents by content, offline (Search Slice 1).** A `procrafiler search <terms>` command queries the per-document **fiche** already in the catalog (name, keywords, entities, summary) via SQLite **FTS5** — no re-reading, no AI, no network. Results are ranked by relevance (BM25; the name/keywords weigh more than the summary), **accent-insensitive** (`impot` finds `impôt`), and shown as an accessible list (name · category · date · matching snippet · path). A temporary index is built from the catalog at query time, so it's always consistent and there's nothing to migrate. Covers every filed document, including Archive/VCS preserve-zone docs indexed in place. (Deep full-text search over the documents' body — hidden `.txt` sidecars for OCR/vision text + a persistent index — is the next slice.) New `procrafiler.search`; CLI `search`. `tests/test_search.py` +6. 353 tests green.
 
 ## [0.2.0] - 2026-06-19 — Rescan
 

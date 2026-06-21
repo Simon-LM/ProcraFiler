@@ -844,6 +844,53 @@ def _route_from_analysis(
     return INTERIM_LIBRARY_DIR, None, None
 
 
+# --- Text sidecars (Search Slice 2) -----------------------------------------
+# For a document whose text could only be obtained by AI (OCR for a scanned PDF,
+# vision for an image), we keep that extracted text ONCE in a HIDDEN sidecar next
+# to the file (`.<filename>.txt`), so a future deep search can read the content
+# without ever re-OCR/re-vision (respecting "process once"). Plain text files and
+# readable PDFs need no sidecar — their text is free to re-extract. The sidecar is
+# hidden, so rescan's walk ignores it; rescan moves/removes it with its document.
+
+def _sidecar_path(doc_path: Path) -> Path:
+    return doc_path.parent / ("." + doc_path.name + ".txt")
+
+
+def _write_text_sidecar(doc_path: Path, read_via: str | None, content_text: str | None) -> None:
+    """Write the AI-extracted text next to `doc_path` (hidden) — only when the
+    text came from OCR or vision (costly, not re-derivable for free)."""
+    if read_via not in ("ocr", "vision") or not content_text or not content_text.strip():
+        return
+    try:
+        _sidecar_path(doc_path).write_text(content_text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _move_text_sidecar(old_doc_path: Path, new_doc_path: Path) -> None:
+    """Follow a document's hand move/rename with its hidden text sidecar. The
+    sidecar name stays exactly `.<filename>.txt` (the document names are already
+    unique, so there is no collision to disambiguate)."""
+    old = _sidecar_path(old_doc_path)
+    new = _sidecar_path(new_doc_path)
+    if old == new or not old.exists():
+        return
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        move(str(old), str(new))
+    except OSError:
+        pass
+
+
+def _remove_text_sidecar(doc_path: Path) -> None:
+    side = _sidecar_path(doc_path)
+    try:
+        if side.exists():
+            side.unlink()
+    except OSError:
+        pass
+
+
 def _file_cataloged(
     paths: RuntimePaths,
     catdoc: _CatalogedDoc,
@@ -969,6 +1016,7 @@ def _file_cataloged(
     if is_pending:
         return ProcessResult(current_state, mirror_failed=False, pending=True, library_path=str(library_target))
 
+    _write_text_sidecar(library_target, catdoc.read_via, catdoc.content_text)
     mirror_status = _sync_to_mirror(
         paths,
         operation_id=catdoc.operation_id,
@@ -2083,6 +2131,7 @@ def _ingest_new_library_file(
 
     analysis = None
     read_via: str | None = None
+    content_text: str | None = None
     if dispatch.can_dispatch:
         catdoc = _read_and_analyze(
             paths,
@@ -2099,6 +2148,7 @@ def _ingest_new_library_file(
         )
         analysis = catdoc.analysis
         read_via = catdoc.read_via
+        content_text = catdoc.content_text
     else:
         emit(f"   read: unreadable kind ({file_path.name}) — timestamped, not classified")
 
@@ -2120,6 +2170,7 @@ def _ingest_new_library_file(
     library_target = _ensure_unique_path(target_dir / final_name)
     if library_target != file_path:
         move(str(file_path), str(library_target))
+    _write_text_sidecar(library_target, read_via, content_text)
     emit(f"   rescan ingested: {file_path.name} → {library_target.relative_to(paths.library_root)}")
 
     now_iso = _utc_iso(now_utc)
@@ -2245,6 +2296,7 @@ def run_rescan(
     for row, new_path in plan.moved:
         old_path = str(row.get("current_path"))
         final_path = _ensure_timestamp_prefix(new_path, _fiche_effective_dt(row.get("content_json"), new_path, now_utc))
+        _move_text_sidecar(Path(old_path), final_path)  # the hidden text copy follows its document
         repo.upsert_document(
             doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
             current_filename=final_path.name, current_path=str(final_path),
@@ -2300,6 +2352,7 @@ def run_rescan(
 
     for row in plan.deleted:
         old_path = str(row.get("current_path"))
+        _remove_text_sidecar(Path(old_path))  # the document is gone; its hidden text copy is useless
         repo.upsert_document(
             doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
             current_filename=str(row.get("current_filename") or Path(old_path).name),
