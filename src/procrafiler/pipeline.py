@@ -2218,10 +2218,12 @@ def run_rescan(
     one (from its fiche date, keeping the user's stem); a file that already carries
     a valid prefix is never re-dated. A PRESERVE ZONE (a VCS repository, or an
     Archive folder) is left untouched as a unit, but its readable documents are
-    INDEXED in place into the catalog for search. Every action is logged."""
+    INDEXED in place into the catalog for search. The catalogued NAME also follows
+    your filename — renaming a file by hand syncs the fiche's display name (no AI),
+    so search shows the name you chose. Every action is logged."""
     from procrafiler.rescan import DELETED_STATUS, reconcile, walk_indexable_files, walk_library_files
 
-    counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0}
+    counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0, "renamed": 0}
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
     rows = repo.list_documents()
@@ -2229,8 +2231,6 @@ def run_rescan(
     # Preserve-zone docs (VCS repos + Archive folders) not yet catalogued → index.
     known_paths = {str(r.get("current_path")) for r in rows}
     repo_to_index = [p for p in walk_indexable_files(paths.library_root) if str(p) not in known_paths]
-    if plan.is_empty and not repo_to_index:
-        return counts
 
     now_iso = _utc_iso(now_utc)
     op = str(uuid4())
@@ -2350,7 +2350,37 @@ def run_rescan(
                 now_utc=now_utc, path_before=str(repo_file), features=features,
             )
 
-    _write_catalog_snapshot(paths, repo, now_utc, features=features)
+    # Name sync: your FILENAME is authoritative for the catalogued name too. When
+    # you rename a file by hand, the fiche's display name follows it (no AI), so
+    # search shows the name you chose, not the AI's original one. A no-op for files
+    # the app named (the on-disk stem already equals the fiche name).
+    for row in repo.list_documents():
+        if row.get("status") != "LIBRARY_STORED":
+            continue
+        content_json = row.get("content_json")
+        if not content_json:
+            continue
+        try:
+            fiche = json.loads(content_json)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(fiche, dict):
+            continue
+        stem = _strip_ts_prefix(Path(str(row.get("current_filename") or "")).stem)
+        if stem and fiche.get("name") != stem:
+            fiche["name"] = stem
+            repo.upsert_document(
+                doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
+                current_filename=str(row["current_filename"]), current_path=str(row["current_path"]),
+                status=str(row["status"]), updated_at_utc=now_iso,
+                flow_state=row.get("flow_state"), pending_decision=None,
+                content_json=json.dumps(fiche, ensure_ascii=True),
+            )
+            counts["renamed"] += 1
+            emit(f"   rescan name synced: {_rel(row.get('current_path'))} → \"{stem}\"")
+
+    if any(counts.values()):
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
     return counts
 
 

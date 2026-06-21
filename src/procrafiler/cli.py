@@ -435,7 +435,8 @@ def cmd_rescan() -> int:
         "Rescan: "
         f"moved: {counts['moved']}, re-added: {counts['readded']}, "
         f"duplicates: {counts['duplicates']}, deleted: {counts['deleted']}, "
-        f"new ingested: {counts['new']}, repo docs indexed: {counts['indexed']}"
+        f"new ingested: {counts['new']}, repo docs indexed: {counts['indexed']}, "
+        f"names synced: {counts['renamed']}"
     )
     return 0
 
