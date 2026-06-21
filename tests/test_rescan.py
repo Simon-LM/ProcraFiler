@@ -296,7 +296,28 @@ class TestRunRescanIntegration(unittest.TestCase):
             current_path=str(keep), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
         )
         counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
-        self.assertEqual(counts, {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0})
+        self.assertEqual(
+            counts,
+            {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0, "renamed": 0},
+        )
+
+    def test_renamed_file_syncs_the_fiche_name(self) -> None:
+        # run-19: you renamed Facture_CAF -> AR_CAF by hand. rescan must make the
+        # catalogued name follow the file (so search shows your name, not the AI's).
+        import json as _json
+        f = self.paths.library_root / "Personal" / "Administrative" / "2025-06-07_00-00-00__AR_CAF.pdf"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"caf")
+        self.repo.upsert_document(
+            doc_id="doc-caf", sha256=_file_sha256(f), current_filename=f.name,
+            current_path=str(f), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+            content_json=_json.dumps({"name": "Facture_CAF", "keywords": ["facture"]}),
+        )
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["renamed"], 1)
+        fiche = _json.loads(self.repo.find_by_current_path(str(f))["content_json"])
+        self.assertEqual(fiche["name"], "AR_CAF")  # follows your filename
+        self.assertEqual(fiche["keywords"], ["facture"])  # content unchanged
 
 
 if __name__ == "__main__":
