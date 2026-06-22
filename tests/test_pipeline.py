@@ -120,6 +120,32 @@ class TestPipeline(unittest.TestCase):
         mirror_files = [p for p in self.paths.mirror_root.rglob("*") if p.is_file()]
         self.assertEqual(len(mirror_files), 1)
 
+    def test_redeposit_of_a_deleted_file_is_not_trashed(self) -> None:
+        # run-19: deleting a doc left a tombstone whose hash matched the inbox →
+        # re-adding it was wrongly trashed as a duplicate. A tombstone (deleted)
+        # must NOT block a re-deposit; it is re-filed, and the re-deposit is logged.
+        from procrafiler.catalog import CatalogRepository
+        from procrafiler.pipeline import _file_sha256
+
+        f = self.paths.inbox_dir / "again.txt"
+        f.write_bytes(b"some content I deleted then re-added")
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        repo.upsert_document(
+            doc_id="t1", sha256=_file_sha256(f), current_filename="x", current_path="/old/x",
+            status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+        )
+        repo.tombstone_document("t1", sha256=_file_sha256(f), deleted_at="2026-06-01T00:00:00Z")
+
+        status = process_next_inbox_file(self.paths, now_utc=datetime(2026, 6, 20, 9, 0, 0, tzinfo=timezone.utc))
+        self.assertNotEqual(status, "INBOX_TRASH_PENDING_MANUAL")  # not a duplicate
+        self.assertEqual(len(list(self.paths.inbox_trash_manual_dir.iterdir())), 0)
+        actions = [
+            json.loads(line)["action"]
+            for line in self.paths.actions_log_file.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        self.assertIn("redeposit_of_deleted", actions)
+
     def _manual_review_files(self) -> list[Path]:
         review_dir = self.paths.library_root / "Manual_Review"
         return [p for p in review_dir.rglob("*") if p.is_file()] if review_dir.exists() else []

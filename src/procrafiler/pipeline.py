@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from shutil import move
+from shutil import copy2, move
 from typing import Any
 from uuid import uuid4
 
@@ -529,6 +529,9 @@ def _sync_to_mirror(
             path_after=str(mirror_target),
             features=features,
         )
+        # Back up the hidden text sidecar too (if any), so the costly OCR/vision
+        # text is mirrored alongside its document.
+        _mirror_text_sidecar(paths, library_file)
         return MIRROR_SYNCED
 
     _append_action_log(
@@ -882,13 +885,67 @@ def _move_text_sidecar(old_doc_path: Path, new_doc_path: Path) -> None:
         pass
 
 
-def _remove_text_sidecar(doc_path: Path) -> None:
-    side = _sidecar_path(doc_path)
+def _mirror_text_sidecar(paths: RuntimePaths, library_file: Path) -> None:
+    """Back up a document's hidden text sidecar to the mirror, alongside the
+    mirror copy of the document — so the costly OCR/vision text survives even if
+    the primary library is lost. No-op when the document has no sidecar."""
+    sidecar = _sidecar_path(library_file)
+    if not sidecar.is_file():
+        return
     try:
-        if side.exists():
-            side.unlink()
+        relative_path = sidecar.relative_to(paths.library_root)
+    except ValueError:
+        return
+    mirror_target = paths.mirror_root / relative_path
+    try:
+        mirror_target.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(sidecar), str(mirror_target))
     except OSError:
         pass
+
+
+def _trash_deleted_artifacts(
+    paths: RuntimePaths,
+    doc_path: Path,
+    *,
+    operation_id: str,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+) -> None:
+    """When a library document is deleted by hand, quarantine its leftover
+    artifacts — the document itself is already gone (the user deleted it). Each
+    artifact goes to ITS OWN library's trash (same rule as
+    `move_library_file_to_trash`): the mirror backup copy and the mirror's text
+    sidecar to `Mirror_Trash`, and the primary hidden text sidecar to the primary
+    `Library_Trash`."""
+    try:
+        relative_path = doc_path.relative_to(paths.library_root)
+    except ValueError:
+        return
+    sidecar = _sidecar_path(doc_path)
+    sidecar_rel = sidecar.relative_to(paths.library_root)
+    artifacts = (
+        (paths.mirror_root / relative_path, paths.mirror_trash_dir, relative_path,
+         "library_deleted_mirror_quarantined", "Mirror copy quarantined to Mirror_Trash on hand deletion."),
+        (paths.mirror_root / sidecar_rel, paths.mirror_trash_dir, sidecar_rel,
+         "library_deleted_mirror_sidecar_quarantined", "Mirror text sidecar quarantined to Mirror_Trash on hand deletion."),
+        (sidecar, paths.library_trash_manual_dir, sidecar_rel,
+         "library_deleted_sidecar_quarantined", "Hidden text sidecar quarantined to Library_Trash on hand deletion."),
+    )
+    for source, trash_dir, rel, action, message in artifacts:
+        if not source.is_file():
+            continue
+        target = _ensure_unique_path(trash_dir / rel)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            move(str(source), str(target))
+        except OSError:
+            continue
+        _append_action_log(
+            paths, operation_id=operation_id, action=action, status="success",
+            message=message,
+            now_utc=now_utc, path_before=str(source), path_after=str(target), features=features,
+        )
 
 
 def _file_cataloged(
@@ -1080,7 +1137,7 @@ def _dry_run_one(
         extra_fields={"dry_run": True},
         features=features,
     )
-    if repo.has_sha256(sha256):
+    if repo.has_live_sha256(sha256):
         current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
         current_state = validate_transition(current_state, "INBOX_TRASH_PENDING_MANUAL")
         _append_action_log(
@@ -1208,7 +1265,7 @@ def _catalog_one_inbox_file(
     repo.init_schema()
     current_state = validate_transition(current_state, "ANALYSIS_RUNNING")
 
-    if repo.has_sha256(sha256) or sha256 in extra_known_hashes:
+    if repo.has_live_sha256(sha256) or sha256 in extra_known_hashes:
         current_state = validate_transition(current_state, "DUPLICATE_CANDIDATE")
         trash_target = _ensure_unique_path(paths.inbox_trash_manual_dir / queued_target.name)
         move(str(queued_target), str(trash_target))
@@ -1237,6 +1294,18 @@ def _catalog_one_inbox_file(
         _write_catalog_snapshot(paths, repo, now_utc, features=features)
         emit("   duplicate → Inbox_Trash_Manual")
         return ProcessResult(current_state, mirror_failed=False)
+
+    # Not a duplicate of a LIVE document. If its content matches a tombstone, it is
+    # a RE-DEPOSIT of something you deleted — file it normally, but tell you.
+    deleted_at = repo.deleted_at_for_sha256(sha256)
+    if deleted_at:
+        emit(f"   note: you previously deleted this file (on {deleted_at[:10]}) — re-filing it")
+        _append_action_log(
+            paths, operation_id=operation_id, action="redeposit_of_deleted", status="success",
+            message=f"Re-deposit of content previously deleted on {deleted_at}",
+            now_utc=now_utc, path_before=str(queued_target),
+            extra_fields={"deleted_at": deleted_at}, features=features,
+        )
 
     current_state = validate_transition(current_state, "CLASSIFICATION_READY")
     current_state = validate_transition(current_state, "ROUTE_PROPOSED")
@@ -1457,6 +1526,26 @@ def move_library_file_to_trash(
             now_utc=now_utc,
             path_before=str(mirror_source),
             features=features,
+        )
+
+    # The hidden text sidecars follow their document to trash, each to its own
+    # library's trash: primary sidecar → Library_Trash, mirror sidecar → Mirror_Trash.
+    sidecar_rel = _sidecar_path(relative_path)
+    for sidecar_source, trash_dir, sidecar_action, sidecar_message in (
+        (_sidecar_path(resolved), paths.library_trash_manual_dir,
+         "library_trash_sidecar_quarantined", "Hidden text sidecar moved to Library_Trash with its document."),
+        (_sidecar_path(mirror_source), paths.mirror_trash_dir,
+         "library_trash_mirror_sidecar_quarantined", "Mirror text sidecar quarantined to Mirror_Trash with its document."),
+    ):
+        if not sidecar_source.is_file():
+            continue
+        sidecar_target = _ensure_unique_path(trash_dir / sidecar_rel)
+        sidecar_target.parent.mkdir(parents=True, exist_ok=True)
+        move(str(sidecar_source), str(sidecar_target))
+        _append_action_log(
+            paths, operation_id=operation_id, action=sidecar_action, status="success",
+            message=sidecar_message, now_utc=now_utc,
+            path_before=str(sidecar_source), path_after=str(sidecar_target), features=features,
         )
 
     existing_fiche = record.get("content_json")
@@ -2275,7 +2364,7 @@ def run_rescan(
     INDEXED in place into the catalog for search. The catalogued NAME also follows
     your filename — renaming a file by hand syncs the fiche's display name (no AI),
     so search shows the name you chose. Every action is logged."""
-    from procrafiler.rescan import DELETED_STATUS, reconcile, walk_indexable_files, walk_library_files
+    from procrafiler.rescan import reconcile, walk_indexable_files, walk_library_files
 
     counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0, "renamed": 0}
     repo = CatalogRepository(paths.catalog_db_file)
@@ -2355,18 +2444,15 @@ def run_rescan(
 
     for row in plan.deleted:
         old_path = str(row.get("current_path"))
-        _remove_text_sidecar(Path(old_path))  # the document is gone; its hidden text copy is useless
-        repo.upsert_document(
-            doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
-            current_filename=str(row.get("current_filename") or Path(old_path).name),
-            current_path=old_path, status=DELETED_STATUS, updated_at_utc=now_iso,
-            flow_state=row.get("flow_state"), pending_decision=None,
-            content_json=row.get("content_json"),
-        )
+        # Quarantine the mirror copy + hidden text sidecar to Mirror_Trash, then
+        # reduce the catalog row to a TOMBSTONE — id + hash + date only (no name,
+        # path or fiche linger). The tombstone lets a re-deposit be recognised.
+        _trash_deleted_artifacts(paths, Path(old_path), operation_id=op, now_utc=now_utc, features=features)
+        repo.tombstone_document(str(row["doc_id"]), sha256=str(row["sha256"]), deleted_at=now_iso)
         counts["deleted"] += 1
         _append_action_log(
             paths, operation_id=op, action="library_file_deleted", status="success",
-            message="File deleted from the library by hand; catalog row marked DELETED.",
+            message="File deleted from the library by hand; catalog row reduced to a tombstone (id + hash + date).",
             now_utc=now_utc, path_before=old_path, features=features,
         )
 
@@ -2521,7 +2607,7 @@ def process_all_inbox_files(
     if dry_run:
         repo = CatalogRepository(paths.catalog_db_file)
         repo.init_schema()
-        known_hashes = {doc["sha256"] for doc in repo.list_documents()}
+        known_hashes = {doc["sha256"] for doc in repo.list_documents() if doc.get("status") != "DELETED"}
         for candidate in _iter_inbox_files(paths.inbox_dir):
             sha256 = _file_sha256(candidate)
             summary["total"] += 1
