@@ -4,7 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import types
+
 from procrafiler.pipeline import (
+    _mirror_text_sidecar,
     _move_text_sidecar,
     _sidecar_path,
     _write_text_sidecar,
@@ -57,6 +60,31 @@ class TestTextSidecars(unittest.TestCase):
         old.write_text("x", encoding="utf-8")
         _move_text_sidecar(old, self.root / "moved.txt")  # no sidecar → nothing happens
         self.assertFalse((self.root / ".moved.txt.txt").exists())
+
+    def test_mirror_backs_up_the_sidecar(self) -> None:
+        # The costly OCR/vision text must also live in the mirror, so it survives
+        # if the primary library is lost.
+        lib = self.root / "Library"
+        mir = self.root / "Mirror"
+        doc = lib / "Personal" / "scan.pdf"
+        doc.parent.mkdir(parents=True)
+        _write_text_sidecar(doc, "ocr", "the costly text")
+        paths = types.SimpleNamespace(library_root=lib, mirror_root=mir)
+        _mirror_text_sidecar(paths, doc)
+        self.assertEqual(
+            (mir / "Personal" / ".scan.pdf.txt").read_text(encoding="utf-8"),
+            "the costly text",
+        )
+
+    def test_mirror_sidecar_is_a_noop_without_a_sidecar(self) -> None:
+        lib = self.root / "Library"
+        mir = self.root / "Mirror"
+        doc = lib / "Personal" / "plain.txt"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("x", encoding="utf-8")  # readable → no sidecar
+        paths = types.SimpleNamespace(library_root=lib, mirror_root=mir)
+        _mirror_text_sidecar(paths, doc)  # no-op
+        self.assertFalse((mir / "Personal" / ".plain.txt.txt").exists())
 
 
 if __name__ == "__main__":

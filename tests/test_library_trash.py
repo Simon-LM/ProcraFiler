@@ -80,6 +80,43 @@ class TestLibraryTrash(unittest.TestCase):
         final_state = move_library_file_to_trash(self.paths, library_file, now_utc=self.now)
         self.assertEqual(final_state, "LIBRARY_TRASHED")
 
+    def test_trash_command_sends_each_sidecar_to_its_own_trash(self) -> None:
+        # A trashed document drags BOTH its hidden text sidecars along, each to
+        # its own library's trash: the primary sidecar → Library_Trash (with the
+        # document), the mirror sidecar → Mirror_Trash (with the mirror copy).
+        from procrafiler.pipeline import _sidecar_path
+
+        rel = Path("Personal") / "2026-04-02_10-00-00__doc.pdf"
+        doc = self.paths.library_root / rel
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_bytes(b"content")
+        mirror_doc = self.paths.mirror_root / rel
+        mirror_doc.parent.mkdir(parents=True, exist_ok=True)
+        mirror_doc.write_bytes(b"content")
+        _sidecar_path(doc).write_text("ocr text", encoding="utf-8")
+        _sidecar_path(mirror_doc).write_text("ocr text", encoding="utf-8")
+
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        repo.upsert_document(
+            doc_id="d1", sha256="abc", current_filename=doc.name, current_path=str(doc),
+            status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z", flow_state="LIBRARY_STORED",
+        )
+        move_library_file_to_trash(self.paths, doc, now_utc=self.now)
+
+        sidecar_name = "." + doc.name + ".txt"
+        # Primary document + primary sidecar → Library_Trash.
+        lib_trash = {p.name for p in self.paths.library_trash_manual_dir.rglob("*") if p.is_file()}
+        self.assertIn(doc.name, lib_trash)
+        self.assertIn(sidecar_name, lib_trash)
+        # Mirror copy + mirror sidecar → Mirror_Trash.
+        mir_trash = {p.name for p in self.paths.mirror_trash_dir.rglob("*") if p.is_file()}
+        self.assertIn(doc.name, mir_trash)
+        self.assertIn(sidecar_name, mir_trash)
+        # Nothing left behind at the original locations.
+        self.assertFalse(_sidecar_path(doc).exists())
+        self.assertFalse(_sidecar_path(mirror_doc).exists())
+
     def test_refuses_path_outside_library_root(self) -> None:
         stray = self.paths.inbox_dir / "stray.pdf"
         stray.write_bytes(b"x")

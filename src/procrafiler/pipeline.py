@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from shutil import move
+from shutil import copy2, move
 from typing import Any
 from uuid import uuid4
 
@@ -529,6 +529,9 @@ def _sync_to_mirror(
             path_after=str(mirror_target),
             features=features,
         )
+        # Back up the hidden text sidecar too (if any), so the costly OCR/vision
+        # text is mirrored alongside its document.
+        _mirror_text_sidecar(paths, library_file)
         return MIRROR_SYNCED
 
     _append_action_log(
@@ -882,6 +885,25 @@ def _move_text_sidecar(old_doc_path: Path, new_doc_path: Path) -> None:
         pass
 
 
+def _mirror_text_sidecar(paths: RuntimePaths, library_file: Path) -> None:
+    """Back up a document's hidden text sidecar to the mirror, alongside the
+    mirror copy of the document — so the costly OCR/vision text survives even if
+    the primary library is lost. No-op when the document has no sidecar."""
+    sidecar = _sidecar_path(library_file)
+    if not sidecar.is_file():
+        return
+    try:
+        relative_path = sidecar.relative_to(paths.library_root)
+    except ValueError:
+        return
+    mirror_target = paths.mirror_root / relative_path
+    try:
+        mirror_target.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(sidecar), str(mirror_target))
+    except OSError:
+        pass
+
+
 def _trash_deleted_artifacts(
     paths: RuntimePaths,
     doc_path: Path,
@@ -890,22 +912,30 @@ def _trash_deleted_artifacts(
     now_utc: datetime | None,
     features: dict[str, bool],
 ) -> None:
-    """When a library document is deleted by hand, quarantine its derived
-    artifacts to `Mirror_Trash` (TTL-purged): the mirror backup copy and the hidden
-    text sidecar. The document file itself is already gone (the user deleted it)."""
+    """When a library document is deleted by hand, quarantine its leftover
+    artifacts — the document itself is already gone (the user deleted it). Each
+    artifact goes to ITS OWN library's trash (same rule as
+    `move_library_file_to_trash`): the mirror backup copy and the mirror's text
+    sidecar to `Mirror_Trash`, and the primary hidden text sidecar to the primary
+    `Library_Trash`."""
     try:
         relative_path = doc_path.relative_to(paths.library_root)
     except ValueError:
         return
     sidecar = _sidecar_path(doc_path)
+    sidecar_rel = sidecar.relative_to(paths.library_root)
     artifacts = (
-        (paths.mirror_root / relative_path, relative_path, "library_deleted_mirror_quarantined"),
-        (sidecar, sidecar.relative_to(paths.library_root), "library_deleted_sidecar_quarantined"),
+        (paths.mirror_root / relative_path, paths.mirror_trash_dir, relative_path,
+         "library_deleted_mirror_quarantined", "Mirror copy quarantined to Mirror_Trash on hand deletion."),
+        (paths.mirror_root / sidecar_rel, paths.mirror_trash_dir, sidecar_rel,
+         "library_deleted_mirror_sidecar_quarantined", "Mirror text sidecar quarantined to Mirror_Trash on hand deletion."),
+        (sidecar, paths.library_trash_manual_dir, sidecar_rel,
+         "library_deleted_sidecar_quarantined", "Hidden text sidecar quarantined to Library_Trash on hand deletion."),
     )
-    for source, rel, action in artifacts:
+    for source, trash_dir, rel, action, message in artifacts:
         if not source.is_file():
             continue
-        target = _ensure_unique_path(paths.mirror_trash_dir / rel)
+        target = _ensure_unique_path(trash_dir / rel)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             move(str(source), str(target))
@@ -913,7 +943,7 @@ def _trash_deleted_artifacts(
             continue
         _append_action_log(
             paths, operation_id=operation_id, action=action, status="success",
-            message="Quarantined to Mirror_Trash on hand deletion.",
+            message=message,
             now_utc=now_utc, path_before=str(source), path_after=str(target), features=features,
         )
 
@@ -1496,6 +1526,26 @@ def move_library_file_to_trash(
             now_utc=now_utc,
             path_before=str(mirror_source),
             features=features,
+        )
+
+    # The hidden text sidecars follow their document to trash, each to its own
+    # library's trash: primary sidecar → Library_Trash, mirror sidecar → Mirror_Trash.
+    sidecar_rel = _sidecar_path(relative_path)
+    for sidecar_source, trash_dir, sidecar_action, sidecar_message in (
+        (_sidecar_path(resolved), paths.library_trash_manual_dir,
+         "library_trash_sidecar_quarantined", "Hidden text sidecar moved to Library_Trash with its document."),
+        (_sidecar_path(mirror_source), paths.mirror_trash_dir,
+         "library_trash_mirror_sidecar_quarantined", "Mirror text sidecar quarantined to Mirror_Trash with its document."),
+    ):
+        if not sidecar_source.is_file():
+            continue
+        sidecar_target = _ensure_unique_path(trash_dir / sidecar_rel)
+        sidecar_target.parent.mkdir(parents=True, exist_ok=True)
+        move(str(sidecar_source), str(sidecar_target))
+        _append_action_log(
+            paths, operation_id=operation_id, action=sidecar_action, status="success",
+            message=sidecar_message, now_utc=now_utc,
+            path_before=str(sidecar_source), path_after=str(sidecar_target), features=features,
         )
 
     existing_fiche = record.get("content_json")
