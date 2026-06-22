@@ -19,7 +19,13 @@ from uuid import uuid4
 ProgressFn = Callable[[str], None]
 
 from procrafiler.catalog import CatalogRepository
-from procrafiler.config import RuntimePaths, ensure_runtime_layout, load_feature_settings, load_runtime_policy
+from procrafiler.config import (
+    RuntimePaths,
+    ensure_runtime_layout,
+    get_deletion_mode,
+    load_feature_settings,
+    load_runtime_policy,
+)
 from procrafiler.ai_analysis import analyze_content  # type: ignore[reportMissingImports]
 from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
@@ -2442,18 +2448,26 @@ def run_rescan(
             extra_fields={"duplicate_of": str(original.get("current_path"))},
         )
 
+    deletion_mode = get_deletion_mode(paths)
     for row in plan.deleted:
         old_path = str(row.get("current_path"))
-        # Quarantine the mirror copy + hidden text sidecar to Mirror_Trash, then
-        # reduce the catalog row to a TOMBSTONE — id + hash + date only (no name,
-        # path or fiche linger). The tombstone lets a re-deposit be recognised.
+        # Always quarantine the mirror copy + both hidden text sidecars to their
+        # own trash, and always keep an action-log trace. How the catalog row is
+        # handled depends on the deletion mode:
+        #   tombstone (default) — reduce to id + hash + date (re-deposit recognised);
+        #   purge — drop the row entirely (nothing of the document remains).
         _trash_deleted_artifacts(paths, Path(old_path), operation_id=op, now_utc=now_utc, features=features)
-        repo.tombstone_document(str(row["doc_id"]), sha256=str(row["sha256"]), deleted_at=now_iso)
+        if deletion_mode == "purge":
+            repo.purge_document(str(row["doc_id"]))
+            message = "File deleted from the library by hand; catalog row purged (no id/hash/fiche kept)."
+        else:
+            repo.tombstone_document(str(row["doc_id"]), sha256=str(row["sha256"]), deleted_at=now_iso)
+            message = "File deleted from the library by hand; catalog row reduced to a tombstone (id + hash + date)."
         counts["deleted"] += 1
         _append_action_log(
             paths, operation_id=op, action="library_file_deleted", status="success",
-            message="File deleted from the library by hand; catalog row reduced to a tombstone (id + hash + date).",
-            now_utc=now_utc, path_before=old_path, features=features,
+            message=message, now_utc=now_utc, path_before=old_path,
+            extra_fields={"deletion_mode": deletion_mode}, features=features,
         )
 
     if len(plan.new_files) >= LARGE_BATCH_WARN:

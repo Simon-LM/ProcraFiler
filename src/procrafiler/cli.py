@@ -31,11 +31,14 @@ def _resolve_now_utc() -> datetime:
 
 from procrafiler import __version__
 from procrafiler.config import (
+    DELETION_MODES,
     FEATURE_NAMES,
     default_runtime_paths,
+    get_deletion_mode,
     load_runtime_policy,
     ensure_runtime_layout,
     load_feature_settings,
+    set_deletion_mode,
     set_feature_flag,
 )
 from procrafiler.doctor import format_report, overall_exit_code, run_doctor
@@ -102,6 +105,16 @@ def build_parser() -> argparse.ArgumentParser:
     feature_set.add_argument("feature", choices=list(FEATURE_NAMES), help="Feature name")
     feature_set.add_argument("state", choices=["on", "off"], help="Target state")
 
+    deletion_mode_p = subparsers.add_parser(
+        "deletion-mode",
+        help="Show or set how a hand-deleted document is recorded in the catalog",
+    )
+    deletion_mode_p.add_argument(
+        "mode", nargs="?", choices=list(DELETION_MODES),
+        help="tombstone (default: keep id+hash+date, recognise re-deposits) or "
+             "purge (keep nothing). Omit to show the current mode.",
+    )
+
     subparsers.add_parser(
         "setup-context",
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
@@ -159,6 +172,19 @@ def cmd_status() -> int:
     print(f"- mirror_retention_days: {policy.mirror_retention_days}")
     print(f"- mirror_versions_keep: {policy.mirror_versions_keep}")
     print(f"- taxonomy_max_depth: {policy.taxonomy_max_depth}")
+    print("Deletion")
+    print(f"- deletion_mode: {get_deletion_mode(paths)}")
+    return 0
+
+
+def cmd_deletion_mode(mode: str | None) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    if mode is None:
+        print(f"deletion_mode: {get_deletion_mode(paths)}")
+        return 0
+    set_deletion_mode(paths, mode)
+    print(f"deletion_mode set to: {mode}")
     return 0
 
 
@@ -486,6 +512,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_doctor()
     if args.command == "feature-set":
         return cmd_feature_set(args.feature, args.state)
+    if args.command == "deletion-mode":
+        return cmd_deletion_mode(args.mode)
     if args.command == "process-once":
         return cmd_process_once(args.dry_run)
     if args.command == "process-all":
