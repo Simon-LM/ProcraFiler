@@ -47,6 +47,7 @@ from procrafiler.doctor import format_report, overall_exit_code, run_doctor
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
 from procrafiler.pipeline import (
     LibraryTrashError,
+    enrich_keywords,
     move_library_file_to_trash,
     process_all_inbox_files,
     run_rescan,
@@ -141,6 +142,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "reindex",
         help="Build/refresh the persistent content index so search never re-reads files (no AI)",
+    )
+
+    subparsers.add_parser(
+        "enrich-keywords",
+        help="One-time: add existing documents' keywords in English + your language (uses AI)",
     )
 
     subparsers.add_parser(
@@ -497,6 +503,23 @@ def cmd_reindex() -> int:
     return 0
 
 
+def cmd_enrich_keywords() -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
+    try:
+        with runtime_lock(paths):
+            counts = enrich_keywords(paths, now_utc=now_utc, emit=_live)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(
+        "Enrich keywords: "
+        f"enriched: {counts['enriched']}, skipped: {counts['skipped']}, failed: {counts['failed']}"
+    )
+    return 0
+
+
 def cmd_rescan() -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -584,6 +607,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_search(args.query, args.limit)
     if args.command == "reindex":
         return cmd_reindex()
+    if args.command == "enrich-keywords":
+        return cmd_enrich_keywords()
     if args.command == "rescan":
         return cmd_rescan()
     if args.command == "deleted-history":

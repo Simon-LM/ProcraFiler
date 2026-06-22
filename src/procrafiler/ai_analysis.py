@@ -375,3 +375,59 @@ def analyze_content(
                 break
 
     return _empty_result(provider="fallback", model="fallback", reason=last_error)
+
+
+def _build_translate_prompt(keywords: list[str], summary: str | None, language_name: str) -> str:
+    context = f"\nThe document's summary, for context: {summary}\n" if summary else ""
+    return (
+        "Expand these document keywords for full-text search. Return short, lowercase search terms "
+        f"covering the SAME meaning in BOTH English and {language_name}, including close synonyms in "
+        "each language. Keep proper nouns as-is. Return JSON only: {\"keywords\": [\"...\"]}.\n"
+        f"Existing keywords: {', '.join(keywords)}\n{context}"
+    )
+
+
+def translate_keywords(
+    keywords: list[str],
+    *,
+    language: str,
+    summary: str | None = None,
+    chain: list[ChainEntry] | None = None,
+    timeout_seconds: int | None = None,
+    retries: int | None = None,
+    sleep_fn: Any = time.sleep,
+) -> list[str]:
+    """Ask the AI for the keywords' equivalents + synonyms in English AND
+    `language` (a short code), for search. Returns [] when there is no chain, no
+    keywords, English-only (nothing to translate to), or every provider fails —
+    the caller then leaves the fiche unchanged."""
+    code = (language or "en").lower()
+    if code == "en" or not keywords:
+        return []
+    chain_entries = chain if chain is not None else task_chain_from_env("ANALYSIS")
+    if not chain_entries:
+        return []
+
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
+    retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
+    prompt = _build_translate_prompt(keywords, summary, _LANG_NAMES.get(code, code))
+
+    for entry in chain_entries:
+        for attempt in range(retry_count + 1):
+            try:
+                if entry.provider == "mistral":
+                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout)
+                elif entry.provider == "ollama":
+                    raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout)
+                else:
+                    raise ProviderCallError(f"unsupported_provider:{entry.provider}")
+                payload = _extract_json_dict(raw_output)
+                if payload is None:
+                    raise ProviderCallError("INVALID_JSON_RESPONSE")
+                return _clean_keyword_list(payload.get("keywords"))
+            except (RateLimitedError, ProviderCallError):
+                if attempt < retry_count:
+                    sleep_fn(2**attempt)
+                    continue
+                break
+    return []

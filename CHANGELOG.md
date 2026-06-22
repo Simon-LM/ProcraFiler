@@ -9,7 +9,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-## [0.3.2] - 2026-06-22 — Multilingual & forgiving search
+## [0.3.2] - 2026-06-23 — Multilingual & forgiving search
 
 `search` now forgives typos and crosses languages: a misspelled word still finds its document (offline, no AI), and a document is findable by its category in your language as well as English. You set your primary language once.
 
@@ -19,6 +19,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - **Category search in your language and English** — a document is now findable by its **category** (e.g. `Hobbies` is found by `hobbies` AND by `loisirs`/`passion`), via a curated translation map of the small fixed base-folder tree. Offline and applies to every existing document. (French provided; another language is just one more entry in the map.) (#77)
 - **Primary language setting** — captured in `setup-context` (or set directly with `procrafiler language fr`), shown in `status`. It tells the catalog which language to enrich for, so search works in your language and English. (#77)
 - **Bilingual keywords for newly filed documents** — the analysis call now produces keywords in English AND your language (and the summary/name in your language) instead of hardcoded French, so new documents are searchable either way. (#77)
+- **`enrich-keywords` — back-fill the same bilingual keywords onto your EXISTING documents** (one AI call each, text-only — no file re-reading). A document already enriched is skipped, so it is safe and cheap to re-run; a no-op when your language is English or no AI chain is configured. This is the migration so older fiches become as searchable as newly filed ones. (#77)
 
 ## [0.3.1] - 2026-06-22 — Search index
 

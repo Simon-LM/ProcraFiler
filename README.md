@@ -178,6 +178,7 @@ procrafiler deleted-history         # list library files you deleted by hand (fr
 procrafiler deletion-mode [MODE]    # show, or set how a hand-deleted doc is recorded (tombstone|purge)
 procrafiler language [CODE]         # show, or set your primary language (search works in it + English)
 procrafiler reindex                 # build/refresh the persistent content index so search never re-reads files
+procrafiler enrich-keywords         # one-time: add existing docs' keywords in English + your language (uses AI)
 procrafiler reconcile-snapshot      # rebuild catalog_snapshot.json from the DB if they drifted
 procrafiler library-trash <path>    # move a library file to Library_Trash_Manual (you delete manually)
 procrafiler purge-mirror-trash      # delete old mirror backups from Mirror_Trash by TTL
