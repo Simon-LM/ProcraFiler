@@ -6,7 +6,6 @@ from pathlib import Path
 
 from procrafiler.pipeline import (
     _move_text_sidecar,
-    _remove_text_sidecar,
     _sidecar_path,
     _write_text_sidecar,
 )
@@ -58,12 +57,6 @@ class TestTextSidecars(unittest.TestCase):
         old.write_text("x", encoding="utf-8")
         _move_text_sidecar(old, self.root / "moved.txt")  # no sidecar → nothing happens
         self.assertFalse((self.root / ".moved.txt.txt").exists())
-
-    def test_remove(self) -> None:
-        doc = self.root / "img.png"
-        _write_text_sidecar(doc, "vision", "desc")
-        _remove_text_sidecar(doc)
-        self.assertFalse(_sidecar_path(doc).exists())
 
 
 if __name__ == "__main__":

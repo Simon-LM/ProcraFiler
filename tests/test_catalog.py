@@ -24,6 +24,38 @@ class TestCatalog(unittest.TestCase):
             self.assertTrue(repo.has_sha256("abc123"))
             self.assertFalse(repo.has_sha256("def456"))
 
+    def test_tombstone_reduces_row_to_id_hash_and_date(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = CatalogRepository(Path(tmp) / "catalog.db")
+            repo.init_schema()
+            repo.upsert_document(
+                doc_id="doc-1",
+                sha256="abc123",
+                current_filename="2026-04-01_22-10-06__file.pdf",
+                current_path="/library/Personal/file.pdf",
+                status="LIBRARY_STORED",
+                updated_at_utc="2026-04-01T22:10:06Z",
+                content_json='{"name": "secret"}',
+            )
+
+            # A live document is a duplicate and is not a tombstone.
+            self.assertTrue(repo.has_live_sha256("abc123"))
+            self.assertIsNone(repo.deleted_at_for_sha256("abc123"))
+
+            repo.tombstone_document("doc-1", sha256="abc123", deleted_at="2026-06-01T00:00:00Z")
+
+            # The hash survives (for re-deposit recognition); nothing else does.
+            self.assertTrue(repo.has_sha256("abc123"))  # row still exists
+            self.assertFalse(repo.has_live_sha256("abc123"))  # but no longer a duplicate
+            self.assertEqual(repo.deleted_at_for_sha256("abc123"), "2026-06-01T00:00:00Z")
+            self.assertIsNone(repo.find_by_current_path("/library/Personal/file.pdf"))
+
+            row = next(d for d in repo.list_documents() if d["doc_id"] == "doc-1")
+            self.assertEqual(row["status"], "DELETED")
+            self.assertEqual(row["current_filename"], "")
+            self.assertEqual(row["current_path"], "")
+            self.assertIsNone(row["content_json"])
+
     def test_list_pending_decisions_filters_and_clears(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = CatalogRepository(Path(tmp) / "catalog.db")

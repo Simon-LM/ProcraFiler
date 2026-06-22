@@ -244,11 +244,50 @@ class TestRunRescanIntegration(unittest.TestCase):
         )
         counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
         self.assertEqual(counts["deleted"], 1)
-        self.assertEqual(self.repo.find_by_current_path(str(old))["status"], DELETED_STATUS)
-        log = self.paths.actions_log_file.read_text(encoding="utf-8")
-        self.assertIn("library_file_deleted", log)
-        actions = [json.loads(line)["action"] for line in log.splitlines() if line.strip()]
+        # Reduced to a tombstone: id + hash + date kept, name/path/fiche dropped.
+        self.assertFalse(self.repo.has_live_sha256("deadbeef"))
+        self.assertIsNotNone(self.repo.deleted_at_for_sha256("deadbeef"))
+        self.assertIsNone(self.repo.find_by_current_path(str(old)))  # path no longer stored
+        actions = [
+            json.loads(line)["action"]
+            for line in self.paths.actions_log_file.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
         self.assertIn("library_file_deleted", actions)
+
+    def test_deletion_quarantines_mirror_copy_and_hidden_sidecar(self) -> None:
+        # On a hand deletion, the mirror copy and the hidden text sidecar of the
+        # gone document are moved to Mirror_Trash (privacy + TTL purge), not left
+        # behind. The original library file is already gone (that's the deletion).
+        from procrafiler.pipeline import _sidecar_path
+
+        rel = Path("Personal") / "Gone.txt"
+        old = self.paths.library_root / rel
+        old.parent.mkdir(parents=True, exist_ok=True)
+        # The library file is deleted by hand; its mirror + sidecar still linger.
+        mirror_copy = self.paths.mirror_root / rel
+        mirror_copy.parent.mkdir(parents=True, exist_ok=True)
+        mirror_copy.write_bytes(b"mirror of the gone file")
+        sidecar = _sidecar_path(old)
+        sidecar.write_text("ocr text of the gone file", encoding="utf-8")
+
+        self.repo.upsert_document(
+            doc_id="doc-2", sha256="deadbeef", current_filename="Gone.txt",
+            current_path=str(old), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+        )
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["deleted"], 1)
+
+        # Both artifacts are gone from their original place …
+        self.assertFalse(mirror_copy.exists())
+        self.assertFalse(sidecar.exists())
+        # … and quarantined under Mirror_Trash.
+        quarantined = [p for p in self.paths.mirror_trash_dir.rglob("*") if p.is_file()]
+        names = {p.name for p in quarantined}
+        self.assertIn("Gone.txt", names)
+        self.assertIn(".Gone.txt.txt", names)
+        actions = self.paths.actions_log_file.read_text(encoding="utf-8")
+        self.assertIn("library_deleted_mirror_quarantined", actions)
+        self.assertIn("library_deleted_sidecar_quarantined", actions)
 
     def test_new_file_is_ingested_with_timestamp_prefix(self) -> None:
         # Phase 2: a brand-new hand-placed file (no AI chain → minimal fiche) is
