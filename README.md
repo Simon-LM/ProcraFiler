@@ -281,14 +281,15 @@ make test          # routine suite: offline, deterministic, no API calls
 make test-ollama   # opt-in: real local-model integration (needs Ollama running)
 ```
 
-The routine suite is **offline by design**: `tests/__init__.py` points
-`PROCRAFILER_ENV_FILE` at an empty file so the suite never loads your real `.env`
-(no Mistral key/chains) — the AI is never actually called, results are
-deterministic and free. That guard only runs when `tests` is imported as a
-**package**, so always run discovery with the repo root as the top-level dir:
-`python -m unittest discover -t . -s tests` (which is exactly what `make test`
-does). A bare `python -m unittest discover -s tests` would bypass the guard and
-hit the real API — use `make test`.
+The routine suite is **offline by design** — it never calls a real AI provider
+(no spend, deterministic, free). Two layers ensure this: `tests/__init__.py`
+points `PROCRAFILER_ENV_FILE` at an empty file so the suite never loads your real
+`.env`, and the app itself refuses to auto-load the cwd `./.env` when it detects a
+test runner — so even a bare `python -m unittest discover -s tests` stays offline.
+`make test` (which runs `-t . -s tests`) is the canonical command.
+
+When a test fails, or to learn how the suite is run and kept offline, see
+**[docs/testing.md](docs/testing.md)**.
 
 ## Update
 
