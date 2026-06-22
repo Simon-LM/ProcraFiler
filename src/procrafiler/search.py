@@ -22,10 +22,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from procrafiler.content_reader import extract_text_content
+from procrafiler.search_index import BodyTextIndex
 from procrafiler.taxonomy import dispatch_for_filename
 
 # Accent-insensitive, Unicode-aware tokenizer: "impot" matches "impôt" (typed
@@ -40,6 +42,14 @@ _BM25_WEIGHTS = (0.0, 5.0, 4.0, 3.0, 1.0, 2.0)
 # Cap the body text indexed per document — bounds memory/time at query time and
 # is far more than enough for full-text recall on a single document.
 _MAX_BODY_CHARS = 100_000
+
+
+def _default_index_path(db_path: Path) -> Path:
+    return db_path.parent / "search_index.db"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sidecar_path(doc_path: Path) -> Path:
@@ -96,24 +106,44 @@ def _fiche(content_json: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def search_catalog(db_path: Path, query: str, *, limit: int = 20) -> list[SearchHit]:
+def _cached_body(index: BodyTextIndex, cached: dict[str, str], sha256: str, current_path: str) -> str:
+    """Body text for a document: from the persistent index when present, else read
+    it once (Slice 3) and cache it by content hash so it isn't re-read next time."""
+    if sha256 in cached:
+        return cached[sha256]
+    body = _body_text(current_path)
+    cached[sha256] = body  # keep within this query (duplicates share a sha)
+    if sha256:
+        index.put(sha256, body, now_utc_iso=_now_iso())
+    return body
+
+
+def search_catalog(
+    db_path: Path, query: str, *, limit: int = 20, index_path: Path | None = None
+) -> list[SearchHit]:
     """Return the documents whose fiche OR body text matches `query`, best first (BM25)."""
     match = _fts_match_query(query)
     if not match:
         return []
 
+    index = BodyTextIndex(index_path or _default_index_path(db_path))
+    index.init_schema()
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
+        rows = list(conn.execute(
+            "SELECT doc_id, sha256, current_filename, current_path, content_json "
+            "FROM documents WHERE status = 'LIBRARY_STORED'"
+        ))
+        cached = index.get_many(str(r["sha256"]) for r in rows)
+
         conn.execute(
             "CREATE VIRTUAL TABLE temp.search_fts USING fts5("
             f"doc_id UNINDEXED, name, keywords, entities, summary, content, tokenize='{_TOKENIZER}')"
         )
         meta: dict[str, tuple[str, str | None, str | None, str]] = {}
-        for row in conn.execute(
-            "SELECT doc_id, current_filename, current_path, content_json "
-            "FROM documents WHERE status = 'LIBRARY_STORED'"
-        ):
+        for row in rows:
             fiche = _fiche(row["content_json"])
             name = fiche.get("name") or Path(str(row["current_filename"])).stem
             keywords = fiche.get("keywords")
@@ -121,7 +151,7 @@ def search_catalog(db_path: Path, query: str, *, limit: int = 20) -> list[Search
             entities = fiche.get("entities")
             entities_text = " ".join(str(v) for v in entities.values()) if isinstance(entities, dict) else ""
             summary = fiche.get("summary") or ""
-            content = _body_text(str(row["current_path"]))
+            content = _cached_body(index, cached, str(row["sha256"]), str(row["current_path"]))
             conn.execute(
                 "INSERT INTO temp.search_fts(doc_id, name, keywords, entities, summary, content) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -147,3 +177,34 @@ def search_catalog(db_path: Path, query: str, *, limit: int = 20) -> list[Search
         return hits
     finally:
         conn.close()
+
+
+def reindex_content(db_path: Path, *, index_path: Path | None = None) -> dict[str, int]:
+    """Backfill: make the persistent body index match the live library exactly —
+    extract + cache the body of every filed document not yet indexed, and drop
+    entries for content no longer present. Returns {indexed, added, pruned}.
+    Safe to re-run; only missing bodies are read (so re-runs are fast)."""
+    index = BodyTextIndex(index_path or _default_index_path(db_path))
+    index.init_schema()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = list(conn.execute(
+            "SELECT sha256, current_path FROM documents WHERE status = 'LIBRARY_STORED'"
+        ))
+    finally:
+        conn.close()
+
+    live_shas = {str(r["sha256"]) for r in rows if r["sha256"]}
+    path_for_sha: dict[str, str] = {}
+    for r in rows:
+        path_for_sha.setdefault(str(r["sha256"]), str(r["current_path"]))
+
+    now_iso = _now_iso()
+    added = 0
+    for sha in live_shas - index.all_shas():
+        index.put(sha, _body_text(path_for_sha[sha]), now_utc_iso=now_iso)
+        added += 1
+    pruned = index.prune(live_shas)
+    return {"indexed": index.count(), "added": added, "pruned": pruned}

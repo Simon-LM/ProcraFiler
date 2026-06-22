@@ -334,6 +334,24 @@ class TestRunRescanIntegration(unittest.TestCase):
         self.assertEqual(deleted[0].get("deletion_mode"), "purge")
         self.assertTrue(any(e["action"] == "library_deleted_mirror_quarantined" for e in events))
 
+    def test_deletion_prunes_the_persistent_search_index(self) -> None:
+        # A deleted document's body text must not linger in the search index
+        # (privacy — consistent with tombstone/purge dropping its content).
+        from procrafiler.search_index import BodyTextIndex
+
+        idx = BodyTextIndex(self.paths.search_index_file)
+        idx.init_schema()
+        idx.put("deadbeef", "secret body text", now_utc_iso="2026-01-01T00:00:00Z")
+
+        old = self.paths.library_root / "Personal" / "Gone.txt"
+        self.repo.upsert_document(
+            doc_id="doc-2", sha256="deadbeef", current_filename="Gone.txt",
+            current_path=str(old), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+        )
+        run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+
+        self.assertEqual(BodyTextIndex(self.paths.search_index_file).get_many(["deadbeef"]), {})
+
     def test_new_file_is_ingested_with_timestamp_prefix(self) -> None:
         # Phase 2: a brand-new hand-placed file (no AI chain → minimal fiche) is
         # timestamped in place, the user's stem kept, and catalogued.

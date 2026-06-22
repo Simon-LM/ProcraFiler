@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Persistent content index — `search` no longer re-reads files (Search Slice 4).** Deep search (Slice 3) read each document's body on disk at query time, re-extracting PDFs on every search. The extracted body text is now cached in a dedicated `search_index.db`, **keyed by content hash** (so a moved/renamed file never invalidates it and duplicates share one entry) and kept out of the main catalog. The index **warms itself** as you search (each body read once, then served from cache), and the new **`reindex`** command pre-builds or refreshes it in one pass (the backfill: adds missing bodies, prunes content no longer present). A deleted document's body is dropped from the index too, so a purged/tombstoned document's text doesn't linger. `status` shows `search_index_file`. New `procrafiler.search_index` (`BodyTextIndex`) + `reindex_content`; CLI `reindex`. `tests/test_search_index.py` +7, `tests/test_rescan.py` +1.
+
 ## [0.3.0] - 2026-06-22 — Search
 
 Find any filed document **offline** — by what it *is* (its fiche) and what it *says* (its body text: OCR/vision, plain text, PDF). Plus a privacy-minded deletion model (tombstone / purge) and a test suite that is now enforced in CI and can never touch the live API.

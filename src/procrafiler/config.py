@@ -27,6 +27,7 @@ class RuntimePaths:
     actions_log_file: Path
     catalog_db_file: Path
     catalog_snapshot_file: Path
+    search_index_file: Path
     settings_file: Path
     policy_file: Path
 
@@ -74,6 +75,7 @@ def default_runtime_paths() -> RuntimePaths:
         actions_log_file=state_root / "actions_log.jsonl",
         catalog_db_file=state_root / "catalog.db",
         catalog_snapshot_file=state_root / "catalog_snapshot.json",
+        search_index_file=state_root / "search_index.db",
         settings_file=config_root / "settings.json",
         policy_file=config_root / "policy.toml",
     )

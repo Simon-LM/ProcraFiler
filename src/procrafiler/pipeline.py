@@ -35,6 +35,7 @@ from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignor
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
+from procrafiler.search_index import BodyTextIndex
 from procrafiler.naming import build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
@@ -2449,8 +2450,15 @@ def run_rescan(
         )
 
     deletion_mode = get_deletion_mode(paths)
+    # Prune deleted content from the persistent search index too (so a purged /
+    # tombstoned document's body text does not linger). Only touch it if it exists.
+    body_index = None
+    if plan.deleted and paths.search_index_file.exists():
+        body_index = BodyTextIndex(paths.search_index_file)
+        body_index.init_schema()
     for row in plan.deleted:
         old_path = str(row.get("current_path"))
+        sha = str(row["sha256"])
         # Always quarantine the mirror copy + both hidden text sidecars to their
         # own trash, and always keep an action-log trace. How the catalog row is
         # handled depends on the deletion mode:
@@ -2461,8 +2469,10 @@ def run_rescan(
             repo.purge_document(str(row["doc_id"]))
             message = "File deleted from the library by hand; catalog row purged (no id/hash/fiche kept)."
         else:
-            repo.tombstone_document(str(row["doc_id"]), sha256=str(row["sha256"]), deleted_at=now_iso)
+            repo.tombstone_document(str(row["doc_id"]), sha256=sha, deleted_at=now_iso)
             message = "File deleted from the library by hand; catalog row reduced to a tombstone (id + hash + date)."
+        if body_index is not None and not repo.has_live_sha256(sha):
+            body_index.delete(sha)
         counts["deleted"] += 1
         _append_action_log(
             paths, operation_id=op, action="library_file_deleted", status="success",
