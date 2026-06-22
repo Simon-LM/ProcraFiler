@@ -85,6 +85,26 @@ def _empty_result(*, provider: str, model: str, reason: str, raw_output: str = "
     )
 
 
+_LANG_NAMES = {
+    "fr": "French", "en": "English", "es": "Spanish",
+    "de": "German", "it": "Italian", "pt": "Portuguese",
+}
+
+
+def _summary_and_keyword_instructions(user_language: str) -> tuple[str, str]:
+    """How to phrase the summary and keywords for the user's language. Keywords are
+    asked in English AND the user's language so search works either way; the
+    summary is in the user's language. Falls back to English-only."""
+    code = (user_language or "en").lower()
+    name = _LANG_NAMES.get(code, code)
+    if code == "en":
+        return ("1-2 sentences in English", "3-8 short lowercase English search terms")
+    return (
+        f"1-2 sentences in {name}",
+        f"6-12 short lowercase search terms covering the document's salient words in BOTH English and {name}",
+    )
+
+
 def _build_analysis_prompt(
     text: str,
     base_categories: list[str],
@@ -92,10 +112,13 @@ def _build_analysis_prompt(
     original_filename: str | None = None,
     source_folder: str | None = None,
     user_context: str | None = None,
+    user_language: str = "en",
 ) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
     snippet = text[:MAX_CONTENT_CHARS]
+    summary_instruction, keywords_instruction = _summary_and_keyword_instructions(user_language)
+    name_language = _LANG_NAMES.get((user_language or "en").lower(), user_language or "en")
     # Optional user context (passions, work, places, identity) to disambiguate —
     # e.g. tell a hobby from professional. Never authoritative over the content.
     context_block = ""
@@ -134,7 +157,7 @@ def _build_analysis_prompt(
         "\"series\": true|false, \"alternatives\": [\"...\"], \"summary\": \"...\", "
         "\"keywords\": [\"...\"], \"entities\": {}, \"language\": \"fr\"}.\n\n"
         "Fields:\n"
-        "- \"name\": a short, specific French title (no extension) identifying THIS exact document, "
+        f"- \"name\": a short, specific {name_language} title (no extension) identifying THIS exact document, "
         "named CONSISTENTLY so two documents of the SAME kind get the SAME structure. Lead with its "
         "most distinctive entity — the person, organization, or subject — then the key detail. Follow "
         "these patterns for common kinds, and keep the same spirit for others:\n"
@@ -214,8 +237,8 @@ def _build_analysis_prompt(
         "- \"series\": true only for an obviously recurring kind (see SERIES RULE); false otherwise.\n"
         "- \"alternatives\": up to 3 other plausible category paths (each under a base). Always provide "
         "some when category_path is null or you are unsure.\n"
-        "- \"summary\": 1-2 sentences in French on what the document is and its key point.\n"
-        "- \"keywords\": 3-8 short lowercase French search terms.\n"
+        f"- \"summary\": {summary_instruction} on what the document is and its key point.\n"
+        f"- \"keywords\": {keywords_instruction}.\n"
         "- \"entities\": a JSON object of key facts when present (e.g. issuer, doc_type, amounts, "
         "references, names); omit the ones you don't find.\n"
         "- \"language\": the document's main language code (e.g. \"fr\", \"en\").\n"
@@ -285,6 +308,7 @@ def analyze_content(
     original_filename: str | None = None,
     source_folder: str | None = None,
     user_context: str | None = None,
+    user_language: str = "en",
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
@@ -307,7 +331,8 @@ def analyze_content(
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
     prompt = _build_analysis_prompt(
-        text, base_categories, existing_paths, original_filename, source_folder, user_context
+        text, base_categories, existing_paths, original_filename, source_folder, user_context,
+        user_language,
     )
 
     last_error = "unknown"

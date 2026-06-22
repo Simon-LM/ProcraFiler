@@ -13,9 +13,11 @@ from procrafiler.config import (
     default_runtime_paths,
     ensure_runtime_layout,
     get_deletion_mode,
+    get_user_language,
     load_feature_settings,
     set_deletion_mode,
     set_feature_flag,
+    set_user_language,
 )
 
 
@@ -57,6 +59,31 @@ class TestDeletionModeSetting(unittest.TestCase):
         set_deletion_mode(self.paths, "tombstone")
         self.assertFalse(load_feature_settings(self.paths)["features"]["mirror_sync"])  # survived the mode write
         self.assertEqual(get_deletion_mode(self.paths), "tombstone")
+
+    def test_user_language_default_set_and_invalid(self) -> None:
+        self.assertEqual(get_user_language(self.paths), "en")  # default
+        set_user_language(self.paths, "FR")  # normalised to lowercase
+        self.assertEqual(get_user_language(self.paths), "fr")
+        with self.assertRaises(ValueError):
+            set_user_language(self.paths, "français")  # not a code
+
+    def test_language_deletion_mode_and_features_all_coexist(self) -> None:
+        set_user_language(self.paths, "fr")
+        set_deletion_mode(self.paths, "purge")
+        set_feature_flag(self.paths, "mirror_sync", False)
+        self.assertEqual(get_user_language(self.paths), "fr")
+        self.assertEqual(get_deletion_mode(self.paths), "purge")
+        self.assertFalse(load_feature_settings(self.paths)["features"]["mirror_sync"])
+
+    def test_cli_language_shows_and_sets(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["language"]), 0)
+        self.assertIn("language: en", out.getvalue())
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["language", "fr"]), 0)
+        self.assertEqual(get_user_language(self.paths), "fr")
 
     def test_cli_shows_and_sets(self) -> None:
         out = io.StringIO()

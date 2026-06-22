@@ -23,6 +23,7 @@ from procrafiler.config import (
     RuntimePaths,
     ensure_runtime_layout,
     get_deletion_mode,
+    get_user_language,
     load_feature_settings,
     load_runtime_policy,
 )
@@ -730,6 +731,7 @@ def _read_and_analyze(
             original_filename=source.name,
             source_folder=source_folder or None,
             user_context=load_user_context(),
+            user_language=get_user_language(paths),
         )
 
     return _CatalogedDoc(

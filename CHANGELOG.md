@@ -9,6 +9,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-22 — Multilingual & forgiving search
+
+`search` now forgives typos and crosses languages: a misspelled word still finds its document (offline, no AI), and a document is findable by its category in your language as well as English. You set your primary language once.
+
+### Added
+
+- **Typo-tolerant `search`, offline** — when an exact search finds nothing, each word is widened to its closest indexed terms (edit-distance over the index vocabulary, no AI), so `pasisons` finds `passions` (and a plural/typo still lands). A correctly-spelled query stays exact — the fuzzy fallback fires only on zero results. (#77)
+- **Category search in your language and English** — a document is now findable by its **category** (e.g. `Hobbies` is found by `hobbies` AND by `loisirs`/`passion`), via a curated translation map of the small fixed base-folder tree. Offline and applies to every existing document. (French provided; another language is just one more entry in the map.) (#77)
+- **Primary language setting** — captured in `setup-context` (or set directly with `procrafiler language fr`), shown in `status`. It tells the catalog which language to enrich for, so search works in your language and English. (#77)
+- **Bilingual keywords for newly filed documents** — the analysis call now produces keywords in English AND your language (and the summary/name in your language) instead of hardcoded French, so new documents are searchable either way. (#77)
+
 ## [0.3.1] - 2026-06-22 — Search index
 
 Completes the Search work from 0.3.0: search no longer re-reads your files — the extracted body text is cached in a persistent, content-hash-keyed index, warmed as you search and (re)built by the new `reindex` command.

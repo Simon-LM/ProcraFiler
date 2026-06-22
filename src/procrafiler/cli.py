@@ -35,11 +35,13 @@ from procrafiler.config import (
     FEATURE_NAMES,
     default_runtime_paths,
     get_deletion_mode,
+    get_user_language,
     load_runtime_policy,
     ensure_runtime_layout,
     load_feature_settings,
     set_deletion_mode,
     set_feature_flag,
+    set_user_language,
 )
 from procrafiler.doctor import format_report, overall_exit_code, run_doctor
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
@@ -115,6 +117,15 @@ def build_parser() -> argparse.ArgumentParser:
              "purge (keep nothing). Omit to show the current mode.",
     )
 
+    language_p = subparsers.add_parser(
+        "language",
+        help="Show or set your primary language (search works in it + English)",
+    )
+    language_p.add_argument(
+        "code", nargs="?",
+        help="language code (e.g. fr, en, es). Omit to show the current one.",
+    )
+
     subparsers.add_parser(
         "setup-context",
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
@@ -180,6 +191,8 @@ def cmd_status() -> int:
     print(f"- taxonomy_max_depth: {policy.taxonomy_max_depth}")
     print("Deletion")
     print(f"- deletion_mode: {get_deletion_mode(paths)}")
+    print("Search")
+    print(f"- language: {get_user_language(paths)}")
     return 0
 
 
@@ -191,6 +204,21 @@ def cmd_deletion_mode(mode: str | None) -> int:
         return 0
     set_deletion_mode(paths, mode)
     print(f"deletion_mode set to: {mode}")
+    return 0
+
+
+def cmd_language(code: str | None) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    if code is None:
+        print(f"language: {get_user_language(paths)}")
+        return 0
+    try:
+        set_user_language(paths, code)
+    except ValueError as err:
+        print(str(err))
+        return 2
+    print(f"language set to: {code.strip().lower()}")
     return 0
 
 
@@ -431,7 +459,10 @@ def cmd_search(terms: list[str], limit: int) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     query = " ".join(terms)
-    hits = search_catalog(paths.catalog_db_file, query, limit=limit, index_path=paths.search_index_file)
+    hits = search_catalog(
+        paths.catalog_db_file, query, limit=limit, index_path=paths.search_index_file,
+        user_language=get_user_language(paths),
+    )
     if not hits:
         print(f"No results for: {query}")
         return 0
@@ -533,6 +564,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_feature_set(args.feature, args.state)
     if args.command == "deletion-mode":
         return cmd_deletion_mode(args.mode)
+    if args.command == "language":
+        return cmd_language(args.code)
     if args.command == "process-once":
         return cmd_process_once(args.dry_run)
     if args.command == "process-all":

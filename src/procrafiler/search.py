@@ -19,6 +19,7 @@ large libraries, not a correctness need.
 
 from __future__ import annotations
 
+import difflib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from typing import Any
 
 from procrafiler.content_reader import extract_text_content
 from procrafiler.search_index import BodyTextIndex
-from procrafiler.taxonomy import dispatch_for_filename
+from procrafiler.taxonomy import dispatch_for_filename, folder_synonyms
 
 # Accent-insensitive, Unicode-aware tokenizer: "impot" matches "impôt" (typed
 # either way), which is kinder for accessibility and quick typing.
@@ -36,8 +37,25 @@ _TOKENIZER = "unicode61 remove_diacritics 2"
 
 # BM25 column weights (0 = ignored). Order matches the FTS columns below: the
 # name and keywords are the strongest signal of what a document IS, the body
-# (content) is deep-search recall, the summary the weakest. doc_id is UNINDEXED.
-_BM25_WEIGHTS = (0.0, 5.0, 4.0, 3.0, 1.0, 2.0)
+# (content) and category are deep-search/cross-language recall, the summary the
+# weakest. doc_id is UNINDEXED.
+_BM25_WEIGHTS = (0.0, 5.0, 4.0, 3.0, 1.0, 2.0, 2.0)
+
+
+def _category_terms(category_path: str | None, user_language: str) -> str:
+    """The category's folder names PLUS their synonyms/translations in the user's
+    language — so a document is findable by its category in English and in the
+    user's language (e.g. `Hobbies` is found by `loisirs`/`passion`). No AI."""
+    if not category_path:
+        return ""
+    terms: list[str] = []
+    for segment in str(category_path).replace("\\", "/").split("/"):
+        seg = segment.strip()
+        if not seg:
+            continue
+        terms.append(seg)
+        terms.extend(folder_synonyms(seg, user_language))
+    return " ".join(terms)
 
 # Cap the body text indexed per document — bounds memory/time at query time and
 # is far more than enough for full-text recall on a single document.
@@ -89,11 +107,38 @@ class SearchHit:
     snippet: str
 
 
+def _quote(term: str) -> str:
+    return '"' + term.replace('"', '""') + '"'
+
+
 def _fts_match_query(raw: str) -> str:
     """Turn a free-text query into a safe FTS5 MATCH expression: each term quoted
     (so punctuation/accents can't break the syntax) and AND-ed together."""
-    terms = [t for t in raw.split() if t.strip()]
-    return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+    return " ".join(_quote(t) for t in raw.split() if t.strip())
+
+
+def _vocabulary(conn: sqlite3.Connection) -> list[str]:
+    """All indexed terms (tokenized, accent-stripped) of the temp FTS table —
+    used to suggest near-matches for a misspelled query, with no AI."""
+    conn.execute("CREATE VIRTUAL TABLE temp.search_vocab USING fts5vocab('search_fts', 'row')")
+    return [str(r["term"]) for r in conn.execute("SELECT term FROM temp.search_vocab")]
+
+
+def _fuzzy_match_query(raw: str, vocab: list[str]) -> str | None:
+    """A typo-tolerant MATCH expression: each query term is OR-ed with its closest
+    indexed terms (edit-distance, offline). Returns None when nothing close is
+    found (so the exact, empty result stands). E.g. `pasisons` -> `passions`."""
+    if not vocab:
+        return None
+    groups: list[str] = []
+    widened = False
+    for term in (t for t in raw.split() if t.strip()):
+        low = term.lower()
+        variants = list(dict.fromkeys([low, *difflib.get_close_matches(low, vocab, n=5, cutoff=0.8)]))
+        if any(v != low for v in variants):
+            widened = True
+        groups.append("(" + " OR ".join(_quote(v) for v in variants) + ")")
+    return " ".join(groups) if widened else None
 
 
 def _fiche(content_json: Any) -> dict[str, Any]:
@@ -119,9 +164,12 @@ def _cached_body(index: BodyTextIndex, cached: dict[str, str], sha256: str, curr
 
 
 def search_catalog(
-    db_path: Path, query: str, *, limit: int = 20, index_path: Path | None = None
+    db_path: Path, query: str, *, limit: int = 20, index_path: Path | None = None,
+    user_language: str = "en",
 ) -> list[SearchHit]:
-    """Return the documents whose fiche OR body text matches `query`, best first (BM25)."""
+    """Return the documents whose fiche, body text OR category matches `query`,
+    best first (BM25). `user_language` lets the category be matched in the user's
+    language as well as English (e.g. `loisirs` finds `Hobbies`)."""
     match = _fts_match_query(query)
     if not match:
         return []
@@ -140,7 +188,8 @@ def search_catalog(
 
         conn.execute(
             "CREATE VIRTUAL TABLE temp.search_fts USING fts5("
-            f"doc_id UNINDEXED, name, keywords, entities, summary, content, tokenize='{_TOKENIZER}')"
+            f"doc_id UNINDEXED, name, keywords, entities, summary, content, category, "
+            f"tokenize='{_TOKENIZER}')"
         )
         meta: dict[str, tuple[str, str | None, str | None, str]] = {}
         for row in rows:
@@ -152,10 +201,11 @@ def search_catalog(
             entities_text = " ".join(str(v) for v in entities.values()) if isinstance(entities, dict) else ""
             summary = fiche.get("summary") or ""
             content = _cached_body(index, cached, str(row["sha256"]), str(row["current_path"]))
+            category = _category_terms(fiche.get("category_path"), user_language)
             conn.execute(
-                "INSERT INTO temp.search_fts(doc_id, name, keywords, entities, summary, content) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (row["doc_id"], name, keywords_text, entities_text, summary, content),
+                "INSERT INTO temp.search_fts(doc_id, name, keywords, entities, summary, content, category) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (row["doc_id"], name, keywords_text, entities_text, summary, content, category),
             )
             meta[str(row["doc_id"])] = (
                 name,
@@ -165,16 +215,25 @@ def search_catalog(
             )
 
         weights = ", ".join(str(w) for w in _BM25_WEIGHTS)
-        hits: list[SearchHit] = []
-        for row in conn.execute(
-            "SELECT doc_id, snippet(search_fts, -1, '[', ']', '…', 10) AS snip "
-            "FROM temp.search_fts WHERE search_fts MATCH ? "
-            f"ORDER BY bm25(search_fts, {weights}) LIMIT ?",
-            (match, limit),
-        ):
-            name, category, date, path = meta[str(row["doc_id"])]
-            hits.append(SearchHit(str(row["doc_id"]), name, category, date, path, str(row["snip"] or "")))
-        return hits
+
+        def run(match_expr: str) -> list[SearchHit]:
+            out: list[SearchHit] = []
+            for row in conn.execute(
+                "SELECT doc_id, snippet(search_fts, -1, '[', ']', '…', 10) AS snip "
+                "FROM temp.search_fts WHERE search_fts MATCH ? "
+                f"ORDER BY bm25(search_fts, {weights}) LIMIT ?",
+                (match_expr, limit),
+            ):
+                name, category, date, path = meta[str(row["doc_id"])]
+                out.append(SearchHit(str(row["doc_id"]), name, category, date, path, str(row["snip"] or "")))
+            return out
+
+        hits = run(match)
+        if hits:
+            return hits
+        # No exact match — fall back to typo-tolerant terms (offline, no AI).
+        fuzzy = _fuzzy_match_query(query, _vocabulary(conn))
+        return run(fuzzy) if fuzzy else []
     finally:
         conn.close()
 

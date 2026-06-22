@@ -19,15 +19,15 @@ def _sink() -> tuple[list[str], object]:
     return lines, lines.append
 
 
-# The questionnaire is linear (no branching); 18 questions in order.
+# The questionnaire is linear (no branching); language first, then 18 questions.
 def _answers(
     *,
-    first="", last="", aliases="", professions="", employers="", businesses="",
+    language="", first="", last="", aliases="", professions="", employers="", businesses="",
     work_names="", interests="", online_content="", banks="", insurers="", energy="",
     telecom="", rentals="", properties="", vehicles="", household="", notes="",
 ) -> list[str]:
     return [
-        first, last, aliases, professions, employers, businesses, work_names,
+        language, first, last, aliases, professions, employers, businesses, work_names,
         interests, online_content, banks, insurers, energy, telecom, rentals,
         properties, vehicles, household, notes,
     ]
@@ -109,6 +109,13 @@ class TestSetupContext(unittest.TestCase):
         body = target.read_text(encoding="utf-8")
         self.assertIn("Alex Martin", body)
         self.assertIn("Dev", body)
+
+    def test_save_persists_the_language(self) -> None:
+        from procrafiler.config import default_runtime_paths, get_user_language
+        ask = _scripted(_answers(language="1", first="Alex") + ["1"])  # 1 = Français, then Enregistrer
+        _, out = _sink()
+        setup_context(ask=ask, out=out)
+        self.assertEqual(get_user_language(default_runtime_paths()), "fr")
 
     def test_cancel_writes_nothing(self) -> None:
         ask = _scripted(_answers(first="Alex", last="Martin") + ["2"])  # "2" = Annuler

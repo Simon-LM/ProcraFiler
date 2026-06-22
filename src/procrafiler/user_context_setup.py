@@ -38,6 +38,17 @@ INTERESTS: tuple[str, ...] = (
     "Voyages",
 )
 
+# Common languages → code. Used to enrich the catalog so search works in the
+# user's language and English. Anything else can be set later via `language`.
+LANGUAGES: tuple[tuple[str, str], ...] = (
+    ("Français", "fr"),
+    ("English", "en"),
+    ("Español", "es"),
+    ("Deutsch", "de"),
+    ("Italiano", "it"),
+    ("Português", "pt"),
+)
+
 def _text(ask: AskFn, out: OutFn, label: str) -> str:
     out(label)
     return ask("› ").strip()
@@ -72,28 +83,38 @@ def _checklist(ask: AskFn, out: OutFn, options: tuple[str, ...]) -> list[str]:
     return selected
 
 
+def _language(ask: AskFn, out: OutFn) -> str:
+    """Ask the user's main language; return a code (e.g. "fr") or "" if skipped."""
+    idx = _choice(ask, out, "Ta langue principale ? (recherche dans ta langue + anglais)",
+                  [name for name, _ in LANGUAGES])
+    return LANGUAGES[idx][1] if idx is not None else ""
+
+
 def collect_answers(ask: AskFn, out: OutFn) -> dict[str, Any]:
     """Run the guided questionnaire and return the raw answers. A filing tool
     handles OLD documents, so most fields are MULTI-VALUE and ask for current AND
     past (jobs, providers, homes…). Everything is skippable with Entrée."""
     a: dict[str, Any] = {}
 
-    out("\n1/5 · Toi")
+    out("\n1/6 · Ta langue")
+    a["language"] = _language(ask, out)
+
+    out("\n2/6 · Toi")
     a["first_name"] = _text(ask, out, "Prénom ?")
     a["last_name"] = _text(ask, out, "Nom de famille ?")
     a["aliases"] = _csv(ask, out, "Pseudo(s) en ligne ? (te reconnaître dans captures, exports, messages)")
 
-    out("\n2/5 · Ton travail   (actuel ET passé — tu as peut-être de vieux documents)")
+    out("\n3/6 · Ton travail   (actuel ET passé — tu as peut-être de vieux documents)")
     a["professions"] = _csv(ask, out, "Tes métiers (actuels et passés) ?")
     a["employers"] = _csv(ask, out, "Tes employeurs (actuels et passés) ?")
     a["businesses"] = _csv(ask, out, "Tes activités / entreprises perso (actuelles et passées) ?")
     a["work_names"] = _csv(ask, out, "Des noms qui veulent dire « c'est mon travail » ? (clients, projets, outils, serveurs)")
 
-    out("\n3/5 · Tes centres d'intérêt   (crée seulement ces dossiers-là)")
+    out("\n4/6 · Tes centres d'intérêt   (crée seulement ces dossiers-là)")
     a["interests"] = _checklist(ask, out, INTERESTS)
     a["online_content"] = _csv(ask, out, "Tu crées / publies du contenu en ligne ? (vidéos, posts, streams, podcasts — plateformes ou pseudos)")
 
-    out("\n4/5 · Ton foyer   (optionnel — Entrée pour passer)")
+    out("\n5/6 · Ton foyer   (optionnel — Entrée pour passer)")
     a["banks"] = _csv(ask, out, "Banque(s), actuelles et passées ?")
     a["insurers"] = _csv(ask, out, "Assurance(s) ?")
     a["energy"] = _csv(ask, out, "Énergie / eau — fournisseurs actuels et passés ?")
@@ -103,7 +124,7 @@ def collect_answers(ask: AskFn, out: OutFn) -> dict[str, Any]:
     a["vehicles"] = _csv(ask, out, "Véhicule(s) ? (ex: voiture, moto)")
     a["household"] = _csv(ask, out, "Prénoms du foyer (conjoint, enfants…) ?")
 
-    out("\n5/5 · Autre chose à savoir ?")
+    out("\n6/6 · Autre chose à savoir ?")
     a["notes"] = _text(ask, out, "(une phrase, ou Entrée)")
     return a
 
@@ -189,6 +210,15 @@ def setup_context(*, ask: AskFn = input, out: OutFn = print) -> Path | None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(rendered, encoding="utf-8")
     out(f"✓ Contexte enregistré : {target}")
+
+    language = answers.get("language")
+    if language:
+        from procrafiler.config import default_runtime_paths, set_user_language
+        try:
+            set_user_language(default_runtime_paths(), language)
+            out(f"✓ Langue principale : {language} (recherche multilingue)")
+        except ValueError:
+            pass
 
     active = active_context_path()
     if active is not None and active.resolve() != target.resolve():

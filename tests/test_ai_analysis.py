@@ -274,5 +274,21 @@ class TestAnalyzeContent(unittest.TestCase):
         self.assertEqual(result.category_path, "Personal/Administrative/Banking")
 
 
+class TestPromptLanguage(unittest.TestCase):
+    def _prompt(self, lang: str) -> str:
+        return _build_analysis_prompt("some text", BASES, [], user_language=lang)
+
+    def test_english_default_asks_english_only(self) -> None:
+        prompt = self._prompt("en")
+        self.assertIn("English search terms", prompt)
+        self.assertIn("sentences in English", prompt)
+        self.assertNotIn("French", prompt)
+
+    def test_user_language_asks_english_plus_that_language(self) -> None:
+        prompt = self._prompt("fr")
+        self.assertIn("English and French", prompt)   # keywords in both languages
+        self.assertIn("sentences in French", prompt)  # summary in the user's language
+
+
 if __name__ == "__main__":
     unittest.main()
