@@ -128,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("--limit", type=int, default=20, help="max results (default: 20)")
 
     subparsers.add_parser(
+        "reindex",
+        help="Build/refresh the persistent content index so search never re-reads files (no AI)",
+    )
+
+    subparsers.add_parser(
         "rescan",
         help="Follow hand reorganization of the library (moves/renames/deletes) into the catalog. No AI.",
     )
@@ -162,6 +167,7 @@ def cmd_status() -> int:
     print(f"- actions_log_file: {paths.actions_log_file}")
     print(f"- catalog_db_file: {paths.catalog_db_file}")
     print(f"- catalog_snapshot_file: {paths.catalog_snapshot_file}")
+    print(f"- search_index_file: {paths.search_index_file}")
     print(f"- settings_file: {paths.settings_file}")
     print(f"- env_loaded_from: {os.environ.get('PROCRAFILER_ENV_LOADED_FROM', 'none')}")
     print("Features")
@@ -425,7 +431,7 @@ def cmd_search(terms: list[str], limit: int) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     query = " ".join(terms)
-    hits = search_catalog(paths.catalog_db_file, query, limit=limit)
+    hits = search_catalog(paths.catalog_db_file, query, limit=limit, index_path=paths.search_index_file)
     if not hits:
         print(f"No results for: {query}")
         return 0
@@ -444,6 +450,19 @@ def cmd_search(terms: list[str], limit: int) -> int:
         if hit.snippet:
             print(f"  {hit.snippet}")
         print(f"  {location}")
+    return 0
+
+
+def cmd_reindex() -> int:
+    from procrafiler.search import reindex_content
+
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    counts = reindex_content(paths.catalog_db_file, index_path=paths.search_index_file)
+    print(
+        "Reindex content: "
+        f"indexed: {counts['indexed']}, added: {counts['added']}, pruned: {counts['pruned']}"
+    )
     return 0
 
 
@@ -530,6 +549,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_setup_context()
     if args.command == "search":
         return cmd_search(args.query, args.limit)
+    if args.command == "reindex":
+        return cmd_reindex()
     if args.command == "rescan":
         return cmd_rescan()
     if args.command == "deleted-history":
