@@ -1,14 +1,20 @@
-"""Local, offline search over the catalog fiche (SQLite FTS5).
+"""Local, offline search over the catalog — fiche AND document body (SQLite FTS5).
 
-Search never re-reads the documents and never calls an AI: it queries the fiche
-already stored per document (name, keywords, entities, summary) — the whole point
-of having built the catalog. This is Slice 1 ("find by what it is"); indexing the
-documents' full body text for deep word search is a later slice.
+Search never calls an AI: it queries the fiche already stored per document (name,
+keywords, entities, summary) AND the document's body text (Slice 3, "find by what
+it SAYS"). The body text is read on disk with no AI and no network:
 
-A temporary FTS5 table is built from the catalog at query time, so results are
-always consistent with the catalog and there is no index to migrate or keep in
-sync. For a few thousand documents this is milliseconds; a persistent/incremental
-index is an optimisation for very large libraries, not a correctness need.
+- from the hidden text sidecar (`.<filename>.txt`) when one exists — the costly
+  OCR/vision text was extracted once and cached there (Slice 2);
+- otherwise straight from a locally-readable file (a plain-text file, or a PDF
+  with a real text layer) via the same reader the pipeline uses.
+
+A scanned page / image with no sidecar contributes only its fiche (we never OCR at
+query time). A temporary FTS5 table is built from the catalog at query time, so
+results are always consistent with the catalog and there is no index to migrate.
+For a few thousand documents this is fast; a persistent/incremental content index
+(so PDFs aren't re-read each query) is the next slice — an optimisation for very
+large libraries, not a correctness need.
 """
 
 from __future__ import annotations
@@ -19,14 +25,48 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from procrafiler.content_reader import extract_text_content
+from procrafiler.taxonomy import dispatch_for_filename
+
 # Accent-insensitive, Unicode-aware tokenizer: "impot" matches "impôt" (typed
 # either way), which is kinder for accessibility and quick typing.
 _TOKENIZER = "unicode61 remove_diacritics 2"
 
 # BM25 column weights (0 = ignored). Order matches the FTS columns below: the
-# name and keywords are the strongest signal of what a document IS, the summary
-# the weakest. doc_id is UNINDEXED (weight 0).
-_BM25_WEIGHTS = (0.0, 5.0, 4.0, 3.0, 1.0)
+# name and keywords are the strongest signal of what a document IS, the body
+# (content) is deep-search recall, the summary the weakest. doc_id is UNINDEXED.
+_BM25_WEIGHTS = (0.0, 5.0, 4.0, 3.0, 1.0, 2.0)
+
+# Cap the body text indexed per document — bounds memory/time at query time and
+# is far more than enough for full-text recall on a single document.
+_MAX_BODY_CHARS = 100_000
+
+
+def _sidecar_path(doc_path: Path) -> Path:
+    return doc_path.parent / ("." + doc_path.name + ".txt")
+
+
+def _body_text(current_path: str) -> str:
+    """The document's body text for indexing — sidecar first (cached OCR/vision),
+    else read locally (plain text / readable PDF). No AI, no network; '' when
+    there is nothing locally readable (e.g. a scanned page with no sidecar)."""
+    doc_path = Path(current_path)
+    sidecar = _sidecar_path(doc_path)
+    if sidecar.is_file():
+        try:
+            return sidecar.read_text(encoding="utf-8", errors="ignore")[:_MAX_BODY_CHARS]
+        except OSError:
+            return ""
+    if not doc_path.is_file():
+        return ""
+    media_type = dispatch_for_filename(doc_path.name).media_type
+    if media_type is None:
+        return ""
+    try:
+        extraction = extract_text_content(doc_path, media_type)
+    except Exception:  # noqa: BLE001 — a single unreadable file must not break search
+        return ""
+    return (extraction.text or "")[:_MAX_BODY_CHARS]
 
 
 @dataclass(frozen=True)
@@ -57,7 +97,7 @@ def _fiche(content_json: Any) -> dict[str, Any]:
 
 
 def search_catalog(db_path: Path, query: str, *, limit: int = 20) -> list[SearchHit]:
-    """Return the documents whose fiche matches `query`, best first (BM25)."""
+    """Return the documents whose fiche OR body text matches `query`, best first (BM25)."""
     match = _fts_match_query(query)
     if not match:
         return []
@@ -67,7 +107,7 @@ def search_catalog(db_path: Path, query: str, *, limit: int = 20) -> list[Search
     try:
         conn.execute(
             "CREATE VIRTUAL TABLE temp.search_fts USING fts5("
-            f"doc_id UNINDEXED, name, keywords, entities, summary, tokenize='{_TOKENIZER}')"
+            f"doc_id UNINDEXED, name, keywords, entities, summary, content, tokenize='{_TOKENIZER}')"
         )
         meta: dict[str, tuple[str, str | None, str | None, str]] = {}
         for row in conn.execute(
@@ -81,9 +121,11 @@ def search_catalog(db_path: Path, query: str, *, limit: int = 20) -> list[Search
             entities = fiche.get("entities")
             entities_text = " ".join(str(v) for v in entities.values()) if isinstance(entities, dict) else ""
             summary = fiche.get("summary") or ""
+            content = _body_text(str(row["current_path"]))
             conn.execute(
-                "INSERT INTO temp.search_fts(doc_id, name, keywords, entities, summary) VALUES (?, ?, ?, ?, ?)",
-                (row["doc_id"], name, keywords_text, entities_text, summary),
+                "INSERT INTO temp.search_fts(doc_id, name, keywords, entities, summary, content) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (row["doc_id"], name, keywords_text, entities_text, summary, content),
             )
             meta[str(row["doc_id"])] = (
                 name,
