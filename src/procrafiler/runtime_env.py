@@ -1,7 +1,26 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+
+def _running_under_test_runner() -> bool:
+    """True when the process is clearly a test run (``python -m unittest`` or
+    ``pytest``).
+
+    Safety guard: the developer-convenience ``./.env`` (a real Mistral key +
+    chains) must NEVER be auto-loaded during tests, or an "offline" unit test
+    silently hits the live API (spending money, leaking data). The test suite's
+    own offline guard (`tests/__init__.py`) only runs with the canonical
+    ``-t . -s tests`` invocation; this check protects every other invocation too.
+    Detects the runner via the process `__main__`, so it is NOT fooled by app
+    code that merely imports `unittest.mock`.
+    """
+    if "pytest" in sys.modules:
+        return True
+    main_file = getattr(sys.modules.get("__main__"), "__file__", "") or ""
+    return main_file.replace("\\", "/").endswith("unittest/__main__.py")
 
 
 def _parse_env_line(line: str) -> tuple[str, str] | None:
@@ -32,9 +51,12 @@ def default_env_candidates() -> list[Path]:
     if explicit:
         candidates.append(Path(explicit))
 
+    # The cwd `./.env` is a developer convenience — never load it under a test
+    # runner, so a test can't pick up the real key/chains and reach the live API.
+    if not _running_under_test_runner():
+        candidates.append(Path.cwd() / ".env")
     candidates.extend(
         [
-            Path.cwd() / ".env",
             config_home / "procrafiler.env",
             Path("/etc/procrafiler/procrafiler.env"),
         ]
