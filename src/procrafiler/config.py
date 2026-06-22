@@ -152,9 +152,51 @@ def default_feature_settings() -> dict[str, dict[str, bool]]:
     }
 
 
-def save_feature_settings(paths: RuntimePaths, settings: dict[str, dict[str, bool]]) -> None:
+# How a hand-deleted library document is recorded in the catalog (see the
+# `deletion-mode` command). `tombstone` keeps id + content hash + deletion date
+# (so a later re-deposit is recognised); `purge` keeps nothing of the document
+# (the deletion survives only in the action log).
+DELETION_MODES = ("tombstone", "purge")
+DEFAULT_DELETION_MODE = "tombstone"
+
+
+def _read_settings_file(paths: RuntimePaths) -> dict[str, object]:
+    """The whole settings file as a raw dict, tolerant of missing/corrupt JSON.
+    Used so feature flags and the deletion mode share one file without one
+    overwriting the other's keys."""
+    if not paths.settings_file.exists():
+        return {}
+    try:
+        loaded: Any = json.loads(paths.settings_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return cast(dict[str, object], loaded) if isinstance(loaded, dict) else {}
+
+
+def _write_settings_file(paths: RuntimePaths, data: dict[str, object]) -> None:
     paths.settings_file.parent.mkdir(parents=True, exist_ok=True)
-    paths.settings_file.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    paths.settings_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def save_feature_settings(paths: RuntimePaths, settings: dict[str, dict[str, bool]]) -> None:
+    # Merge into the existing file so other settings (e.g. deletion_mode) survive.
+    data = _read_settings_file(paths)
+    data["features"] = settings["features"]
+    _write_settings_file(paths, data)
+
+
+def get_deletion_mode(paths: RuntimePaths) -> str:
+    mode = _read_settings_file(paths).get("deletion_mode")
+    return mode if mode in DELETION_MODES else DEFAULT_DELETION_MODE
+
+
+def set_deletion_mode(paths: RuntimePaths, mode: str) -> str:
+    if mode not in DELETION_MODES:
+        raise ValueError(f"Unknown deletion mode: {mode!r} (expected one of {DELETION_MODES})")
+    data = _read_settings_file(paths)  # preserve features and anything else
+    data["deletion_mode"] = mode
+    _write_settings_file(paths, data)
+    return mode
 
 
 def load_feature_settings(paths: RuntimePaths) -> dict[str, dict[str, bool]]:

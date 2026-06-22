@@ -296,6 +296,44 @@ class TestRunRescanIntegration(unittest.TestCase):
         self.assertIn("library_deleted_mirror_sidecar_quarantined", actions)
         self.assertIn("library_deleted_sidecar_quarantined", actions)
 
+    def test_purge_mode_drops_the_row_entirely(self) -> None:
+        # In purge mode, a hand-deleted document leaves NO catalog row (no id, no
+        # hash, no fiche) — only the action log keeps a trace, and the mirror copy
+        # is still quarantined. A re-deposit is therefore not recognised.
+        from procrafiler.config import set_deletion_mode
+        from procrafiler.pipeline import _sidecar_path
+
+        set_deletion_mode(self.paths, "purge")
+        rel = Path("Personal") / "Gone.txt"
+        old = self.paths.library_root / rel
+        old.parent.mkdir(parents=True, exist_ok=True)
+        mirror_copy = self.paths.mirror_root / rel
+        mirror_copy.parent.mkdir(parents=True, exist_ok=True)
+        mirror_copy.write_bytes(b"mirror of the gone file")
+        _sidecar_path(old).write_text("ocr text", encoding="utf-8")
+
+        self.repo.upsert_document(
+            doc_id="doc-9", sha256="cafef00d", current_filename="Gone.txt",
+            current_path=str(old), status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00Z",
+        )
+        counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
+        self.assertEqual(counts["deleted"], 1)
+
+        # Nothing of the document remains in the catalog — not even a tombstone.
+        self.assertFalse(self.repo.has_sha256("cafef00d"))
+        self.assertIsNone(self.repo.deleted_at_for_sha256("cafef00d"))
+        self.assertIsNone(self.repo.find_by_current_path(str(old)))
+        # Mirror copy still quarantined; the log still records the deletion (purge).
+        self.assertFalse(mirror_copy.exists())
+        events = [
+            json.loads(line)
+            for line in self.paths.actions_log_file.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        deleted = [e for e in events if e["action"] == "library_file_deleted"]
+        self.assertEqual(len(deleted), 1)
+        self.assertEqual(deleted[0].get("deletion_mode"), "purge")
+        self.assertTrue(any(e["action"] == "library_deleted_mirror_quarantined" for e in events))
+
     def test_new_file_is_ingested_with_timestamp_prefix(self) -> None:
         # Phase 2: a brand-new hand-placed file (no AI chain → minimal fiche) is
         # timestamped in place, the user's stem kept, and catalogued.

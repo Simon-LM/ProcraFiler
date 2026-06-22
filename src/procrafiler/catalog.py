@@ -136,6 +136,14 @@ class CatalogRepository:
             )
             conn.commit()
 
+    def purge_document(self, doc_id: str) -> None:
+        """Remove a document's row entirely — no id, hash or fiche kept (purge
+        deletion mode). The deletion survives only in the action log, by design;
+        a later re-deposit is NOT recognised (nothing remains to match it)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
+            conn.commit()
+
     def find_by_current_path(self, current_path: str) -> dict[str, str | None] | None:
         with self._connect() as conn:
             row = conn.execute(
