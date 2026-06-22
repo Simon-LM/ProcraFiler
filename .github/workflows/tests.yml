@@ -1,0 +1,32 @@
+name: tests
+
+# Runs the routine suite the canonical way (`make test` = `-t . -s tests`) on
+# every push and pull request. No secrets are exposed to the job, so the suite is
+# enforced fully offline — see docs/testing.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run the offline test suite
+        run: make test PYTHON=python
