@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from procrafiler.catalog import CatalogRepository
 from procrafiler.cli import main
 from procrafiler.config import (
     default_runtime_paths,
@@ -61,11 +63,25 @@ class TestDeletionModeSetting(unittest.TestCase):
         self.assertEqual(get_deletion_mode(self.paths), "tombstone")
 
     def test_user_language_default_set_and_invalid(self) -> None:
-        self.assertEqual(get_user_language(self.paths), "en")  # default
+        self.assertEqual(get_user_language(self.paths), "en")  # empty catalog, unset → English
         set_user_language(self.paths, "FR")  # normalised to lowercase
         self.assertEqual(get_user_language(self.paths), "fr")
         with self.assertRaises(ValueError):
             set_user_language(self.paths, "français")  # not a code
+
+    def test_user_language_auto_detects_from_documents(self) -> None:
+        # No explicit setting → detect the user's language from their documents.
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        for i in range(3):
+            repo.upsert_document(
+                doc_id=f"d{i}", sha256=f"d{i}", current_filename=f"d{i}.txt",
+                current_path=f"/lib/d{i}.txt", status="LIBRARY_STORED",
+                updated_at_utc="2026-01-01T00:00:00Z", content_json=json.dumps({"language": "fr"}),
+            )
+        self.assertEqual(get_user_language(self.paths), "fr")  # auto-detected
+        set_user_language(self.paths, "es")  # explicit always wins over detection
+        self.assertEqual(get_user_language(self.paths), "es")
 
     def test_language_deletion_mode_and_features_all_coexist(self) -> None:
         set_user_language(self.paths, "fr")

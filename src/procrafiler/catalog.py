@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -143,6 +144,32 @@ class CatalogRepository:
         with self._connect() as conn:
             conn.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
             conn.commit()
+
+    def majority_language(self) -> str | None:
+        """The language most documents are in — the AI records each document's
+        language in its fiche, so the app can work in the user's language with no
+        configuration. None when there is nothing to go on (empty/absent catalog)."""
+        counts: dict[str, int] = {}
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT content_json FROM documents "
+                    "WHERE status = 'LIBRARY_STORED' AND content_json IS NOT NULL"
+                ).fetchall()
+        except sqlite3.Error:
+            return None
+        for row in rows:
+            try:
+                fiche = json.loads(row["content_json"])
+            except (TypeError, ValueError):
+                continue
+            language = fiche.get("language") if isinstance(fiche, dict) else None
+            if isinstance(language, str) and language.strip():
+                code = language.strip().lower()
+                counts[code] = counts.get(code, 0) + 1
+        if not counts:
+            return None
+        return max(counts, key=lambda code: counts[code])
 
     def find_by_current_path(self, current_path: str) -> dict[str, str | None] | None:
         with self._connect() as conn:
