@@ -80,38 +80,18 @@ mkdir -p "$APP_DIR" "$BIN_DIR" "$ENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade "$REPO_ROOT"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  # Create with restrictive umask so the file containing API keys is never
-  # world-readable, even momentarily.
+  # Seed the env file from the canonical template (.env.example) so it can never
+  # drift from the AI tasks the app actually reads. The file holds API keys, so
+  # create it 0600 FIRST (umask 077), then fill it — never world-readable, even
+  # momentarily. An existing env file is left untouched.
   (
     umask 077
-    cat > "$ENV_FILE" <<'EOF'
-# ProcraFiler runtime configuration
-# Per-task AI selection (provider:model,provider:model)
-# Set PRIMARY chain for each task, and optional FALLBACK chain.
-PROCRAFILER_AI_NAMING_PRIMARY=
-PROCRAFILER_AI_NAMING_FALLBACK=
-PROCRAFILER_AI_OCR_PRIMARY=
-PROCRAFILER_AI_OCR_FALLBACK=
-PROCRAFILER_AI_PDF_PRIMARY=
-PROCRAFILER_AI_PDF_FALLBACK=
-PROCRAFILER_AI_IMAGE_PRIMARY=
-PROCRAFILER_AI_IMAGE_FALLBACK=
-PROCRAFILER_AI_VIDEO_PRIMARY=
-PROCRAFILER_AI_VIDEO_FALLBACK=
-PROCRAFILER_AI_SUPERVISOR_PRIMARY=
-PROCRAFILER_AI_SUPERVISOR_FALLBACK=
-PROCRAFILER_AI_CLASSIFICATION_PRIMARY=
-PROCRAFILER_AI_CLASSIFICATION_FALLBACK=
-
-# Retry/timeout defaults (can be overridden per task)
-PROCRAFILER_AI_TIMEOUT=60
-PROCRAFILER_AI_RETRIES=2
-PROCRAFILER_AI_NAMING_TIMEOUT=60
-PROCRAFILER_AI_NAMING_RETRIES=2
-
-# Provider keys
-MISTRAL_API_KEY=
-EOF
+    : > "$ENV_FILE"
+    if [[ -f "$REPO_ROOT/.env.example" ]]; then
+      cat "$REPO_ROOT/.env.example" > "$ENV_FILE"
+    else
+      echo "# .env.example not found at install time; fill in your AI chains + MISTRAL_API_KEY." > "$ENV_FILE"
+    fi
   )
 fi
 
