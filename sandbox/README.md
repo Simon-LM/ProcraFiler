@@ -10,6 +10,19 @@ Only the generated runtime workspace (`sandbox/workspace/`) is gitignored; the
 runner (`run.sh`) and the synthetic `samples/` are versioned — the sandbox is a
 test feature of the repo.
 
+## Requirements: just `git` and `python3`
+
+**You do not have to create a virtualenv.** On its first run, `run.sh` builds an
+isolated `.venv/` in the repo and installs ProcraFiler into it (editable), then
+reuses it on later runs. So a fresh clone is exactly two steps:
+
+```bash
+git clone https://github.com/Simon-LM/ProcraFiler.git && cd ProcraFiler
+./sandbox/run.sh e2e
+```
+
+(An AI key is optional — see below.)
+
 ## One-shot end-to-end test
 
 ```bash

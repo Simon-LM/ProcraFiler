@@ -45,6 +45,22 @@ LIB="$PROCRAFILER_LIBRARY_DIR"
 
 procra() { "$PY" -m procrafiler.cli "$@"; }
 
+# First-run bootstrap: make sure the repo virtualenv exists and has procrafiler
+# installed, so a fresh clone can run the sandbox with a SINGLE command — no venv
+# to create or activate by hand. It's a fast no-op once the venv is ready.
+ensure_env() {
+  if [[ ! -x "$PY" ]]; then
+    echo "First run: creating an isolated virtualenv in .venv/ (one-time setup)…"
+    python3 -m venv "$REPO/.venv"
+    "$REPO/.venv/bin/python" -m pip install --quiet --upgrade pip
+    "$REPO/.venv/bin/python" -m pip install --quiet -e "$REPO"
+    echo "Virtualenv ready."
+  elif ! "$PY" -c 'import procrafiler' 2>/dev/null; then
+    echo "Installing procrafiler into the existing .venv…"
+    "$PY" -m pip install --quiet -e "$REPO"
+  fi
+}
+
 seed() {
   procra init-layout >/dev/null
   cp -n "$HERE"/samples/* "$WS/Inbox/" 2>/dev/null || true
@@ -57,7 +73,13 @@ tree_view() {
   echo "== Library =="; find "$LIB" -type f 2>/dev/null | sed "s|$LIB/||" | sort || true
 }
 
-case "${1:-help}" in
+cmd="${1:-help}"
+# Everything except plain help needs procrafiler installed in the venv.
+if [[ "$cmd" != "help" && "$cmd" != "-h" && "$cmd" != "--help" ]]; then
+  ensure_env
+fi
+
+case "$cmd" in
   help|-h|--help)
     cat <<'USAGE'
 ProcraFiler dev sandbox — isolated end-to-end testing (never touches real files).

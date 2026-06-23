@@ -9,13 +9,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-06-23 — Solid install, update & uninstall
+## [0.4.0] - 2026-06-23 — Solid install, update & uninstall
 
-First stable release. Installing, updating and uninstalling are now solid, and **an update never forces you to reorganize your folders**: your library, catalog, settings and keys are preserved across versions, the catalog migrates in place, and the version always tracks the release tag. (Everything from the 0.x line is included: AI-first naming + classification, set-aware organize, the decisions queue + `review`, hand-reorganization `rescan`, offline + AI-assisted multilingual `search`, and a tombstone/purge deletion model.)
+Installing, updating and uninstalling are now solid, and **an update never forces you to reorganize your folders**: your library, catalog, settings and keys are preserved across versions, the catalog migrates in place, and the version always tracks the release tag. This is the groundwork for a 1.0 — what still remains for that milestone is an **interactive install** (choose where your Inbox / Library / Mirror live) and a **clearer way to pick the AI providers** (local vs API, per task). (Everything from the earlier 0.x line is included: AI-first naming + classification, set-aware organize, the decisions queue + `review`, hand-reorganization `rescan`, offline + AI-assisted multilingual `search`, and a tombstone/purge deletion model.)
 
 ### Added
 
-- **The dev sandbox ships with the repo.** Contributors get a ready-made, fully isolated end-to-end harness (`./sandbox/run.sh e2e`) on synthetic sample files. `run.sh` forces every path inside `sandbox/workspace/` itself, so a run can never touch your real files and needs no `.env` path setup; only the generated workspace is gitignored. The README and `docs/testing.md` point to it for manual end-to-end testing.
+- **The dev sandbox ships with the repo.** A ready-made, fully isolated end-to-end harness (`./sandbox/run.sh e2e`) on synthetic sample files, for trying ProcraFiler before pointing it at your real files. `run.sh` forces every path inside `sandbox/workspace/` itself (so a run can never touch your real files, no `.env` path setup) and **bootstraps its own virtualenv on first run** — a fresh clone needs only `git` + `python3` and one command. Only the generated workspace is gitignored; the README and `docs/testing.md` point to it for manual end-to-end testing.
 
 ### Changed
 

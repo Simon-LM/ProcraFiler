@@ -304,25 +304,15 @@ procrafiler doctor       # checks paths, env, AI config, catalog
 procrafiler process-all
 ```
 
-### Try it safely first (a scratch run, no risk to your files)
+### Try it first, safely (the sandbox)
 
-To see what ProcraFiler does without touching your real Downloads or home, point every path at a throwaway directory — the app only ever touches the folders you give it:
+Before pointing ProcraFiler at your real files, run the whole pipeline end to end in a throwaway **sandbox** that **never touches your Downloads or home** — `run.sh` forces every path inside `sandbox/workspace/`. From the clone:
 
 ```bash
-mkdir -p /tmp/pf-try
-export PROCRAFILER_WORKSPACE_DIR=/tmp/pf-try/Inbox_root
-export PROCRAFILER_LIBRARY_DIR=/tmp/pf-try/Library
-export PROCRAFILER_LIBRARY_MIRROR_DIR=/tmp/pf-try/Mirror
-export PROCRAFILER_HOME=/tmp/pf-try/state
-export PROCRAFILER_CONFIG_HOME=/tmp/pf-try/config
-procrafiler init-layout
-cp ./some-test-files/* /tmp/pf-try/Inbox_root/Inbox/
-procrafiler process-all          # then inspect the result under /tmp/pf-try/Library
+./sandbox/run.sh e2e     # create layout + seed synthetic samples + process-all + show the result
 ```
 
-Remove `/tmp/pf-try` when you're done.
-
-Contributors have a ready-made, fully isolated **dev sandbox** in the repo: `./sandbox/run.sh e2e` runs a complete end-to-end test on synthetic sample files inside `sandbox/workspace/` (gitignored), and `./sandbox/run.sh <any procrafiler command>` exercises the whole surface there — see [sandbox/README.md](sandbox/README.md).
+The first run **creates its own virtualenv automatically** — nothing to set up. Without an AI key it runs in safe fallback mode (files go to manual review); add a key to the repo `.env` to see real reading + classification. Any command works against the sandbox too (`./sandbox/run.sh search facture`, `./sandbox/run.sh status`). Once you're happy, configure the real paths above and run for real. See [sandbox/README.md](sandbox/README.md).
 
 ## Running the tests
 

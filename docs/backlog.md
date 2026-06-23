@@ -100,3 +100,9 @@ binary in the taxonomy) is not in the document — it depends on the user's
 - [ ] **`mistral-small` on images** — the user noted it can also process images, with
       unknown reliability. Worth comparing against `mistral-medium` to see if it can
       sometimes replace it (cost/quality tradeoff).
+- [ ] **Re-test set grouping in the sandbox** — the per-folder organize rules (one
+      destination per dropped folder, high bar to split out a file, no fragmentation
+      across base categories, single affair name/period) are implemented in the
+      organize prompt + pipeline; confirm on a real run that a multi-file affair
+      (e.g. a water-damage claim) is no longer scattered across Housing/Insurance or
+      multiple dates. (Moved here from the now-deleted plan-b.md.)
