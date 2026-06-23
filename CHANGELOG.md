@@ -9,6 +9,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-23 — AI-assisted search
+
+The offline `search` stays instant and free; a new opt-in `search-ai` brings in an AI to broaden a query with synonyms and translations for the cases where exact search is too narrow.
+
+### Added
+
+- **`search-ai` — deeper search, powered by AI.** `search-ai <word or phrase>` asks a small AI to broaden your query with **synonyms and translations** (English + your language), then runs the offline search over all of them at once (OR, BM25-ranked). So `search-ai acoustique` surfaces documents indexed under `audio`, `son`, `sound`, `sonore`… that a plain `search acoustique` would miss. It prints the terms it added (transparency), and **falls back to the plain offline `search`** when no AI chain is configured. The default `search` is unchanged — offline, instant, no AI. New `expand_query` (`ai_analysis`) + `search_catalog_any` (`search`); CLI `search-ai`. `tests/test_search_ai.py` +7. (#78)
+
 ## [0.3.2] - 2026-06-23 — Multilingual & forgiving search
 
 `search` now forgives typos and crosses languages: a misspelled word still finds its document (offline, no AI), and a document is findable by its category in your language as well as English. You set your primary language once.

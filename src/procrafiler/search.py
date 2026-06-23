@@ -22,6 +22,7 @@ from __future__ import annotations
 import difflib
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,17 +164,13 @@ def _cached_body(index: BodyTextIndex, cached: dict[str, str], sha256: str, curr
     return body
 
 
-def search_catalog(
-    db_path: Path, query: str, *, limit: int = 20, index_path: Path | None = None,
-    user_language: str = "en",
+def _search(
+    db_path: Path, *, limit: int, index_path: Path | None, user_language: str,
+    strategy: "Callable[[sqlite3.Connection, Callable[[str], list[SearchHit]]], list[SearchHit]]",
 ) -> list[SearchHit]:
-    """Return the documents whose fiche, body text OR category matches `query`,
-    best first (BM25). `user_language` lets the category be matched in the user's
-    language as well as English (e.g. `loisirs` finds `Hobbies`)."""
-    match = _fts_match_query(query)
-    if not match:
-        return []
-
+    """Build the query-time FTS table from the catalog (fiche + body + category)
+    once, then let `strategy(conn, run)` decide which MATCH expression(s) to run.
+    Shared by `search_catalog` (exact + typo fallback) and `search_catalog_any`."""
     index = BodyTextIndex(index_path or _default_index_path(db_path))
     index.init_schema()
 
@@ -228,14 +225,48 @@ def search_catalog(
                 out.append(SearchHit(str(row["doc_id"]), name, category, date, path, str(row["snip"] or "")))
             return out
 
+        return strategy(conn, run)
+    finally:
+        conn.close()
+
+
+def search_catalog(
+    db_path: Path, query: str, *, limit: int = 20, index_path: Path | None = None,
+    user_language: str = "en",
+) -> list[SearchHit]:
+    """Return the documents whose fiche, body text OR category matches `query`,
+    best first (BM25). `user_language` lets the category be matched in the user's
+    language as well as English (e.g. `loisirs` finds `Hobbies`). Typo-tolerant:
+    when nothing matches exactly, query terms fall back to their closest indexed
+    terms (offline, no AI)."""
+    match = _fts_match_query(query)
+    if not match:
+        return []
+
+    def strategy(conn: sqlite3.Connection, run: "Callable[[str], list[SearchHit]]") -> list[SearchHit]:
         hits = run(match)
         if hits:
             return hits
-        # No exact match — fall back to typo-tolerant terms (offline, no AI).
         fuzzy = _fuzzy_match_query(query, _vocabulary(conn))
         return run(fuzzy) if fuzzy else []
-    finally:
-        conn.close()
+
+    return _search(db_path, limit=limit, index_path=index_path, user_language=user_language, strategy=strategy)
+
+
+def search_catalog_any(
+    db_path: Path, terms: list[str], *, limit: int = 20, index_path: Path | None = None,
+    user_language: str = "en",
+) -> list[SearchHit]:
+    """Return documents matching ANY of `terms` (OR), best first (BM25). Powers
+    `search-ai`, which feeds it a query broadened with AI synonyms/translations."""
+    cleaned = [t.strip() for t in terms if t and t.strip()]
+    if not cleaned:
+        return []
+    match = "(" + " OR ".join(_quote(t) for t in cleaned) + ")"
+    return _search(
+        db_path, limit=limit, index_path=index_path, user_language=user_language,
+        strategy=lambda _conn, run: run(match),
+    )
 
 
 def reindex_content(db_path: Path, *, index_path: Path | None = None) -> dict[str, int]:
