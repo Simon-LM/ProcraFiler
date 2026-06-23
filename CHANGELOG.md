@@ -15,7 +15,7 @@ The offline `search` stays instant and free; a new opt-in `search-ai` brings in 
 
 ### Added
 
-- **`search-ai` — deeper search, powered by AI.** `search-ai <word or phrase>` asks a small AI to broaden your query with **synonyms and translations** (English + your language), then runs the offline search over all of them at once (OR, BM25-ranked). So `search-ai acoustique` surfaces documents indexed under `audio`, `son`, `sound`, `sonore`… that a plain `search acoustique` would miss. It prints the terms it added (transparency), and **falls back to the plain offline `search`** when no AI chain is configured. The default `search` is unchanged — offline, instant, no AI. New `expand_query` (`ai_analysis`) + `search_catalog_any` (`search`); CLI `search-ai`. `tests/test_search_ai.py` +7. (#78)
+- **`search-ai` — deeper search, powered by AI.** `search-ai <word or phrase>` asks a small AI to broaden your query with **synonyms and translations** (English + your language), then runs the offline search over all of them at once (OR, BM25-ranked). So `search-ai acoustique` surfaces documents indexed under `audio`, `son`, `sound`, `sonore`… that a plain `search acoustique` would miss. Common function words are dropped from the broadened query so an ambiguous short word (e.g. the French possessive `son`) doesn't drown the real hits. It prints the terms it added (transparency), and **falls back to the plain offline `search`** when no AI chain is configured. The default `search` is unchanged — offline, instant, no AI. New `expand_query` (`ai_analysis`) + `search_catalog_any` (`search`); CLI `search-ai`. `tests/test_search_ai.py` +7. (#78)
 
 ## [0.3.2] - 2026-06-23 — Multilingual & forgiving search
 

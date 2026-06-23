@@ -36,6 +36,31 @@ from procrafiler.taxonomy import dispatch_for_filename, folder_synonyms
 # either way), which is kinder for accessibility and quick typing.
 _TOKENIZER = "unicode61 remove_diacritics 2"
 
+# Function words dropped from an OR query (search-ai). They carry no search
+# meaning but, OR-ed, would match their grammatical occurrences everywhere — e.g.
+# the French possessive "son" (his/her) would match every "son nom"/"son dossier",
+# drowning the real "son" = sound hits. Multi-word terms (phrases) are never
+# dropped. Accent-stripped to match the tokenizer.
+_STOPWORDS = frozenset((
+    # French
+    "le", "la", "les", "un", "une", "des", "du", "de", "d", "l",
+    "et", "ou", "ni", "mais", "donc", "car", "que", "qui", "quoi", "dont",
+    "a", "au", "aux", "en", "dans", "sur", "sous", "par", "pour", "avec", "sans",
+    "chez", "vers", "entre", "ce", "cet", "cette", "ces",
+    "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
+    "notre", "nos", "votre", "vos", "leur", "leurs",
+    "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+    "est", "sont", "etre", "ont", "avoir", "plus", "moins", "tres", "pas", "ne",
+    # English
+    "the", "a", "an", "of", "to", "in", "on", "for", "with", "without",
+    "and", "or", "nor", "but", "is", "are", "be", "been", "this", "that", "these", "those",
+    "his", "her", "its", "their", "our", "your", "my", "it", "as", "at", "by", "from",
+))
+
+
+def _is_stopword(term: str) -> bool:
+    return " " not in term and term.strip().lower() in _STOPWORDS
+
 # BM25 column weights (0 = ignored). Order matches the FTS columns below: the
 # name and keywords are the strongest signal of what a document IS, the body
 # (content) and category are deep-search/cross-language recall, the summary the
@@ -258,8 +283,10 @@ def search_catalog_any(
     user_language: str = "en",
 ) -> list[SearchHit]:
     """Return documents matching ANY of `terms` (OR), best first (BM25). Powers
-    `search-ai`, which feeds it a query broadened with AI synonyms/translations."""
-    cleaned = [t.strip() for t in terms if t and t.strip()]
+    `search-ai`, which feeds it a query broadened with AI synonyms/translations.
+    Function words (`son`, `de`, `the`…) are dropped so a common grammatical term
+    in the set doesn't drown the real hits; multi-word phrases are kept."""
+    cleaned = [t.strip() for t in terms if t and t.strip() and not _is_stopword(t)]
     if not cleaned:
         return []
     match = "(" + " OR ".join(_quote(t) for t in cleaned) + ")"

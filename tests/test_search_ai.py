@@ -66,6 +66,14 @@ class TestSearchAny(unittest.TestCase):
         self._doc("a", {"name": "A", "keywords": ["x"]})
         self.assertEqual(search_catalog_any(self.db, []), [])
 
+    def test_drops_stopwords_to_avoid_grammatical_noise(self) -> None:
+        # "son" (a French possessive) must not pull in documents that merely
+        # contain it; the real synonym "audio" still matches.
+        self._doc("audio", {"name": "Manuel", "keywords": ["audio"]})
+        self._doc("noise", {"name": "Lettre", "summary": "il envoie à son assureur"})
+        self.assertEqual([h.doc_id for h in search_catalog_any(self.db, ["son", "audio"])], ["audio"])
+        self.assertEqual(search_catalog_any(self.db, ["son", "de", "le"]), [])  # all stopwords
+
 
 class TestSearchAiCli(unittest.TestCase):
     def setUp(self) -> None:
