@@ -173,6 +173,8 @@ When you reorganize the library **by hand** — rename a file, move it, or renam
 Diagnostics and maintenance:
 
 ```bash
+procrafiler status                  # paths, features, policy, deletion mode, language, search index
+procrafiler --version               # the installed version (always tracks the release tag)
 procrafiler doctor                  # check paths, env, AI config, catalog, lock (exit non-zero on FAIL)
 procrafiler rescan                  # follow hand moves/renames/deletes in the library into the catalog (no AI)
 procrafiler deleted-history         # list library files you deleted by hand (from the action log)
@@ -185,7 +187,16 @@ procrafiler library-trash <path>    # move a library file to Library_Trash_Manua
 procrafiler purge-mirror-trash      # delete old mirror backups from Mirror_Trash by TTL
 ```
 
-Mutating commands (`process-*`, `rescan`, `library-trash`, `purge-mirror-trash`) take a runtime lock, so two runs never race on the same Inbox.
+Setup & configuration:
+
+```bash
+procrafiler init-layout             # create the workspace/library/state folders (idempotent)
+procrafiler features                # list feature flags (see "Feature Controls" below)
+procrafiler feature-set <name> <on|off>   # toggle actions_log / catalog_snapshot / mirror_sync
+procrafiler policy-effective        # show effective runtime policy (see "Runtime Policy" below)
+```
+
+Mutating commands (`process-*`, `rescan`, `library-trash`, `purge-mirror-trash`, `enrich-keywords`) take a runtime lock, so two runs never race on the same Inbox. That is the complete command surface (run `procrafiler --help` for the live list).
 
 ## Feature Controls (Terminal)
 
@@ -253,31 +264,55 @@ See [LICENSE.md](LICENSE.md).
 
 ## Versioning, Changelog, and Tags
 
-- Version format: SemVer (`MAJOR.MINOR.PATCH`).
+- Version format: SemVer (`MAJOR.MINOR.PATCH`), tags `vX.Y.Z`.
+- **The git tag is the version** — `procrafiler --version` is derived from the latest tag (setuptools-scm); there is no version number to edit by hand. Release process: [docs/release.md](docs/release.md).
 - Changelog: [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format).
-- Recommended GitHub tags: `vX.Y.Z`.
 - Detailed process: [docs/release.md](docs/release.md).
 
-## Ubuntu Installation
+## Install, configure, run
 
-Full guide: [docs/ubuntu-deploy.md](docs/ubuntu-deploy.md).
+Linux (Ubuntu-first). Prerequisites: `git` and `python3` (3.11+). Full guide: [docs/ubuntu-deploy.md](docs/ubuntu-deploy.md).
 
-### Option A: local user installation (recommended for development)
-
-```bash
-./scripts/install.sh --mode user
-```
-
-This installs the `procrafiler` command into `~/.local/bin`.
-
-### Option B: system installation (root)
+**1. Get the code and install:**
 
 ```bash
-sudo ./scripts/install.sh --mode system
+git clone https://github.com/Simon-LM/ProcraFiler.git
+cd ProcraFiler
+./scripts/install.sh --mode user      # installs `procrafiler` into ~/.local/bin
+# system-wide instead: sudo ./scripts/install.sh --mode system   (binary in /usr/local/bin; add --prefix /usr for /usr/bin)
 ```
 
-By default, the binary is linked into `/usr/local/bin`.
-To force `/usr/bin`, use `--prefix /usr`.
+The installer creates an isolated virtualenv and, on first install, an env file seeded from `.env.example`:
+
+- user install: `~/.config/procrafiler/procrafiler.env`
+- system install: `/etc/procrafiler/procrafiler.env`
+
+**2. Configure the AI.** Edit that env file and set `MISTRAL_API_KEY` (and/or point per-task chains at a local Ollama). The chains come pre-filled with sensible Mistral defaults, so with a key it works out of the box. A task left empty just sends files that would need it to manual review.
+
+**3. (Recommended) Tell the app about you, once** — it guides the AI and captures your language:
+
+```bash
+procrafiler setup-context
+```
+
+**4. Verify, then run:**
+
+```bash
+procrafiler --version    # confirms the install (tracks the release tag)
+procrafiler doctor       # checks paths, env, AI config, catalog
+# drop files into your Inbox (default ~/Downloads/ProcraFiler_Inbox/Inbox), then:
+procrafiler process-all
+```
+
+### Try it first, safely (the sandbox)
+
+Before pointing ProcraFiler at your real files, run the whole pipeline end to end in a throwaway **sandbox** that **never touches your Downloads or home** — `run.sh` forces every path inside `sandbox/workspace/`. From the clone:
+
+```bash
+./sandbox/run.sh e2e     # create layout + seed synthetic samples + process-all + show the result
+```
+
+The first run **creates its own virtualenv automatically** — nothing to set up. Without an AI key it runs in safe fallback mode (files go to manual review); add a key to the repo `.env` to see real reading + classification. Any command works against the sandbox too (`./sandbox/run.sh search facture`, `./sandbox/run.sh status`). Once you're happy, configure the real paths above and run for real. See [sandbox/README.md](sandbox/README.md).
 
 ## Running the tests
 
@@ -298,24 +333,28 @@ When a test fails, or to learn how the suite is run and kept offline, see
 
 ## Update
 
-From the local Git clone on the target machine:
+From the Git clone on the machine:
 
 ```bash
-# user mode
 ./scripts/update.sh --mode user
-
-# system mode
-sudo ./scripts/update.sh --mode system
+# or: sudo ./scripts/update.sh --mode system
 ```
 
-The script fetches the latest commits/tags and reinstalls the application in its virtual environment.
+The updater fetches the tags and moves the clone to the **latest release tag** (`vX.Y.Z`) — never an in-progress branch HEAD — then reinstalls in the venv. It prints `old → new` version and refuses to run if the clone has local changes. **Your library, catalog, settings and env file are never touched**, and the catalog migrates in place — so an update never forces you to reorganize anything. `procrafiler --version` always matches the installed release.
 
 ## Uninstall
 
 ```bash
 ./scripts/uninstall.sh --mode user
-# or
-sudo ./scripts/uninstall.sh --mode system
+# or: sudo ./scripts/uninstall.sh --mode system
+```
+
+This removes the app (launcher + venv + code) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your keys) — printing exactly what is kept and where. **Your organized files are never deleted.**
+
+To also remove the config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library or your context file — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt):
+
+```bash
+./scripts/uninstall.sh --mode user --purge
 ```
 
 ## Project Status

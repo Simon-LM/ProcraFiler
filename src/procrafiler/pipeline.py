@@ -1899,7 +1899,7 @@ def _regroup_existing_file(
     """Move an existing LIBRARY_STORED file DEEPER into `dest_dir`, update the
     catalog and mirror copy, and leave a relative symlink at its old location.
 
-    Two run-invariant guards (spec §1.2, plan-d révision):
+    Two run-invariant guards (spec §1.2):
     - DEEPEN-ONLY: `dest_dir` must be a STRICT descendant of the file's current
       folder. A run may only increase order — never flatten, move up, or cross
       branches; anything else is refused and logged.

@@ -83,6 +83,19 @@ python -m unittest tests.test_pipeline.TestPipeline.test_x    # one test
 - If you set any env var, restore it in `tearDown` (or use
   `unittest.mock.patch.dict`).
 
+## Manual end-to-end testing (the sandbox)
+
+`make test` covers the **automated, offline** suite. To exercise the real
+pipeline by hand — against the live AI or in safe fallback mode — use the
+isolated dev sandbox, which forces every path inside `sandbox/workspace/` and
+never touches your real files:
+
+```bash
+./sandbox/run.sh e2e          # reset + init + seed samples + process-all + show result
+```
+
+See [`sandbox/README.md`](../sandbox/README.md) for the full step list.
+
 ## CI
 
 [`.github/workflows/tests.yml`](../.github/workflows/tests.yml) runs `make test`

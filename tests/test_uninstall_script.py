@@ -13,7 +13,7 @@ _UNINSTALL = _REPO_ROOT / "scripts" / "uninstall.sh"
 
 @unittest.skipUnless(shutil.which("bash") and _UNINSTALL.is_file(), "bash / uninstall.sh unavailable")
 class TestUninstallScript(unittest.TestCase):
-    """The cardinal guarantee of v1.0: uninstall NEVER deletes the user's library."""
+    """The cardinal install/uninstall guarantee: uninstall NEVER deletes the user's library."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

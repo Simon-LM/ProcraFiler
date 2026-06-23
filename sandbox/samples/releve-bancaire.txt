@@ -1,0 +1,16 @@
+BNP PARIBAS
+Relevé de compte courant
+
+Titulaire : M. Dupont Jean
+Numéro de compte : FR76 3000 4000 0100 0012 3456 789
+Période : 01/04/2026 - 30/04/2026
+
+Solde au 01/04/2026 : 1 842,17 EUR
+
+Opérations :
+03/04  Virement salaire ACME SARL          +2 450,00
+07/04  Prélèvement EDF                        -84,30
+12/04  Carte CB Supermarché                   -56,12
+20/04  Prélèvement loyer                     -720,00
+
+Solde au 30/04/2026 : 3 431,75 EUR

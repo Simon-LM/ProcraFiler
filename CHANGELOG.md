@@ -9,17 +9,27 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-23 — Solid install, update & uninstall
+
+Installing, updating and uninstalling are now solid, and **an update never forces you to reorganize your folders**: your library, catalog, settings and keys are preserved across versions, the catalog migrates in place, and the version always tracks the release tag. This is the groundwork for a 1.0 — what still remains for that milestone is an **interactive install** (choose where your Inbox / Library / Mirror live) and a **clearer way to pick the AI providers** (local vs API, per task). (Everything from the earlier 0.x line is included: AI-first naming + classification, set-aware organize, the decisions queue + `review`, hand-reorganization `rescan`, offline + AI-assisted multilingual `search`, and a tombstone/purge deletion model.)
+
+### Added
+
+- **The dev sandbox ships with the repo.** A ready-made, fully isolated end-to-end harness (`./sandbox/run.sh e2e`) on synthetic sample files, for trying ProcraFiler before pointing it at your real files. `run.sh` forces every path inside `sandbox/workspace/` itself (so a run can never touch your real files, no `.env` path setup) and **bootstraps its own virtualenv on first run** — a fresh clone needs only `git` + `python3` and one command. Only the generated workspace is gitignored; the README and `docs/testing.md` point to it for manual end-to-end testing.
+
 ### Changed
 
-- **The version now comes from the git tag, and `update` tracks the latest release tag (toward v1.0 install hardening).** `procrafiler --version` was a hardcoded constant and had drifted — it reported `0.2.0` while releases were already at `v0.3.3` (the install metadata even said `0.1.0`). The version is now **derived from the latest git tag by setuptools-scm** — one source of truth that cannot drift; `--version` reads it from the installed package metadata. And **`update.sh` now updates to the latest release tag** (`vX.Y.Z`) instead of a branch HEAD: it fetches the tags, checks out the newest one, reinstalls, prints `old → new` version, and refuses to run on a clone with local changes — never touching your library, catalog, settings or env file. CI checks out full history so the build can derive the version. `tests/test_version.py` +1. (#79)
-
-- **`uninstall` is now clear and safe, with an opt-in `--purge` (toward v1.0 install hardening).** Uninstalling removes the app (launcher + venv + code) and now **prints exactly what is kept and where** — your library, the catalog/state, and your config (incl. the env file with your API keys) — with the guarantee that your organized files are never deleted. A new **`--purge`** also removes the app's config and *regenerable* state (env file, settings, policy, catalog, logs, search index), but **never** your library, its mirror, the trashes, or your context file; it lists the exact files and asks for confirmation (`--yes` to skip). (#81)
-
-- **The install/update/uninstall guarantees are now regression-tested (toward v1.0 install hardening).** An automated test proves a catalog written by an **older version** is migrated on open (the new columns are added, the old rows survive) — so an update never breaks your catalog; another opens an **old `settings.json`** (no `deletion_mode`/`user_language`) and confirms it still works; and a test runs the real `uninstall.sh` against a throwaway install to assert the **library is never deleted** — by `uninstall` *or* `uninstall --purge`. `tests/test_catalog.py` +1, `tests/test_uninstall_script.py` +2, `tests/test_deletion_mode.py` +1. (#82)
+- **Versioned by the git tag.** `procrafiler --version` is derived from the latest tag (setuptools-scm) — one source of truth, no hardcoded number to drift (it used to report `0.2.0` while releases were at `v0.3.3`). (#79)
+- **`update` tracks the latest release tag.** `update.sh` fetches the tags and checks out the newest `vX.Y.Z` (never a branch HEAD), reinstalls, and prints `old → new`; it refuses a clone with local changes and never touches your library, catalog, settings or env. (#79)
+- **`uninstall` is clear and safe.** It prints exactly what is kept (library, state, config) and guarantees your organized files are never deleted; a new opt-in **`--purge`** removes the config + regenerable state — but never the library, mirror, trashes or your context file (it lists the files and asks for confirmation). (#81)
 
 ### Fixed
 
-- **A fresh install now writes a correct, current AI config (toward v1.0 install hardening).** `install.sh` generated the env file from a hardcoded template that had gone **stale**: it listed AI tasks that no longer exist (`NAMING`, `PDF`, `SUPERVISOR`, `CLASSIFICATION`, `VIDEO`) and was **missing the ones the app actually uses** (`ANALYSIS`, `ORGANIZE`), so a new user got an unusable AI config. `install.sh` now **seeds the env file from the canonical `.env.example`** — one source of truth that can't drift — with sensible model defaults (just fill in `MISTRAL_API_KEY`). An existing env file is still left untouched, and the file is created `0600` before any content is written. (#80)
+- **A fresh install writes a correct AI config.** `install.sh` now seeds the env file from the canonical `.env.example` (one source of truth) instead of a hardcoded template that had drifted — it listed dead AI tasks and was missing the ones actually used (`ANALYSIS`, `ORGANIZE`). The file is created `0600`; an existing env file is left untouched. (#80)
+
+### Tests
+
+- The install/update/uninstall guarantees are regression-tested: catalog **schema migration** on an old DB, **settings forward-compatibility**, and the real `uninstall.sh` proving the **library survives** both `uninstall` and `--purge`. (#82)
 
 ## [0.3.3] - 2026-06-23 — AI-assisted search
 
