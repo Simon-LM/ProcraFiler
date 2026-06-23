@@ -80,6 +80,14 @@ sudo ./scripts/update.sh --mode system
 sudo ./scripts/uninstall.sh --mode system
 ```
 
+This removes the app (launcher + venv + code) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your API key). It prints exactly what is kept and where. **Your organized files are never deleted.**
+
+To also remove the app's config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library or your context file — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt):
+
+```bash
+./scripts/uninstall.sh --mode user --purge
+```
+
 ## Notes
 
 - No direct file deletion policy should remain enforced at application level.
