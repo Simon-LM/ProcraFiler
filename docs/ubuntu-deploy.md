@@ -65,13 +65,14 @@ You can check which env file was loaded with:
 procrafiler status
 ```
 
-## 4) Update after new GitHub push
+## 4) Update to the latest release
 
 ```bash
 cd ProcraFiler
-git pull --ff-only
 sudo ./scripts/update.sh --mode system
 ```
+
+`update.sh` fetches the tags and checks out the **latest release tag** (`vX.Y.Z`) from the remote — never a branch HEAD — then reinstalls. It prints the old → new version and refuses to run if the clone has local changes. Your library, catalog, settings and env file are never touched. The reported version is derived from the tag itself (setuptools-scm), so `procrafiler --version` always matches the installed release.
 
 ## 5) Uninstall
 
