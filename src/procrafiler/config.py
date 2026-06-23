@@ -271,19 +271,24 @@ def set_feature_flag(paths: RuntimePaths, feature: str, enabled: bool) -> dict[s
     return settings
 
 
-def ensure_runtime_layout(paths: RuntimePaths) -> None:
-    for directory in (
+def ensure_runtime_layout(paths: RuntimePaths, *, include_mirror: bool = True) -> None:
+    directories = [
         paths.workspace_root,
         paths.inbox_dir,
         paths.queue_dir,
         paths.inbox_trash_manual_dir,
         paths.library_root,
         paths.library_trash_manual_dir,
-        paths.mirror_root,
-        paths.mirror_trash_dir,
         paths.state_root,
         paths.settings_file.parent,
-    ):
+    ]
+    # The mirror is optional (a backup copy of the library). When the user
+    # declined it at setup — i.e. the `mirror_sync` feature is off — we must NOT
+    # create its folders, otherwise an empty mirror would orphan on disk.
+    if include_mirror:
+        directories.extend((paths.mirror_root, paths.mirror_trash_dir))
+
+    for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
 
     for file_path in (paths.actions_log_file, paths.catalog_db_file, paths.catalog_snapshot_file):

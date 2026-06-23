@@ -130,3 +130,7 @@ echo "Binary: $BIN_DIR/procrafiler"
 if [[ "$MODE" == "user" ]]; then
   echo "If needed, add this to your shell profile: export PATH=\"$HOME/.local/bin:\$PATH\""
 fi
+echo
+echo "Next step — run the guided first-time setup:"
+echo "  procrafiler setup        # choose where your files live (Inbox/Library/optional Mirror), then who you are"
+echo "Then set your AI key in: $ENV_FILE   (MISTRAL_API_KEY=…, or point a task at a local Ollama)"

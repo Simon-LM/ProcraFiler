@@ -128,6 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers.add_parser(
+        "setup",
+        help="Guided first run: choose where your files live (Inbox/Library/optional Mirror), then who you are",
+    )
+    subparsers.add_parser(
         "setup-context",
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
     )
@@ -241,7 +245,8 @@ def cmd_language(code: str | None) -> int:
 
 def cmd_init_layout() -> int:
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    mirror_enabled = bool(load_feature_settings(paths)["features"].get("mirror_sync", True))
+    ensure_runtime_layout(paths, include_mirror=mirror_enabled)
 
     print("Runtime layout initialized:")
     print(f"- {paths.workspace_root}")
@@ -250,14 +255,21 @@ def cmd_init_layout() -> int:
     print(f"- {paths.inbox_trash_manual_dir}")
     print(f"- {paths.library_root}")
     print(f"- {paths.library_trash_manual_dir}")
-    print(f"- {paths.mirror_root}")
-    print(f"- {paths.mirror_trash_dir}")
+    if mirror_enabled:
+        print(f"- {paths.mirror_root}")
+        print(f"- {paths.mirror_trash_dir}")
     print(f"- {paths.state_root}")
     print(f"- {paths.actions_log_file}")
     print(f"- {paths.catalog_db_file}")
     print(f"- {paths.catalog_snapshot_file}")
     print(f"- {paths.settings_file}")
     return 0
+
+
+def cmd_setup() -> int:
+    from procrafiler.user_setup import setup
+
+    return setup()
 
 
 def cmd_features() -> int:
@@ -641,6 +653,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_reconcile_snapshot()
     if args.command == "review":
         return cmd_review()
+    if args.command == "setup":
+        return cmd_setup()
     if args.command == "setup-context":
         return cmd_setup_context()
     if args.command == "search":
