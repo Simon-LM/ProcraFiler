@@ -35,6 +35,6 @@ runtime/
 logs/
 history/
 
-# Local dev sandbox for manual / end-to-end testing (real files, generated
-# library/mirror/state, never committed)
-sandbox/
+# Dev sandbox: the RUNNER + synthetic samples are versioned (a test feature);
+# only the generated runtime workspace (library/mirror/state) is ignored.
+sandbox/workspace/

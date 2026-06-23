@@ -1,0 +1,15 @@
+EDF — Électricité de France
+FACTURE
+
+Référence client : 700123456789
+Date de facture : 05/04/2026
+Période de consommation : février - mars 2026
+
+Adresse de fourniture : 12 rue des Lilas, 75011 Paris
+
+Consommation : 412 kWh
+Montant HT : 70,25 EUR
+TVA (20%) : 14,05 EUR
+Montant TTC à payer : 84,30 EUR
+
+Date limite de paiement : 25/04/2026

@@ -187,7 +187,16 @@ procrafiler library-trash <path>    # move a library file to Library_Trash_Manua
 procrafiler purge-mirror-trash      # delete old mirror backups from Mirror_Trash by TTL
 ```
 
-Mutating commands (`process-*`, `rescan`, `library-trash`, `purge-mirror-trash`) take a runtime lock, so two runs never race on the same Inbox.
+Setup & configuration:
+
+```bash
+procrafiler init-layout             # create the workspace/library/state folders (idempotent)
+procrafiler features                # list feature flags (see "Feature Controls" below)
+procrafiler feature-set <name> <on|off>   # toggle actions_log / catalog_snapshot / mirror_sync
+procrafiler policy-effective        # show effective runtime policy (see "Runtime Policy" below)
+```
+
+Mutating commands (`process-*`, `rescan`, `library-trash`, `purge-mirror-trash`, `enrich-keywords`) take a runtime lock, so two runs never race on the same Inbox. That is the complete command surface (run `procrafiler --help` for the live list).
 
 ## Feature Controls (Terminal)
 
@@ -311,7 +320,9 @@ cp ./some-test-files/* /tmp/pf-try/Inbox_root/Inbox/
 procrafiler process-all          # then inspect the result under /tmp/pf-try/Library
 ```
 
-Remove `/tmp/pf-try` when you're done. (Contributors also have a dev sandbox under `sandbox/`.)
+Remove `/tmp/pf-try` when you're done.
+
+Contributors have a ready-made, fully isolated **dev sandbox** in the repo: `./sandbox/run.sh e2e` runs a complete end-to-end test on synthetic sample files inside `sandbox/workspace/` (gitignored), and `./sandbox/run.sh <any procrafiler command>` exercises the whole surface there — see [sandbox/README.md](sandbox/README.md).
 
 ## Running the tests
 

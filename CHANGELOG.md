@@ -13,6 +13,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 First stable release. Installing, updating and uninstalling are now solid, and **an update never forces you to reorganize your folders**: your library, catalog, settings and keys are preserved across versions, the catalog migrates in place, and the version always tracks the release tag. (Everything from the 0.x line is included: AI-first naming + classification, set-aware organize, the decisions queue + `review`, hand-reorganization `rescan`, offline + AI-assisted multilingual `search`, and a tombstone/purge deletion model.)
 
+### Added
+
+- **The dev sandbox ships with the repo.** Contributors get a ready-made, fully isolated end-to-end harness (`./sandbox/run.sh e2e`) on synthetic sample files. `run.sh` forces every path inside `sandbox/workspace/` itself, so a run can never touch your real files and needs no `.env` path setup; only the generated workspace is gitignored. The README and `docs/testing.md` point to it for manual end-to-end testing.
+
 ### Changed
 
 - **Versioned by the git tag.** `procrafiler --version` is derived from the latest tag (setuptools-scm) — one source of truth, no hardcoded number to drift (it used to report `0.2.0` while releases were at `v0.3.3`). (#79)
