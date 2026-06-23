@@ -173,6 +173,8 @@ When you reorganize the library **by hand** — rename a file, move it, or renam
 Diagnostics and maintenance:
 
 ```bash
+procrafiler status                  # paths, features, policy, deletion mode, language, search index
+procrafiler --version               # the installed version (always tracks the release tag)
 procrafiler doctor                  # check paths, env, AI config, catalog, lock (exit non-zero on FAIL)
 procrafiler rescan                  # follow hand moves/renames/deletes in the library into the catalog (no AI)
 procrafiler deleted-history         # list library files you deleted by hand (from the action log)
@@ -253,31 +255,63 @@ See [LICENSE.md](LICENSE.md).
 
 ## Versioning, Changelog, and Tags
 
-- Version format: SemVer (`MAJOR.MINOR.PATCH`).
+- Version format: SemVer (`MAJOR.MINOR.PATCH`), tags `vX.Y.Z`.
+- **The git tag is the version** — `procrafiler --version` is derived from the latest tag (setuptools-scm); there is no version number to edit by hand. Release process: [docs/release.md](docs/release.md).
 - Changelog: [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format).
-- Recommended GitHub tags: `vX.Y.Z`.
 - Detailed process: [docs/release.md](docs/release.md).
 
-## Ubuntu Installation
+## Install, configure, run
 
-Full guide: [docs/ubuntu-deploy.md](docs/ubuntu-deploy.md).
+Linux (Ubuntu-first). Prerequisites: `git` and `python3` (3.11+). Full guide: [docs/ubuntu-deploy.md](docs/ubuntu-deploy.md).
 
-### Option A: local user installation (recommended for development)
-
-```bash
-./scripts/install.sh --mode user
-```
-
-This installs the `procrafiler` command into `~/.local/bin`.
-
-### Option B: system installation (root)
+**1. Get the code and install:**
 
 ```bash
-sudo ./scripts/install.sh --mode system
+git clone https://github.com/Simon-LM/ProcraFiler.git
+cd ProcraFiler
+./scripts/install.sh --mode user      # installs `procrafiler` into ~/.local/bin
+# system-wide instead: sudo ./scripts/install.sh --mode system   (binary in /usr/local/bin; add --prefix /usr for /usr/bin)
 ```
 
-By default, the binary is linked into `/usr/local/bin`.
-To force `/usr/bin`, use `--prefix /usr`.
+The installer creates an isolated virtualenv and, on first install, an env file seeded from `.env.example`:
+
+- user install: `~/.config/procrafiler/procrafiler.env`
+- system install: `/etc/procrafiler/procrafiler.env`
+
+**2. Configure the AI.** Edit that env file and set `MISTRAL_API_KEY` (and/or point per-task chains at a local Ollama). The chains come pre-filled with sensible Mistral defaults, so with a key it works out of the box. A task left empty just sends files that would need it to manual review.
+
+**3. (Recommended) Tell the app about you, once** — it guides the AI and captures your language:
+
+```bash
+procrafiler setup-context
+```
+
+**4. Verify, then run:**
+
+```bash
+procrafiler --version    # confirms the install (tracks the release tag)
+procrafiler doctor       # checks paths, env, AI config, catalog
+# drop files into your Inbox (default ~/Downloads/ProcraFiler_Inbox/Inbox), then:
+procrafiler process-all
+```
+
+### Try it safely first (a scratch run, no risk to your files)
+
+To see what ProcraFiler does without touching your real Downloads or home, point every path at a throwaway directory — the app only ever touches the folders you give it:
+
+```bash
+mkdir -p /tmp/pf-try
+export PROCRAFILER_WORKSPACE_DIR=/tmp/pf-try/Inbox_root
+export PROCRAFILER_LIBRARY_DIR=/tmp/pf-try/Library
+export PROCRAFILER_LIBRARY_MIRROR_DIR=/tmp/pf-try/Mirror
+export PROCRAFILER_HOME=/tmp/pf-try/state
+export PROCRAFILER_CONFIG_HOME=/tmp/pf-try/config
+procrafiler init-layout
+cp ./some-test-files/* /tmp/pf-try/Inbox_root/Inbox/
+procrafiler process-all          # then inspect the result under /tmp/pf-try/Library
+```
+
+Remove `/tmp/pf-try` when you're done. (Contributors also have a dev sandbox under `sandbox/`.)
 
 ## Running the tests
 
@@ -298,24 +332,28 @@ When a test fails, or to learn how the suite is run and kept offline, see
 
 ## Update
 
-From the local Git clone on the target machine:
+From the Git clone on the machine:
 
 ```bash
-# user mode
 ./scripts/update.sh --mode user
-
-# system mode
-sudo ./scripts/update.sh --mode system
+# or: sudo ./scripts/update.sh --mode system
 ```
 
-The script fetches the latest commits/tags and reinstalls the application in its virtual environment.
+The updater fetches the tags and moves the clone to the **latest release tag** (`vX.Y.Z`) — never an in-progress branch HEAD — then reinstalls in the venv. It prints `old → new` version and refuses to run if the clone has local changes. **Your library, catalog, settings and env file are never touched**, and the catalog migrates in place — so an update never forces you to reorganize anything. `procrafiler --version` always matches the installed release.
 
 ## Uninstall
 
 ```bash
 ./scripts/uninstall.sh --mode user
-# or
-sudo ./scripts/uninstall.sh --mode system
+# or: sudo ./scripts/uninstall.sh --mode system
+```
+
+This removes the app (launcher + venv + code) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your keys) — printing exactly what is kept and where. **Your organized files are never deleted.**
+
+To also remove the config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library or your context file — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt):
+
+```bash
+./scripts/uninstall.sh --mode user --purge
 ```
 
 ## Project Status
