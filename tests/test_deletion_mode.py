@@ -101,6 +101,16 @@ class TestDeletionModeSetting(unittest.TestCase):
             self.assertEqual(main(["language", "fr"]), 0)
         self.assertEqual(get_user_language(self.paths), "fr")
 
+    def test_reads_an_old_settings_file_without_the_new_keys(self) -> None:
+        # An update opening a settings.json written before deletion_mode /
+        # user_language existed must still work, and adding one must keep the rest.
+        self.paths.settings_file.write_text('{"features": {"mirror_sync": true}}', encoding="utf-8")
+        self.assertEqual(get_deletion_mode(self.paths), "tombstone")  # default
+        self.assertEqual(get_user_language(self.paths), "en")          # default (empty catalog)
+        set_deletion_mode(self.paths, "purge")
+        self.assertEqual(get_deletion_mode(self.paths), "purge")
+        self.assertTrue(load_feature_settings(self.paths)["features"]["mirror_sync"])  # old block kept
+
     def test_cli_shows_and_sets(self) -> None:
         out = io.StringIO()
         with redirect_stdout(out):
