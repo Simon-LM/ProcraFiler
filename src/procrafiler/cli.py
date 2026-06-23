@@ -139,6 +139,13 @@ def build_parser() -> argparse.ArgumentParser:
     search_p.add_argument("query", nargs="+", help="search terms")
     search_p.add_argument("--limit", type=int, default=20, help="max results (default: 20)")
 
+    search_ai_p = subparsers.add_parser(
+        "search-ai",
+        help="Deeper search: an AI broadens your query with synonyms + translations (EN + your language), then searches",
+    )
+    search_ai_p.add_argument("query", nargs="+", help="search terms (a word or a phrase)")
+    search_ai_p.add_argument("--limit", type=int, default=20, help="max results (default: 20)")
+
     subparsers.add_parser(
         "reindex",
         help="Build/refresh the persistent content index so search never re-reads files (no AI)",
@@ -463,6 +470,24 @@ def cmd_setup_context() -> int:
     return 0
 
 
+def _print_hits(hits: list, paths: "object", *, header: str) -> None:
+    print(header)
+    for hit in hits:
+        try:
+            location = str(Path(hit.path).relative_to(paths.library_root))
+        except ValueError:
+            location = hit.path
+        line = f"\n• {hit.name}"
+        if hit.category_path:
+            line += f"   [{hit.category_path}]"
+        if hit.date:
+            line += f"   {hit.date}"
+        print(line)
+        if hit.snippet:
+            print(f"  {hit.snippet}")
+        print(f"  {location}")
+
+
 def cmd_search(terms: list[str], limit: int) -> int:
     from procrafiler.search import search_catalog
 
@@ -476,21 +501,32 @@ def cmd_search(terms: list[str], limit: int) -> int:
     if not hits:
         print(f"No results for: {query}")
         return 0
-    print(f"{len(hits)} result(s) for: {query}")
-    for hit in hits:
-        try:
-            location = str(Path(hit.path).relative_to(paths.library_root))
-        except ValueError:
-            location = hit.path
-        header = f"\n• {hit.name}"
-        if hit.category_path:
-            header += f"   [{hit.category_path}]"
-        if hit.date:
-            header += f"   {hit.date}"
-        print(header)
-        if hit.snippet:
-            print(f"  {hit.snippet}")
-        print(f"  {location}")
+    _print_hits(hits, paths, header=f"{len(hits)} result(s) for: {query}")
+    return 0
+
+
+def cmd_search_ai(terms: list[str], limit: int) -> int:
+    from procrafiler.ai_analysis import expand_query
+    from procrafiler.search import search_catalog_any
+
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    query = " ".join(terms)
+    language = get_user_language(paths)
+    expansion = expand_query(query, language=language)
+    if not expansion:
+        print("AI expansion unavailable (no AI chain configured, or the call failed) — using plain search.")
+        return cmd_search(terms, limit)
+    print(f"Expanding “{query}” with AI: {', '.join(expansion)}")
+    all_terms = list(dict.fromkeys([*query.split(), *expansion]))
+    hits = search_catalog_any(
+        paths.catalog_db_file, all_terms, limit=limit, index_path=paths.search_index_file,
+        user_language=language,
+    )
+    if not hits:
+        print(f"No results for: {query} (AI-expanded)")
+        return 0
+    _print_hits(hits, paths, header=f"{len(hits)} result(s) for: {query} (AI-expanded)")
     return 0
 
 
@@ -609,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_setup_context()
     if args.command == "search":
         return cmd_search(args.query, args.limit)
+    if args.command == "search-ai":
+        return cmd_search_ai(args.query, args.limit)
     if args.command == "reindex":
         return cmd_reindex()
     if args.command == "enrich-keywords":

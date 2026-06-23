@@ -408,10 +408,18 @@ def translate_keywords(
     if not chain_entries:
         return []
 
+    prompt = _build_translate_prompt(keywords, summary, _LANG_NAMES.get(code, code))
+    return _keywords_from_chain(prompt, chain_entries, timeout_seconds, retries, sleep_fn)
+
+
+def _keywords_from_chain(
+    prompt: str, chain_entries: list[ChainEntry],
+    timeout_seconds: int | None, retries: int | None, sleep_fn: Any,
+) -> list[str]:
+    """Run a prompt through the chain and return the JSON `keywords` list, or []
+    on total failure. Shared by `translate_keywords` and `expand_query`."""
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
-    prompt = _build_translate_prompt(keywords, summary, _LANG_NAMES.get(code, code))
-
     for entry in chain_entries:
         for attempt in range(retry_count + 1):
             try:
@@ -431,3 +439,33 @@ def translate_keywords(
                     continue
                 break
     return []
+
+
+def _build_expand_query_prompt(query: str, language_name: str) -> str:
+    return (
+        "Broaden this search query into related search terms — synonyms, and translations into "
+        f"both English and {language_name} — so a full-text search finds more relevant documents. "
+        "Short, lowercase terms; keep proper nouns as-is. Return JSON only: {\"keywords\": [\"...\"]}.\n"
+        f"Search query: {query}"
+    )
+
+
+def expand_query(
+    query: str,
+    *,
+    language: str,
+    chain: list[ChainEntry] | None = None,
+    timeout_seconds: int | None = None,
+    retries: int | None = None,
+    sleep_fn: Any = time.sleep,
+) -> list[str]:
+    """Ask the AI for terms related to a search query — synonyms and English/`language`
+    translations — to broaden a search (powers `search-ai`). Returns [] when there is
+    no chain, an empty query, or every provider fails. Works for English too (synonyms)."""
+    text = query.strip()
+    chain_entries = chain if chain is not None else task_chain_from_env("ANALYSIS")
+    if not text or not chain_entries:
+        return []
+    name = _LANG_NAMES.get((language or "en").lower(), language or "en")
+    prompt = _build_expand_query_prompt(text, name)
+    return _keywords_from_chain(prompt, chain_entries, timeout_seconds, retries, sleep_fn)
