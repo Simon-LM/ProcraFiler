@@ -2354,13 +2354,15 @@ def _ensure_timestamp_prefix(path: Path, dt: datetime) -> Path:
 
 
 def enrich_keywords(
-    paths: RuntimePaths, *, now_utc: datetime | None = None, emit: ProgressFn = lambda _m: None
+    paths: RuntimePaths, *, force: bool = False,
+    now_utc: datetime | None = None, emit: ProgressFn = lambda _m: None
 ) -> dict[str, int]:
     """Migration: add each filed document's keywords in English + the user's
     language (one AI call per document), so EXISTING fiches become searchable
     cross-language like newly filed ones. Idempotent — a document already enriched
-    is skipped, so re-runs are cheap. A no-op when the language is English (the
-    catalog's base) or no AI chain is configured."""
+    is skipped, so re-runs are cheap; pass `force=True` to re-process every
+    document anyway (e.g. to refresh relevance with a better model). A no-op when
+    the language is English (the catalog's base) or no AI chain is configured."""
     counts = {"enriched": 0, "skipped": 0, "failed": 0}
     language = get_user_language(paths)
     if language == "en":
@@ -2379,7 +2381,7 @@ def enrich_keywords(
             continue
         if not isinstance(fiche, dict):
             continue
-        if fiche.get("keywords_enriched"):
+        if fiche.get("keywords_enriched") and not force:
             counts["skipped"] += 1
             continue
         pending.append((doc, fiche))

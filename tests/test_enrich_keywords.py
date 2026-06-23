@@ -87,6 +87,12 @@ class TestEnrichKeywordsMigration(unittest.TestCase):
             counts2 = enrich_keywords(self.paths)
         self.assertEqual((counts2["enriched"], counts2["skipped"]), (0, 1))
 
+        # force=True re-processes even already-enriched docs (e.g. a better model).
+        with patch("procrafiler.pipeline.translate_keywords", return_value=["sailboat"]):
+            counts3 = enrich_keywords(self.paths, force=True)
+        self.assertEqual((counts3["enriched"], counts3["skipped"]), (1, 0))
+        self.assertIn("sailboat", self._fiche("d1")["keywords"])
+
     def test_english_language_is_a_noop(self) -> None:
         from procrafiler.pipeline import enrich_keywords
         self._doc("d1", {"name": "Thing", "keywords": ["boat"], "summary": ""})

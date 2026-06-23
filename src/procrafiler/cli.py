@@ -144,9 +144,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build/refresh the persistent content index so search never re-reads files (no AI)",
     )
 
-    subparsers.add_parser(
+    enrich_p = subparsers.add_parser(
         "enrich-keywords",
         help="One-time: add existing documents' keywords in English + your language (uses AI)",
+    )
+    enrich_p.add_argument(
+        "--force", action="store_true",
+        help="re-process every document, even those already enriched (e.g. to refresh with a better model)",
     )
 
     subparsers.add_parser(
@@ -503,13 +507,13 @@ def cmd_reindex() -> int:
     return 0
 
 
-def cmd_enrich_keywords() -> int:
+def cmd_enrich_keywords(force: bool) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     now_utc = _resolve_now_utc()
     try:
         with runtime_lock(paths):
-            counts = enrich_keywords(paths, now_utc=now_utc, emit=_live)
+            counts = enrich_keywords(paths, force=force, now_utc=now_utc, emit=_live)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -608,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "reindex":
         return cmd_reindex()
     if args.command == "enrich-keywords":
-        return cmd_enrich_keywords()
+        return cmd_enrich_keywords(args.force)
     if args.command == "rescan":
         return cmd_rescan()
     if args.command == "deleted-history":
