@@ -2,20 +2,24 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from procrafiler.catalog import CatalogRepository
 from procrafiler.cli import main
 from procrafiler.config import (
     default_runtime_paths,
     ensure_runtime_layout,
     get_deletion_mode,
+    get_user_language,
     load_feature_settings,
     set_deletion_mode,
     set_feature_flag,
+    set_user_language,
 )
 
 
@@ -57,6 +61,45 @@ class TestDeletionModeSetting(unittest.TestCase):
         set_deletion_mode(self.paths, "tombstone")
         self.assertFalse(load_feature_settings(self.paths)["features"]["mirror_sync"])  # survived the mode write
         self.assertEqual(get_deletion_mode(self.paths), "tombstone")
+
+    def test_user_language_default_set_and_invalid(self) -> None:
+        self.assertEqual(get_user_language(self.paths), "en")  # empty catalog, unset → English
+        set_user_language(self.paths, "FR")  # normalised to lowercase
+        self.assertEqual(get_user_language(self.paths), "fr")
+        with self.assertRaises(ValueError):
+            set_user_language(self.paths, "français")  # not a code
+
+    def test_user_language_auto_detects_from_documents(self) -> None:
+        # No explicit setting → detect the user's language from their documents.
+        repo = CatalogRepository(self.paths.catalog_db_file)
+        repo.init_schema()
+        for i in range(3):
+            repo.upsert_document(
+                doc_id=f"d{i}", sha256=f"d{i}", current_filename=f"d{i}.txt",
+                current_path=f"/lib/d{i}.txt", status="LIBRARY_STORED",
+                updated_at_utc="2026-01-01T00:00:00Z", content_json=json.dumps({"language": "fr"}),
+            )
+        self.assertEqual(get_user_language(self.paths), "fr")  # auto-detected
+        set_user_language(self.paths, "es")  # explicit always wins over detection
+        self.assertEqual(get_user_language(self.paths), "es")
+
+    def test_language_deletion_mode_and_features_all_coexist(self) -> None:
+        set_user_language(self.paths, "fr")
+        set_deletion_mode(self.paths, "purge")
+        set_feature_flag(self.paths, "mirror_sync", False)
+        self.assertEqual(get_user_language(self.paths), "fr")
+        self.assertEqual(get_deletion_mode(self.paths), "purge")
+        self.assertFalse(load_feature_settings(self.paths)["features"]["mirror_sync"])
+
+    def test_cli_language_shows_and_sets(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["language"]), 0)
+        self.assertIn("language: en", out.getvalue())
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["language", "fr"]), 0)
+        self.assertEqual(get_user_language(self.paths), "fr")
 
     def test_cli_shows_and_sets(self) -> None:
         out = io.StringIO()

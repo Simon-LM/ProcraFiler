@@ -9,6 +9,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-23 — Multilingual & forgiving search
+
+`search` now forgives typos and crosses languages: a misspelled word still finds its document (offline, no AI), and a document is findable by its category in your language as well as English. You set your primary language once.
+
+### Added
+
+- **Typo-tolerant `search`, offline** — when an exact search finds nothing, each word is widened to its closest indexed terms (edit-distance over the index vocabulary, no AI), so `pasisons` finds `passions` (and a plural/typo still lands). A correctly-spelled query stays exact — the fuzzy fallback fires only on zero results. (#77)
+- **Category search in your language and English** — a document is now findable by its **category** (e.g. `Hobbies` is found by `hobbies` AND by `loisirs`/`passion`), via a curated translation map of the small fixed base-folder tree. Offline and applies to every existing document. (French provided; another language is just one more entry in the map.) (#77)
+- **Primary language — auto-detected, zero configuration** — the app infers the user's language from the languages of their own catalogued documents (the AI records each document's language in its fiche), so a French user's library just works in French. An explicit choice in `setup-context` or `procrafiler language <code>` always overrides it; shown in `status`. This drives the cross-language category search and the keyword enrichment. (#77)
+- **Bilingual keywords for newly filed documents** — the analysis call now produces keywords in English AND your language (and the summary/name in your language) instead of hardcoded French, so new documents are searchable either way. (#77)
+- **`enrich-keywords` — back-fill the same bilingual keywords onto your EXISTING documents** (one AI call each, text-only — no file re-reading). Normally never needed — `run` and `rescan` already do this for every document they read; it is a safety net for documents filed before this feature. A document already enriched is skipped (safe, cheap to re-run); `--force` re-processes everything (e.g. to refresh relevance with a better model later). A no-op when your language is English or no AI chain is configured. (#77)
+
 ## [0.3.1] - 2026-06-22 — Search index
 
 Completes the Search work from 0.3.0: search no longer re-reads your files — the extracted body text is cached in a persistent, content-hash-keyed index, warmed as you search and (re)built by the new `reindex` command.

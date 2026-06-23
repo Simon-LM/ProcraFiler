@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,6 +56,19 @@ class TestCatalog(unittest.TestCase):
             self.assertEqual(row["current_filename"], "")
             self.assertEqual(row["current_path"], "")
             self.assertIsNone(row["content_json"])
+
+    def test_majority_language(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = CatalogRepository(Path(tmp) / "catalog.db")
+            repo.init_schema()
+            self.assertIsNone(repo.majority_language())  # empty catalog
+            for doc_id, lang in (("a", "fr"), ("b", "fr"), ("c", "en")):
+                repo.upsert_document(
+                    doc_id=doc_id, sha256=doc_id, current_filename=f"{doc_id}.txt",
+                    current_path=f"/l/{doc_id}.txt", status="LIBRARY_STORED",
+                    updated_at_utc="2026-01-01T00:00:00Z", content_json=json.dumps({"language": lang}),
+                )
+            self.assertEqual(repo.majority_language(), "fr")  # 2 fr vs 1 en
 
     def test_list_pending_decisions_filters_and_clears(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

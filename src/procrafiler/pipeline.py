@@ -23,10 +23,11 @@ from procrafiler.config import (
     RuntimePaths,
     ensure_runtime_layout,
     get_deletion_mode,
+    get_user_language,
     load_feature_settings,
     load_runtime_policy,
 )
-from procrafiler.ai_analysis import analyze_content  # type: ignore[reportMissingImports]
+from procrafiler.ai_analysis import analyze_content, translate_keywords  # type: ignore[reportMissingImports]
 from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
@@ -730,6 +731,7 @@ def _read_and_analyze(
             original_filename=source.name,
             source_folder=source_folder or None,
             user_context=load_user_context(),
+            user_language=get_user_language(paths),
         )
 
     return _CatalogedDoc(
@@ -2349,6 +2351,74 @@ def _ensure_timestamp_prefix(path: Path, dt: datetime) -> Path:
     target = _ensure_unique_path(path.parent / build_timestamped_filename(path.name, now_utc=dt))
     move(str(path), str(target))
     return target
+
+
+def enrich_keywords(
+    paths: RuntimePaths, *, force: bool = False,
+    now_utc: datetime | None = None, emit: ProgressFn = lambda _m: None
+) -> dict[str, int]:
+    """Migration: add each filed document's keywords in English + the user's
+    language (one AI call per document), so EXISTING fiches become searchable
+    cross-language like newly filed ones. Idempotent — a document already enriched
+    is skipped, so re-runs are cheap; pass `force=True` to re-process every
+    document anyway (e.g. to refresh relevance with a better model). A no-op when
+    the language is English (the catalog's base) or no AI chain is configured."""
+    counts = {"enriched": 0, "skipped": 0, "failed": 0}
+    language = get_user_language(paths)
+    if language == "en":
+        emit("Language is English — keywords are already in the catalog's base language; nothing to do.")
+        return counts
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for doc in repo.list_documents():
+        if doc.get("status") != "LIBRARY_STORED" or not doc.get("content_json"):
+            continue
+        try:
+            fiche = json.loads(str(doc["content_json"]))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(fiche, dict):
+            continue
+        if fiche.get("keywords_enriched") and not force:
+            counts["skipped"] += 1
+            continue
+        pending.append((doc, fiche))
+
+    if len(pending) >= LARGE_BATCH_WARN:
+        emit(f"   ⚠ {len(pending)} documents to enrich — this uses AI (API cost, or local CPU/GPU).")
+
+    op = str(uuid4())
+    now_iso = _utc_iso(now_utc)
+    features = load_feature_settings(paths)["features"]
+    for doc, fiche in pending:
+        existing = fiche.get("keywords") if isinstance(fiche.get("keywords"), list) else []
+        added = translate_keywords(existing, language=language, summary=fiche.get("summary"))
+        if not added:
+            counts["failed"] += 1
+            continue
+        fiche["keywords"] = list(dict.fromkeys([*existing, *added]))
+        fiche["keywords_enriched"] = True
+        repo.upsert_document(
+            doc_id=str(doc["doc_id"]), sha256=str(doc["sha256"]),
+            current_filename=str(doc["current_filename"]), current_path=str(doc["current_path"]),
+            status=str(doc["status"]), updated_at_utc=now_iso,
+            flow_state=doc.get("flow_state"), pending_decision=None,
+            content_json=json.dumps(fiche, ensure_ascii=True),
+        )
+        counts["enriched"] += 1
+        emit(f"   enriched: {fiche.get('name') or doc['current_filename']}")
+        _append_action_log(
+            paths, operation_id=op, action="keywords_enriched", status="success",
+            message=f"Keywords translated to English + {language}.",
+            now_utc=now_utc, path_before=str(doc["current_path"]),
+            extra_fields={"added": len(added)}, features=features,
+        )
+
+    if counts["enriched"]:
+        _write_catalog_snapshot(paths, repo, now_utc, features=features)
+    return counts
 
 
 def run_rescan(

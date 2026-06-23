@@ -58,6 +58,45 @@ ARCHIVE_BASE_DIRECTORIES: tuple[tuple[str, ...], ...] = (
 )
 
 
+# Translations / synonyms of the (English) base-folder segment names, per language
+# code. Used so search finds a document by its category in the user's language
+# (e.g. "passion" or "loisirs" → the `Hobbies` folder) without any AI. The base
+# tree is a small FIXED set, so this is curated once. Only French is provided for
+# now; adding another language is just another inner key — `folder_synonyms`
+# returns [] for any segment/language not listed, so English category search
+# always works regardless.
+BASE_FOLDER_TRANSLATIONS: dict[str, dict[str, tuple[str, ...]]] = {
+    "Personal": {"fr": ("personnel", "perso", "privé")},
+    "Administrative": {"fr": ("administratif", "administration", "démarches")},
+    "Identity": {"fr": ("identité", "papiers")},
+    "Taxes": {"fr": ("impôts", "fiscal", "taxes")},
+    "Banking": {"fr": ("banque", "bancaire", "compte")},
+    "Insurance": {"fr": ("assurance", "assurances", "mutuelle")},
+    "Health": {"fr": ("santé", "médical", "médecin")},
+    "Housing": {"fr": ("logement", "habitation", "maison")},
+    "Utilities": {"fr": ("énergie", "électricité", "gaz", "eau", "factures")},
+    "Telecom": {"fr": ("téléphone", "internet", "mobile", "box")},
+    "Vehicle": {"fr": ("véhicule", "voiture", "auto")},
+    "Education": {"fr": ("éducation", "études", "école", "scolaire", "diplôme")},
+    "Hobbies": {"fr": ("loisirs", "passions", "passion", "hobby", "hobbies")},
+    "Social-media": {"fr": ("réseaux", "sociaux", "réseau", "social", "médias")},
+    "Misc": {"fr": ("divers", "autres")},
+    "Employment": {"fr": ("emploi", "salarié", "travail")},
+    "Payslips": {"fr": ("paie", "salaire", "bulletins")},
+    "Business": {"fr": ("entreprise", "activité", "société", "business")},
+    "Invoices": {"fr": ("factures", "facture")},
+    "Expenses": {"fr": ("dépenses", "frais")},
+    "Clients": {"fr": ("clients", "client")},
+    "Work": {"fr": ("travail", "professionnel", "pro", "boulot")},
+}
+
+
+def folder_synonyms(segment: str, language: str) -> tuple[str, ...]:
+    """Synonyms/translations of a base-folder segment in `language` (e.g.
+    "Hobbies","fr" → loisirs/passions/…). Empty when not curated."""
+    return BASE_FOLDER_TRANSLATIONS.get(segment, {}).get(language, ())
+
+
 def is_in_archive(relative_parts: tuple[str, ...]) -> bool:
     """True when a library-relative path lives under one of the Archive folders."""
     return any(tuple(relative_parts[: len(base)]) == base for base in ARCHIVE_BASE_DIRECTORIES)

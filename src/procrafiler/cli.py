@@ -35,16 +35,19 @@ from procrafiler.config import (
     FEATURE_NAMES,
     default_runtime_paths,
     get_deletion_mode,
+    get_user_language,
     load_runtime_policy,
     ensure_runtime_layout,
     load_feature_settings,
     set_deletion_mode,
     set_feature_flag,
+    set_user_language,
 )
 from procrafiler.doctor import format_report, overall_exit_code, run_doctor
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
 from procrafiler.pipeline import (
     LibraryTrashError,
+    enrich_keywords,
     move_library_file_to_trash,
     process_all_inbox_files,
     run_rescan,
@@ -115,6 +118,15 @@ def build_parser() -> argparse.ArgumentParser:
              "purge (keep nothing). Omit to show the current mode.",
     )
 
+    language_p = subparsers.add_parser(
+        "language",
+        help="Show or set your primary language (search works in it + English)",
+    )
+    language_p.add_argument(
+        "code", nargs="?",
+        help="language code (e.g. fr, en, es). Omit to show the current one.",
+    )
+
     subparsers.add_parser(
         "setup-context",
         help="Guided questionnaire to build your context file (helps the AI file your documents)",
@@ -130,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "reindex",
         help="Build/refresh the persistent content index so search never re-reads files (no AI)",
+    )
+
+    enrich_p = subparsers.add_parser(
+        "enrich-keywords",
+        help="One-time: add existing documents' keywords in English + your language (uses AI)",
+    )
+    enrich_p.add_argument(
+        "--force", action="store_true",
+        help="re-process every document, even those already enriched (e.g. to refresh with a better model)",
     )
 
     subparsers.add_parser(
@@ -180,6 +201,8 @@ def cmd_status() -> int:
     print(f"- taxonomy_max_depth: {policy.taxonomy_max_depth}")
     print("Deletion")
     print(f"- deletion_mode: {get_deletion_mode(paths)}")
+    print("Search")
+    print(f"- language: {get_user_language(paths)}")
     return 0
 
 
@@ -191,6 +214,21 @@ def cmd_deletion_mode(mode: str | None) -> int:
         return 0
     set_deletion_mode(paths, mode)
     print(f"deletion_mode set to: {mode}")
+    return 0
+
+
+def cmd_language(code: str | None) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    if code is None:
+        print(f"language: {get_user_language(paths)}")
+        return 0
+    try:
+        set_user_language(paths, code)
+    except ValueError as err:
+        print(str(err))
+        return 2
+    print(f"language set to: {code.strip().lower()}")
     return 0
 
 
@@ -431,7 +469,10 @@ def cmd_search(terms: list[str], limit: int) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     query = " ".join(terms)
-    hits = search_catalog(paths.catalog_db_file, query, limit=limit, index_path=paths.search_index_file)
+    hits = search_catalog(
+        paths.catalog_db_file, query, limit=limit, index_path=paths.search_index_file,
+        user_language=get_user_language(paths),
+    )
     if not hits:
         print(f"No results for: {query}")
         return 0
@@ -462,6 +503,23 @@ def cmd_reindex() -> int:
     print(
         "Reindex content: "
         f"indexed: {counts['indexed']}, added: {counts['added']}, pruned: {counts['pruned']}"
+    )
+    return 0
+
+
+def cmd_enrich_keywords(force: bool) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    now_utc = _resolve_now_utc()
+    try:
+        with runtime_lock(paths):
+            counts = enrich_keywords(paths, force=force, now_utc=now_utc, emit=_live)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(
+        "Enrich keywords: "
+        f"enriched: {counts['enriched']}, skipped: {counts['skipped']}, failed: {counts['failed']}"
     )
     return 0
 
@@ -533,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_feature_set(args.feature, args.state)
     if args.command == "deletion-mode":
         return cmd_deletion_mode(args.mode)
+    if args.command == "language":
+        return cmd_language(args.code)
     if args.command == "process-once":
         return cmd_process_once(args.dry_run)
     if args.command == "process-all":
@@ -551,6 +611,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_search(args.query, args.limit)
     if args.command == "reindex":
         return cmd_reindex()
+    if args.command == "enrich-keywords":
+        return cmd_enrich_keywords(args.force)
     if args.command == "rescan":
         return cmd_rescan()
     if args.command == "deleted-history":

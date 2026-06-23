@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -185,6 +186,37 @@ def save_feature_settings(paths: RuntimePaths, settings: dict[str, dict[str, boo
     data = _read_settings_file(paths)
     data["features"] = settings["features"]
     _write_settings_file(paths, data)
+
+
+# The user's primary language (a short code like "fr", "en", "es"), used to
+# enrich the catalog with translations so search works in the user's language and
+# English. Default English (the base taxonomy's language).
+DEFAULT_USER_LANGUAGE = "en"
+_LANGUAGE_RE = re.compile(r"^[a-z]{2,8}(-[a-z]{2,8})?$")
+
+
+def get_user_language(paths: RuntimePaths) -> str:
+    """The user's primary language. An explicit setting (from `setup-context` or
+    the `language` command) always wins; otherwise it is **auto-detected** from
+    the languages of the user's own catalogued documents — so a French user's
+    library works in French with zero configuration. Falls back to English only
+    when neither is available (e.g. an empty catalog)."""
+    value = _read_settings_file(paths).get("user_language")
+    if isinstance(value, str) and _LANGUAGE_RE.match(value):
+        return value
+    from procrafiler.catalog import CatalogRepository  # local import: avoid import cycle
+    detected = CatalogRepository(paths.catalog_db_file).majority_language()
+    return detected if detected and _LANGUAGE_RE.match(detected) else DEFAULT_USER_LANGUAGE
+
+
+def set_user_language(paths: RuntimePaths, language: str) -> str:
+    code = language.strip().lower()
+    if not _LANGUAGE_RE.match(code):
+        raise ValueError(f"Invalid language code: {language!r} (expected e.g. 'fr', 'en', 'pt-br')")
+    data = _read_settings_file(paths)  # preserve features / deletion_mode
+    data["user_language"] = code
+    _write_settings_file(paths, data)
+    return code
 
 
 def get_deletion_mode(paths: RuntimePaths) -> str:

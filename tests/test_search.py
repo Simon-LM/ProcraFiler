@@ -97,6 +97,29 @@ class TestSearch(unittest.TestCase):
         self.assertEqual([h.doc_id for h in search_catalog(self.db, "paie")], ["scanned"])
         self.assertEqual(search_catalog(self.db, "licorne"), [])
 
+    def test_finds_by_category_in_english_and_user_language(self) -> None:
+        # A doc filed under Personal/Hobbies is found by the English folder name
+        # AND by a French synonym ("loisirs"/"passion"), with no AI.
+        self._doc("h", {"name": "Truc", "keywords": [], "summary": "",
+                        "category_path": "Personal/Hobbies"})
+        self.assertEqual([x.doc_id for x in search_catalog(self.db, "hobbies")], ["h"])
+        self.assertEqual([x.doc_id for x in search_catalog(self.db, "loisirs", user_language="fr")], ["h"])
+        self.assertEqual([x.doc_id for x in search_catalog(self.db, "passion", user_language="fr")], ["h"])
+        # Without the user language, the French synonym is not indexed.
+        self.assertEqual(search_catalog(self.db, "loisirs", user_language="en"), [])
+
+    def test_typo_tolerance_finds_close_term(self) -> None:
+        # `pasisons` (a typo) still finds a document about `passions` — offline, no AI.
+        self._doc("p", {"name": "Loisirs", "keywords": ["passions", "hobby"], "summary": ""})
+        self.assertEqual([h.doc_id for h in search_catalog(self.db, "pasisons")], ["p"])
+
+    def test_exact_match_is_not_widened_to_near_terms(self) -> None:
+        # A correctly-spelled query that matches returns only the exact hit; the
+        # fuzzy fallback fires only when the exact search finds nothing.
+        self._doc("a", {"name": "Passion-velo", "keywords": ["passion"], "summary": ""})
+        self._doc("b", {"name": "Pension-retraite", "keywords": ["pension"], "summary": ""})
+        self.assertEqual([h.doc_id for h in search_catalog(self.db, "passion")], ["a"])
+
     def test_empty_query_returns_nothing(self) -> None:
         self._doc("edf", {"name": "Facture_EDF", "keywords": ["facture"]})
         self.assertEqual(search_catalog(self.db, "   "), [])
