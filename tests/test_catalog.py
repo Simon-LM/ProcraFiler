@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,34 @@ class TestCatalog(unittest.TestCase):
             self.assertEqual(row["current_filename"], "")
             self.assertEqual(row["current_path"], "")
             self.assertIsNone(row["content_json"])
+
+    def test_init_schema_migrates_an_old_catalog(self) -> None:
+        # An update must read a catalog written by an OLDER version: init_schema
+        # adds the newer columns to the existing table without touching the rows.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "catalog.db"
+            conn = sqlite3.connect(db)  # a v0.1-era catalog: only the original 6 columns
+            conn.execute(
+                "CREATE TABLE documents (doc_id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, "
+                "current_filename TEXT NOT NULL, current_path TEXT NOT NULL, status TEXT NOT NULL, "
+                "updated_at_utc TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO documents VALUES ('d1', 'abc', 'f.pdf', '/lib/f.pdf', 'LIBRARY_STORED', '2026-01-01T00:00:00Z')"
+            )
+            conn.commit()
+            conn.close()
+
+            repo = CatalogRepository(db)
+            repo.init_schema()  # the "update" opening the old catalog
+
+            cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(documents)").fetchall()}
+            self.assertTrue({"flow_state", "pending_decision", "content_json"} <= cols)  # migrated
+            self.assertTrue(repo.has_sha256("abc"))  # old row survived
+            row = repo.find_by_current_path("/lib/f.pdf")
+            assert row is not None
+            self.assertEqual(row["doc_id"], "d1")
+            self.assertIsNone(row["content_json"])  # new column defaults to NULL
 
     def test_majority_language(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
