@@ -97,10 +97,29 @@ if [[ ! -x "$VENV_DIR/bin/pip" ]]; then
 fi
 
 if [[ "$SKIP_GIT_PULL" != "true" ]] && [[ -d "$REPO_ROOT/.git" ]]; then
-  git -C "$REPO_ROOT" fetch --tags --prune
-  git -C "$REPO_ROOT" pull --ff-only
+  # Update to the latest RELEASE TAG from the remote (GitHub), never a branch
+  # HEAD, so an install always tracks a published version (the package version is
+  # derived from that tag by setuptools-scm).
+  if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
+    echo "Refusing to update: $REPO_ROOT has local changes." >&2
+    echo "Commit or stash them, or update from a clean clone." >&2
+    exit 1
+  fi
+  git -C "$REPO_ROOT" fetch --tags --prune --quiet
+  before="$(git -C "$REPO_ROOT" describe --tags --always 2>/dev/null || echo unknown)"
+  latest_tag="$(git -C "$REPO_ROOT" tag --list 'v*' --sort=-v:refname | head -n 1)"
+  if [[ -z "$latest_tag" ]]; then
+    echo "No release tag (vX.Y.Z) found on the remote — nothing to update to." >&2
+    exit 1
+  fi
+  if [[ "$before" == "$latest_tag" ]]; then
+    echo "Already on the latest release: $latest_tag"
+  else
+    git -C "$REPO_ROOT" checkout --quiet "$latest_tag"
+    echo "Updating: $before -> $latest_tag"
+  fi
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade "$REPO_ROOT"
 
-echo "ProcraFiler updated successfully from: $REPO_ROOT"
+echo "ProcraFiler is now at version: $("$VENV_DIR/bin/procrafiler" --version 2>/dev/null | awk '{print $NF}' || echo unknown)"

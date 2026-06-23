@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **The version now comes from the git tag, and `update` tracks the latest release tag (toward v1.0 install hardening).** `procrafiler --version` was a hardcoded constant and had drifted — it reported `0.2.0` while releases were already at `v0.3.3` (the install metadata even said `0.1.0`). The version is now **derived from the latest git tag by setuptools-scm** — one source of truth that cannot drift; `--version` reads it from the installed package metadata. And **`update.sh` now updates to the latest release tag** (`vX.Y.Z`) instead of a branch HEAD: it fetches the tags, checks out the newest one, reinstalls, prints `old → new` version, and refuses to run on a clone with local changes — never touching your library, catalog, settings or env file. CI checks out full history so the build can derive the version. `tests/test_version.py` +1. (#79)
+
 ## [0.3.3] - 2026-06-23 — AI-assisted search
 
 The offline `search` stays instant and free; a new opt-in `search-ai` brings in an AI to broaden a query with synonyms and translations for the cases where exact search is too narrow.
