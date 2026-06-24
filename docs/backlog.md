@@ -47,7 +47,10 @@ binary in the taxonomy) is not in the document — it depends on the user's
       NOT blind periodic rewriting: instead an **integrity scrub** (periodically re-hash
       files and compare to the catalog's stored hash) + **heal from the mirror** (restore
       a corrupted copy from the good one), and **SMART** (smartctl) for a real "disk is
-      aging" warning rather than a calendar timer. The user may want this before 1.0.
+      aging" warning rather than a calendar timer. **Required before v1.0.0.** Full
+      architecture (destinations: local/LAN/rclone cloud · mirror vs encrypted cold
+      backup · selective by capacity · cloud inbox + read-mirror to avoid conflicts · 3
+      copies · self-contained restorable units): see [durability.md](durability.md).
 - [ ] **SUPERVISOR** — the optional AI control pass over ambiguous outputs (spec §9).
 - [ ] **VIDEO + audio analysis** — phase 2, after the rest is validated on real files.
 - [ ] **Automatic processing** — a watcher (systemd user service + inotify) or a cron
