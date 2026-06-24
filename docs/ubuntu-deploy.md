@@ -65,6 +65,16 @@ You can check which env file was loaded with:
 procrafiler status
 ```
 
+## 3.2) Guided first run
+
+Run the guided setup to choose where your files live and tell the app who you are:
+
+```bash
+procrafiler setup
+```
+
+It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library) should live — press Enter to accept each default or type your own — writes those paths to the env file (keeping your API key + AI chains), creates **only** the folders you chose, then runs the short "who you are" questionnaire. The mirror is optional: decline it and no mirror folder is created (`mirror_sync` is turned off). Re-run `procrafiler setup` any time.
+
 ## 4) Update to the latest release
 
 ```bash

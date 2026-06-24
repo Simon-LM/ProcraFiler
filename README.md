@@ -190,6 +190,7 @@ procrafiler purge-mirror-trash      # delete old mirror backups from Mirror_Tras
 Setup & configuration:
 
 ```bash
+procrafiler setup                   # guided first run: choose where files live (Inbox/Library/optional Mirror), then who you are
 procrafiler init-layout             # create the workspace/library/state folders (idempotent)
 procrafiler features                # list feature flags (see "Feature Controls" below)
 procrafiler feature-set <name> <on|off>   # toggle actions_log / catalog_snapshot / mirror_sync
@@ -282,25 +283,27 @@ cd ProcraFiler
 # system-wide instead: sudo ./scripts/install.sh --mode system   (binary in /usr/local/bin; add --prefix /usr for /usr/bin)
 ```
 
-The installer creates an isolated virtualenv and, on first install, an env file seeded from `.env.example`:
+The installer creates an isolated virtualenv and, on first install, an env file seeded from `.env.example` (its location is printed at the end of the install).
+
+**2. Run the guided setup** — choose where your files live, then tell the app who you are (one guided first run):
+
+```bash
+procrafiler setup
+```
+
+It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library) should live — press Enter to accept each proposed default, or type your own. It writes those paths to your env file, creates **only** the folders you chose (decline the mirror and none is created), then runs the short "who you are" questionnaire that helps the AI file your documents. Re-run it any time.
+
+**3. Set your AI key.** Edit your env file and set `MISTRAL_API_KEY` (and/or point per-task chains at a local Ollama). The chains come pre-filled with sensible Mistral defaults, so with a key it works out of the box; a task left empty just sends files that would need it to manual review.
 
 - user install: `~/.config/procrafiler/procrafiler.env`
 - system install: `/etc/procrafiler/procrafiler.env`
-
-**2. Configure the AI.** Edit that env file and set `MISTRAL_API_KEY` (and/or point per-task chains at a local Ollama). The chains come pre-filled with sensible Mistral defaults, so with a key it works out of the box. A task left empty just sends files that would need it to manual review.
-
-**3. (Recommended) Tell the app about you, once** — it guides the AI and captures your language:
-
-```bash
-procrafiler setup-context
-```
 
 **4. Verify, then run:**
 
 ```bash
 procrafiler --version    # confirms the install (tracks the release tag)
 procrafiler doctor       # checks paths, env, AI config, catalog
-# drop files into your Inbox (default ~/Downloads/ProcraFiler_Inbox/Inbox), then:
+# drop files into your Inbox, then:
 procrafiler process-all
 ```
 

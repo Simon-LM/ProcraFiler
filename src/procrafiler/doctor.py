@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from procrafiler.ai_naming import SUPPORTED_AI_TASKS, task_chain_from_env
-from procrafiler.config import RuntimePaths
+from procrafiler.config import RuntimePaths, load_feature_settings
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
 
 
@@ -47,19 +47,25 @@ def _check_path_writable(section: str, name: str, path) -> DoctorCheck:
     return DoctorCheck(section, name, STATUS_OK, str(path))
 
 
-def check_paths(paths: RuntimePaths) -> list[DoctorCheck]:
+def check_paths(paths: RuntimePaths, *, mirror_enabled: bool = True) -> list[DoctorCheck]:
     section = "Paths"
-    return [
+    results = [
         _check_path_writable(section, "workspace_root", paths.workspace_root),
         _check_path_writable(section, "inbox_dir", paths.inbox_dir),
         _check_path_writable(section, "queue_dir", paths.queue_dir),
         _check_path_writable(section, "inbox_trash_manual_dir", paths.inbox_trash_manual_dir),
         _check_path_writable(section, "library_root", paths.library_root),
         _check_path_writable(section, "library_trash_manual_dir", paths.library_trash_manual_dir),
-        _check_path_writable(section, "mirror_root", paths.mirror_root),
-        _check_path_writable(section, "mirror_trash_dir", paths.mirror_trash_dir),
-        _check_path_writable(section, "state_root", paths.state_root),
     ]
+    # The mirror is optional. When it is disabled (mirror_sync off) its folders
+    # are not expected to exist — report them as skipped, not failed.
+    if mirror_enabled:
+        results.append(_check_path_writable(section, "mirror_root", paths.mirror_root))
+        results.append(_check_path_writable(section, "mirror_trash_dir", paths.mirror_trash_dir))
+    else:
+        results.append(DoctorCheck(section, "mirror_root", STATUS_SKIP, "mirror disabled (mirror_sync off)"))
+    results.append(_check_path_writable(section, "state_root", paths.state_root))
+    return results
 
 
 def check_env(paths: RuntimePaths) -> list[DoctorCheck]:
@@ -215,17 +221,20 @@ def check_runtime_lock(paths: RuntimePaths) -> list[DoctorCheck]:
 
 
 def run_doctor(paths: RuntimePaths) -> list[DoctorCheck]:
-    checks: list[DoctorCheck] = []
-    for fn in _CHECK_GROUPS:
+    try:
+        mirror_enabled = bool(load_feature_settings(paths)["features"].get("mirror_sync", True))
+    except Exception:
+        mirror_enabled = True
+    checks: list[DoctorCheck] = list(check_paths(paths, mirror_enabled=mirror_enabled))
+    for fn in _CHECK_GROUPS_AFTER_PATHS:
         checks.extend(fn(paths))
     return checks
 
 
 # Order matters here: path checks first (cheapest, most likely to fail),
 # then env/AI (config), then catalog (touches disk), then lock (briefly
-# acquires).
-_CHECK_GROUPS: tuple[Callable[[RuntimePaths], list[DoctorCheck]], ...] = (
-    check_paths,
+# acquires). `check_paths` runs first in `run_doctor` (it needs the mirror flag).
+_CHECK_GROUPS_AFTER_PATHS: tuple[Callable[[RuntimePaths], list[DoctorCheck]], ...] = (
     check_env,
     lambda _paths: check_ai_config(),
     check_catalog,
