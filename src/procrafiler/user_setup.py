@@ -105,6 +105,25 @@ def _normalize_path(raw: str) -> Path:
     return candidate
 
 
+def _device_of(path: Path) -> int | None:
+    """The storage device id of `path`, looked up on its nearest existing
+    ancestor (the path itself may not exist yet). Used to detect a mirror that
+    sits on the same disk as the library — where it wouldn't survive a disk loss."""
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return probe.stat().st_dev
+    except OSError:
+        return None
+
+
+def on_same_disk(a: Path, b: Path) -> bool:
+    """True only when both paths are known to live on the same device."""
+    dev_a, dev_b = _device_of(a), _device_of(b)
+    return dev_a is not None and dev_a == dev_b
+
+
 def _ask_path(ask: AskFn, out: OutFn, label: str, default: Path) -> Path:
     out(label)
     out(f"  (défaut : {default})")
@@ -139,9 +158,12 @@ def collect_paths(ask: AskFn, out: OutFn) -> dict[str, Path | None]:
     )
 
     out("\n• Miroir (Mirror) — une copie de sauvegarde de ta bibliothèque (optionnel).")
+    out("  Fortement conseillé : mets-le sur un AUTRE disque que la bibliothèque")
+    out("  (p. ex. bibliothèque sur SSD, miroir sur HDD). Sur le même disque, il ne")
+    out("  protège pas contre une panne du disque principal.")
     mirror: Path | None = None
     if _ask_yes_no(ask, out, "  Veux-tu un miroir de sauvegarde ?", default=True):
-        mirror = _ask_path(ask, out, "  Où mettre le miroir ?", defaults["mirror"])
+        mirror = _ask_path(ask, out, "  Où mettre le miroir (idéalement un autre disque) ?", defaults["mirror"])
 
     return {"inbox": inbox, "library": library, "mirror": mirror}
 
@@ -209,6 +231,12 @@ def setup(*, ask: AskFn = input, out: OutFn = print) -> int:
         expected = 3 if choices["mirror"] is not None else 2
         if len(distinct) < expected:
             out("\n⚠ Attention : ces chemins ne sont pas tous distincts — c'est déconseillé.")
+
+        mirror = choices["mirror"]
+        library = choices["library"]
+        if mirror is not None and library is not None and on_same_disk(mirror, library):
+            out("\n⚠ Le miroir semble sur le MÊME disque que la bibliothèque : il ne")
+            out("  protègera pas d'une panne de ce disque. Un autre disque est conseillé.")
 
         if not _ask_yes_no(ask, out, "\nOn crée ces dossiers et on enregistre ?", default=True):
             out("Annulé — rien n'a été créé ni modifié.")

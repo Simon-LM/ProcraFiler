@@ -11,7 +11,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- **Guided first-run `procrafiler setup`.** Instead of hand-editing the env file, a single guided run asks where your **Inbox**, **Library** and an optional **Mirror** should live (defaults proposed, accept with Enter or type your own), writes those paths to the env file (keeping your AI key + chains), creates **only** the folders you chose, then flows into the "who you are" context questionnaire. The **mirror is optional** — decline it and no mirror folder is created and `mirror_sync` is turned off (the pipeline, `doctor` and `init-layout` all honour that). `install.sh` now points to `procrafiler setup` as the next step.
+- **Guided first-run `procrafiler setup`.** Instead of hand-editing the env file, a single guided run asks where your **Inbox**, **Library** and an optional **Mirror** should live (defaults proposed, accept with Enter or type your own), writes those paths to the env file (keeping your AI key + chains), creates **only** the folders you chose, then flows into the "who you are" context questionnaire. The **mirror is optional** — decline it and no mirror folder is created and `mirror_sync` is turned off (the pipeline, `doctor` and `init-layout` all honour that). When kept, `setup` advises putting the mirror on a **different disk** than the library (e.g. SSD + HDD) and **warns** if you pick the same disk — a mirror there wouldn't survive that disk failing. `install.sh` now points to `procrafiler setup` as the next step.
 
 ## [0.4.0] - 2026-06-23 — Solid install, update & uninstall
 

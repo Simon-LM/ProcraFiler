@@ -13,6 +13,7 @@ from procrafiler.user_setup import (
     apply_setup,
     collect_paths,
     default_setup_paths,
+    on_same_disk,
     update_env_file,
 )
 
@@ -197,6 +198,22 @@ class TestSetupFlow(_EnvIsolated):
         rc = us.setup(ask=ask, out=out)
         self.assertEqual(rc, 0)
         self.assertTrue(library.exists())
+
+
+class TestMirrorDiskAdvice(_EnvIsolated):
+    def test_on_same_disk_true_for_paths_in_one_tree(self) -> None:
+        # Two not-yet-existing paths under the same temp dir resolve to the same
+        # device via their nearest existing ancestor.
+        self.assertTrue(on_same_disk(self.tmp / "Lib", self.tmp / "Mir"))
+
+    def test_setup_warns_when_mirror_on_same_disk(self) -> None:
+        inbox, library, mirror = self.tmp / "In", self.tmp / "Lb", self.tmp / "Mir"
+        ask = _scripted([str(inbox), str(library), "o", str(mirror), "n"])  # mirror yes, confirm no
+        lines, out = _sink()
+        rc = us.setup(ask=ask, out=out)
+        self.assertEqual(rc, 1)  # declined at confirm → nothing created
+        self.assertTrue(any("MÊME disque" in ln for ln in lines))
+        self.assertFalse(library.exists())
 
 
 class TestDoctorMirrorOptional(_EnvIsolated):
