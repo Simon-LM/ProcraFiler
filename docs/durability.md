@@ -112,6 +112,38 @@ Google Drive and Proton Drive): `rclone sync` (1-way), `rclone bisync` (2-way),
 `rclone crypt` (client-side encryption of names + contents), `rclone check` (verify by
 hash against the manifest, no full download).
 
+## Backup trigger & anti-contamination (security-critical)
+
+The cold `backup` (+1/+2) is the insurance against **compromise** (ransomware, a
+hacked machine, human error). So it must **never be reachable for deletion or
+overwrite by the primary machine** — otherwise malware on the primary propagates
+straight into the backup, defeating it. A naive auto-sync to the backup is therefore
+**forbidden**. Acceptable triggers, strongest first:
+
+1. **Manual / offline (air-gap)** — produce an encrypted bundle, the user places it on
+   external media and **unplugs**. Malware can't touch an unplugged disk. **Default for +1.**
+2. **Immutable / append-only remote** — if automatic, only to a **versioned, immutable**
+   target (e.g. S3 Object Lock / WORM, B2 with versioning) using **write-only credentials
+   with no delete right**. Stolen creds can add, not destroy history. Good for a +2.
+3. **Pull-based** — a trusted machine *pulls* from the primary (which has no write access
+   to the backup store).
+
+**Avoid** the classic 1-way "mirror with overwrite/delete" as a backup: a ransomware-
+encrypted file would overwrite the good version.
+
+Two app-level safeguards that limit contamination regardless of trigger:
+
+- **Hash-gated replication** — a file is pushed to a destination only if its `sha256`
+  **matches the catalog** (the known-good version). A silently modified/encrypted file no
+  longer matches → it is **not propagated**, and the **scrub detects** the mismatch and
+  alerts. The catalog hash is thus both the bit-rot *and* the tamper detector.
+- **Versioned / retained backups** — even if a bad version slips in somewhere, prior good
+  versions stay recoverable.
+
+So: the **mirror** (browsable local/LAN copy) may be automatic (convenience + heal), but
+it is **not** the anti-compromise protection; the **cold backup** is, and it stays manual/
+confirmed by default, or automatic **only** to an immutable/versioned target.
+
 ## Operations (future `procrafiler` commands)
 
 1. **replicate** — push new/changed docs + catalog + snapshot + manifest to each
