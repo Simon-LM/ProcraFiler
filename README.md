@@ -291,9 +291,9 @@ The installer creates an isolated virtualenv and, on first install, an env file 
 procrafiler setup
 ```
 
-It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library — ideally on a **different disk**, e.g. Library on SSD, Mirror on HDD, so it survives a disk failure) should live — press Enter to accept each proposed default, or type your own. It writes those paths to your env file, creates **only** the folders you chose (decline the mirror and none is created), then runs the short "who you are" questionnaire that helps the AI file your documents. Re-run it any time.
+It runs three short steps: **(1) where your files live** — Inbox, Library and an optional **Mirror** (a backup copy, ideally on a **different disk**, e.g. Library on SSD + Mirror on HDD; decline it and none is created); **(2) which AI** — the **Mistral API** (default, asks for your key) or **all-local Ollama**, or skip and edit the env file yourself; **(3) who you are** — a short questionnaire that helps the AI file your documents. Press Enter to accept each default; re-run any time.
 
-**3. Set your AI key.** Edit your env file and set `MISTRAL_API_KEY` (and/or point per-task chains at a local Ollama). The chains come pre-filled with sensible Mistral defaults, so with a key it works out of the box; a task left empty just sends files that would need it to manual review.
+**3. AI details (optional).** `setup` already configured the AI. The default is the **Mistral API** — just make sure `MISTRAL_API_KEY` is set. To run fully **locally** (Ollama) or mix per task, see **[docs/ai-providers.md](docs/ai-providers.md)** — tested models and recommendations **by GPU VRAM**. Your env file:
 
 - user install: `~/.config/procrafiler/procrafiler.env`
 - system install: `/etc/procrafiler/procrafiler.env`

@@ -12,6 +12,7 @@ from procrafiler.doctor import STATUS_FAIL, STATUS_SKIP, check_paths
 from procrafiler.user_setup import (
     apply_setup,
     collect_paths,
+    configure_ai,
     default_setup_paths,
     on_same_disk,
     update_env_file,
@@ -164,9 +165,10 @@ class TestSetupFlow(_EnvIsolated):
         original = us.setup_context
         us.setup_context = fake_context
         try:
-            ask = _scripted([str(inbox), str(library), "n", "o"])  # inbox, lib, mirror=no, confirm=yes
+            # inbox, library, mirror=no, confirm=yes, AI=configure-later
+            ask = _scripted([str(inbox), str(library), "n", "o", "3"])
             _, out = _sink()
-            rc = us.setup(ask=ask, out=out)
+            rc = us.setup(ask=ask, out=out, ask_secret=lambda _p: "")
         finally:
             us.setup_context = original
         self.assertEqual(rc, 0)
@@ -186,7 +188,8 @@ class TestSetupFlow(_EnvIsolated):
         # (e.g. piped stdin or Ctrl-D): the run must not crash, and the saved
         # paths must survive.
         inbox, library = self.tmp / "In", self.tmp / "Lb"
-        answers = iter([str(inbox), str(library), "n", "o"])  # paths + no mirror + confirm
+        # paths + no mirror + confirm + AI=configure-later, then context hits EOF
+        answers = iter([str(inbox), str(library), "n", "o", "3"])
 
         def ask(_prompt: str) -> str:
             try:
@@ -195,7 +198,7 @@ class TestSetupFlow(_EnvIsolated):
                 raise EOFError
 
         _, out = _sink()
-        rc = us.setup(ask=ask, out=out)
+        rc = us.setup(ask=ask, out=out, ask_secret=lambda _p: "")
         self.assertEqual(rc, 0)
         self.assertTrue(library.exists())
 
@@ -214,6 +217,44 @@ class TestMirrorDiskAdvice(_EnvIsolated):
         self.assertEqual(rc, 1)  # declined at confirm → nothing created
         self.assertTrue(any("SAME disk" in ln for ln in lines))
         self.assertFalse(library.exists())
+
+
+class TestConfigureAI(_EnvIsolated):
+    def _env(self) -> Path:
+        return Path(os.environ["PROCRAFILER_ENV_FILE"])
+
+    def test_mistral_choice_writes_preset_and_key(self) -> None:
+        _, out = _sink()
+        configure_ai(_scripted(["1"]), out, _scripted(["sk-test-123"]))
+        text = self._env().read_text()
+        self.assertIn("PROCRAFILER_AI_ANALYSIS_PRIMARY=mistral:mistral-small-latest", text)
+        self.assertIn("PROCRAFILER_AI_OCR_PRIMARY=mistral:mistral-ocr-latest", text)  # OCR 4 via -latest
+        self.assertIn("MISTRAL_API_KEY=sk-test-123", text)
+
+    def test_mistral_choice_without_key_writes_no_key(self) -> None:
+        _, out = _sink()
+        configure_ai(_scripted(["1"]), out, _scripted([""]))  # Enter = skip the key
+        text = self._env().read_text()
+        self.assertIn("mistral:mistral-small-latest", text)
+        self.assertNotIn("MISTRAL_API_KEY=sk", text)
+
+    def test_local_choice_writes_ollama_preset(self) -> None:
+        _, out = _sink()
+        configure_ai(_scripted(["2"]), out, lambda _p: "")  # secret unused for local
+        text = self._env().read_text()
+        self.assertIn("PROCRAFILER_AI_ANALYSIS_PRIMARY=ollama:gemma4:12b", text)
+        self.assertIn("PROCRAFILER_AI_OCR_PRIMARY=ollama:minicpm-v", text)
+        self.assertIn("PROCRAFILER_AI_IMAGE_PRIMARY=ollama:qwen2.5vl:7b", text)
+
+    def test_configure_later_writes_nothing(self) -> None:
+        _, out = _sink()
+        configure_ai(_scripted(["3"]), out, lambda _p: "")
+        self.assertFalse(self._env().exists())  # the env file is left untouched
+
+    def test_empty_input_defaults_to_mistral(self) -> None:
+        _, out = _sink()
+        configure_ai(_scripted([""]), out, _scripted([""]))  # Enter → option 1
+        self.assertIn("mistral:mistral-small-latest", self._env().read_text())
 
 
 class TestDoctorMirrorOptional(_EnvIsolated):
