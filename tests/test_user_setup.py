@@ -212,7 +212,7 @@ class TestMirrorDiskAdvice(_EnvIsolated):
         lines, out = _sink()
         rc = us.setup(ask=ask, out=out)
         self.assertEqual(rc, 1)  # declined at confirm → nothing created
-        self.assertTrue(any("MÊME disque" in ln for ln in lines))
+        self.assertTrue(any("SAME disk" in ln for ln in lines))
         self.assertFalse(library.exists())
 
 

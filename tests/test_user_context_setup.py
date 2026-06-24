@@ -49,7 +49,7 @@ class TestCollectAnswers(unittest.TestCase):
         self.assertEqual(a["professions"], ["Dev", "Prof"])
         self.assertEqual(a["employers"], ["Acme", "Globex"])
         self.assertEqual(a["work_names"], ["ClientX", "ProjY"])
-        self.assertEqual(a["interests"], ["Musique", "Lecture", "voile"])  # 1,3 + free
+        self.assertEqual(a["interests"], ["Music", "Reading", "voile"])  # 1,3 + free
         self.assertEqual(a["banks"], ["BNP Paribas", "Crédit Agricole"])   # spaces kept
         self.assertEqual(a["telecom"], ["Free", "Orange"])
         self.assertEqual(a["rentals"], ["Annoville", "Fougères"])          # place labels
@@ -101,7 +101,7 @@ class TestSetupContext(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_save_writes_the_context_file(self) -> None:
-        ask = _scripted(_answers(first="Alex", last="Martin", professions="Dev") + ["1"])  # "1" = Enregistrer
+        ask = _scripted(_answers(first="Alex", last="Martin", professions="Dev") + ["1"])  # "1" = Save
         _, out = _sink()
         target = setup_context(ask=ask, out=out)
         self.assertEqual(target, Path(self.tmp.name) / "context.md")
@@ -118,7 +118,7 @@ class TestSetupContext(unittest.TestCase):
         self.assertEqual(get_user_language(default_runtime_paths()), "fr")
 
     def test_cancel_writes_nothing(self) -> None:
-        ask = _scripted(_answers(first="Alex", last="Martin") + ["2"])  # "2" = Annuler
+        ask = _scripted(_answers(first="Alex", last="Martin") + ["2"])  # "2" = Cancel
         _, out = _sink()
         self.assertIsNone(setup_context(ask=ask, out=out))
         self.assertFalse((Path(self.tmp.name) / "context.md").exists())
