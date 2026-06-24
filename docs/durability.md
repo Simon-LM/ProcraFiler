@@ -144,6 +144,33 @@ So: the **mirror** (browsable local/LAN copy) may be automatic (convenience + he
 it is **not** the anti-compromise protection; the **cold backup** is, and it stays manual/
 confirmed by default, or automatic **only** to an immutable/versioned target.
 
+## Creating & restoring a cold backup
+
+A cold backup is **immutable**, so it is the *simplest* part of the system — there is
+**no re-sync and no conflict handling**. You don't update an archive; you create a new
+**dated** one, keep N, and prune the oldest (versioning/retention). Re-sync only ever
+concerns the live mirror.
+
+- **Create** — `procrafiler backup --to <path|-> [--only documents] [--encrypt]` →
+  `procrafiler-backup-YYYY-MM-DD.tar.zst(.age)` (+ a `.sha256` beside it). Its value over
+  a plain `zip` is **consistency** (takes the runtime lock, writes a *fresh* catalog
+  snapshot, *then* bundles, so catalog ↔ files match at one instant — a generic tool
+  would copy a possibly mid-write SQLite DB), **self-containment** (documents or the
+  selected subset **+ catalog + snapshot + manifest** → restorable alone), and a **dated
+  name + checksum** to verify the transfer later.
+- **Restore** — `procrafiler restore --from-archive <file>`: decrypt → unpack → verify
+  (manifest + hashes) → then **reuse the same restore path as the mirror** (once unpacked
+  it is just a library + catalog). The only archive-specific code is decrypt/unpack/verify.
+
+**Don't reinvent backup.** For the simple case (an encrypted bundle on a USB stick) the
+built-in command is enough. For serious needs (incremental, deduplicated, immutable,
+multi-backend) wrap proven tools — **restic** / **borg** (encrypted, deduplicated,
+verifiable, via rclone) — rather than reimplementing them. Division of labour:
+
+> ProcraFiler produces the **consistent, self-contained export** (the hard, project-
+> specific part); heavy storage / versioning / encryption is delegated to restic / borg
+> / rclone. A built-in "simple encrypted bundle" covers the basic case.
+
 ## Operations (future `procrafiler` commands)
 
 1. **replicate** — push new/changed docs + catalog + snapshot + manifest to each
