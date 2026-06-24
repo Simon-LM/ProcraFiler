@@ -126,44 +126,44 @@ def on_same_disk(a: Path, b: Path) -> bool:
 
 def _ask_path(ask: AskFn, out: OutFn, label: str, default: Path) -> Path:
     out(label)
-    out(f"  (défaut : {default})")
+    out(f"  (default: {default})")
     answer = ask("› ").strip()
     return _normalize_path(answer) if answer else default
 
 
 def _ask_yes_no(ask: AskFn, out: OutFn, label: str, *, default: bool) -> bool:
-    hint = "[O/n]" if default else "[o/N]"
+    hint = "[Y/n]" if default else "[y/N]"
     answer = ask(f"{label} {hint} ").strip().lower()
     if not answer:
         return default
-    return answer[0] in ("o", "y")
+    return answer[0] in ("y", "o")
 
 
 def collect_paths(ask: AskFn, out: OutFn) -> dict[str, Path | None]:
     """Ask where the Inbox, Library and (optional) Mirror live. Returns
     {"inbox": Path, "library": Path, "mirror": Path | None}."""
     defaults = default_setup_paths()
-    out("\nOù veux-tu que ProcraFiler range tes fichiers ?")
-    out("Valide par Entrée pour accepter le défaut, ou tape ton propre chemin.")
+    out("\nWhere should ProcraFiler keep your files?")
+    out("Press Enter to accept the default, or type your own path.")
 
     inbox = _ask_path(
         ask, out,
-        "\n• Dépôt (Inbox) — tu y déposes les fichiers à classer :",
+        "\n• Inbox — where you drop the files to be filed:",
         defaults["inbox"],
     )
     library = _ask_path(
         ask, out,
-        "\n• Bibliothèque (Library) — tes fichiers classés y sont rangés :",
+        "\n• Library — where your filed documents are kept:",
         defaults["library"],
     )
 
-    out("\n• Miroir (Mirror) — une copie de sauvegarde de ta bibliothèque (optionnel).")
-    out("  Fortement conseillé : mets-le sur un AUTRE disque que la bibliothèque")
-    out("  (p. ex. bibliothèque sur SSD, miroir sur HDD). Sur le même disque, il ne")
-    out("  protège pas contre une panne du disque principal.")
+    out("\n• Mirror — a backup copy of your library (optional).")
+    out("  Strongly recommended: put it on a DIFFERENT disk than the library")
+    out("  (e.g. library on SSD, mirror on HDD). On the same disk it does not")
+    out("  protect against that disk failing.")
     mirror: Path | None = None
-    if _ask_yes_no(ask, out, "  Veux-tu un miroir de sauvegarde ?", default=True):
-        mirror = _ask_path(ask, out, "  Où mettre le miroir (idéalement un autre disque) ?", defaults["mirror"])
+    if _ask_yes_no(ask, out, "  Do you want a backup mirror?", default=True):
+        mirror = _ask_path(ask, out, "  Where to put the mirror (ideally another disk)?", defaults["mirror"])
 
     return {"inbox": inbox, "library": library, "mirror": mirror}
 
@@ -202,61 +202,61 @@ def apply_setup(choices: dict[str, Path | None], *, out: OutFn) -> Path:
     # 4. Record the mirror choice — the pipeline, doctor and init-layout read it.
     set_feature_flag(paths, "mirror_sync", mirror is not None)
 
-    out(f"\n✓ Chemins enregistrés dans {env_path}")
+    out(f"\n✓ Paths saved to {env_path}")
     out(f"  • Inbox    : {paths.inbox_dir}")
     out(f"  • Library  : {paths.library_root}")
-    out(f"  • Mirror   : {paths.mirror_root}" if mirror is not None else "  • Mirror   : désactivé")
+    out(f"  • Mirror   : {paths.mirror_root}" if mirror is not None else "  • Mirror   : disabled")
     return env_path
 
 
 def setup(*, ask: AskFn = input, out: OutFn = print) -> int:
     """Guided first run: choose where files live (Inbox/Library/optional Mirror),
     then who you are (`setup-context`). Returns a process exit code."""
-    out("ProcraFiler — premier lancement")
-    out("=" * 31)
-    out("Deux étapes : (1) où ranger tes fichiers, puis (2) qui tu es (pour aider l'IA).")
+    out("ProcraFiler — first run")
+    out("=" * 23)
+    out("Two steps: (1) where to keep your files, then (2) who you are (to help the AI).")
 
     paths_saved = False
     try:
         choices = collect_paths(ask, out)
 
-        out("\nRécapitulatif :")
+        out("\nSummary:")
         out(f"  • Inbox    : {choices['inbox']}")
         out(f"  • Library  : {choices['library']}")
-        out(f"  • Mirror   : {choices['mirror'] if choices['mirror'] is not None else 'désactivé'}")
+        out(f"  • Mirror   : {choices['mirror'] if choices['mirror'] is not None else 'disabled'}")
 
         distinct = {choices["inbox"], choices["library"]} | (
             {choices["mirror"]} if choices["mirror"] is not None else set()
         )
         expected = 3 if choices["mirror"] is not None else 2
         if len(distinct) < expected:
-            out("\n⚠ Attention : ces chemins ne sont pas tous distincts — c'est déconseillé.")
+            out("\n⚠ Warning: these paths are not all distinct — not recommended.")
 
         mirror = choices["mirror"]
         library = choices["library"]
         if mirror is not None and library is not None and on_same_disk(mirror, library):
-            out("\n⚠ Le miroir semble sur le MÊME disque que la bibliothèque : il ne")
-            out("  protègera pas d'une panne de ce disque. Un autre disque est conseillé.")
+            out("\n⚠ The mirror seems to be on the SAME disk as the library: it will not")
+            out("  protect against that disk failing. A different disk is recommended.")
 
-        if not _ask_yes_no(ask, out, "\nOn crée ces dossiers et on enregistre ?", default=True):
-            out("Annulé — rien n'a été créé ni modifié.")
+        if not _ask_yes_no(ask, out, "\nCreate these folders and save?", default=True):
+            out("Cancelled — nothing was created or changed.")
             return 1
 
         apply_setup(choices, out=out)
         paths_saved = True
 
         # Single first run: flow straight into the context questionnaire (who you are).
-        out("\n— Étape 2 : qui es-tu ? (aide l'IA à classer ; tout est facultatif) —")
+        out("\n— Step 2: who are you? (helps the AI file your documents; all optional) —")
         setup_context(ask=ask, out=out)
     except (EOFError, KeyboardInterrupt):
         out("")
         if paths_saved:
-            out("Interrompu — tes chemins sont enregistrés. Reprends « qui es-tu » "
-                "quand tu veux : procrafiler setup-context")
+            out("Interrupted — your paths are saved. Resume \"who you are\" any time: "
+                "procrafiler setup-context")
             return 0
-        out("Interrompu — rien n'a été créé ni modifié.")
+        out("Interrupted — nothing was created or changed.")
         return 1
 
-    out("\n✓ Configuration terminée. Lance le classement avec : procrafiler process-all")
-    out("  Refaire la configuration quand tu veux : procrafiler setup")
+    out("\n✓ Setup complete. Start filing with: procrafiler process-all")
+    out("  Run setup again any time: procrafiler setup")
     return 0

@@ -13,6 +13,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - **Guided first-run `procrafiler setup`.** Instead of hand-editing the env file, a single guided run asks where your **Inbox**, **Library** and an optional **Mirror** should live (defaults proposed, accept with Enter or type your own), writes those paths to the env file (keeping your AI key + chains), creates **only** the folders you chose, then flows into the "who you are" context questionnaire. The **mirror is optional** — decline it and no mirror folder is created and `mirror_sync` is turned off (the pipeline, `doctor` and `init-layout` all honour that). When kept, `setup` advises putting the mirror on a **different disk** than the library (e.g. SSD + HDD) and **warns** if you pick the same disk — a mirror there wouldn't survive that disk failing. `install.sh` now points to `procrafiler setup` as the next step.
 
+### Changed
+
+- **The guided first run (`setup` + `setup-context`) is now in English** for the whole interface, matching the install commands and the open-source/general-public audience. (The written context file the AI reads was already English; only the interactive prompts changed.) A selectable interface language — French first, then others — is planned.
+
 ## [0.4.0] - 2026-06-23 — Solid install, update & uninstall
 
 Installing, updating and uninstalling are now solid, and **an update never forces you to reorganize your folders**: your library, catalog, settings and keys are preserved across versions, the catalog migrates in place, and the version always tracks the release tag. This is the groundwork for a 1.0 — what still remains for that milestone is an **interactive install** (choose where your Inbox / Library / Mirror live) and a **clearer way to pick the AI providers** (local vs API, per task). (Everything from the earlier 0.x line is included: AI-first naming + classification, set-aware organize, the decisions queue + `review`, hand-reorganization `rescan`, offline + AI-assisted multilingual `search`, and a tombstone/purge deletion model.)

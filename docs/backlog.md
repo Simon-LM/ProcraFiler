@@ -38,6 +38,16 @@ binary in the taxonomy) is not in the document — it depends on the user's
 
 ## Deferred features (planned, not built yet)
 
+- [ ] **Selectable interface language (i18n)** — the guided first run is English-only
+      today. Offer the interface in **French** first (the prompts were French before
+      and the translation map exists in git history), then make it extensible to other
+      languages. The user's content language (`language` / setup-context) is already
+      independent of the UI language.
+- [ ] **Data-durability / bit-rot protection** — for an archive of rarely-touched files.
+      NOT blind periodic rewriting: instead an **integrity scrub** (periodically re-hash
+      files and compare to the catalog's stored hash) + **heal from the mirror** (restore
+      a corrupted copy from the good one), and **SMART** (smartctl) for a real "disk is
+      aging" warning rather than a calendar timer. The user may want this before 1.0.
 - [ ] **SUPERVISOR** — the optional AI control pass over ambiguous outputs (spec §9).
 - [ ] **VIDEO + audio analysis** — phase 2, after the rest is validated on real files.
 - [ ] **Automatic processing** — a watcher (systemd user service + inotify) or a cron

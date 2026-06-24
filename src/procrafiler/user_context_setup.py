@@ -27,15 +27,15 @@ OutFn = Callable[[str], None]
 # A short, universal interest list; anything else is typed freely. NOTHING is
 # assumed or created unless the user picks or types it.
 INTERESTS: tuple[str, ...] = (
-    "Musique",
-    "Sport",
-    "Lecture",
-    "Cuisine",
-    "Jardinage",
-    "Photo",
-    "Jeux vidéo",
-    "Bricolage",
-    "Voyages",
+    "Music",
+    "Sports",
+    "Reading",
+    "Cooking",
+    "Gardening",
+    "Photography",
+    "Video games",
+    "DIY",
+    "Travel",
 )
 
 # Common languages → code. Used to enrich the catalog so search works in the
@@ -56,7 +56,7 @@ def _text(ask: AskFn, out: OutFn, label: str) -> str:
 
 def _csv(ask: AskFn, out: OutFn, label: str) -> list[str]:
     out(label)
-    out("   (plusieurs réponses possibles — séparées par des VIRGULES)")
+    out("   (several answers possible — separate them with COMMAS)")
     return [p.strip() for p in ask("› ").split(",") if p.strip()]
 
 
@@ -71,7 +71,7 @@ def _choice(ask: AskFn, out: OutFn, label: str, options: list[str]) -> int | Non
 def _checklist(ask: AskFn, out: OutFn, options: tuple[str, ...]) -> list[str]:
     for i, opt in enumerate(options, 1):
         out(f"  {i}) {opt}")
-    raw = ask("Numéros et/ou mots libres, séparés par des virgules › ")
+    raw = ask("Numbers and/or free words, separated by commas › ")
     selected: list[str] = []
     for token in raw.split(","):
         t = token.strip()
@@ -85,7 +85,7 @@ def _checklist(ask: AskFn, out: OutFn, options: tuple[str, ...]) -> list[str]:
 
 def _language(ask: AskFn, out: OutFn) -> str:
     """Ask the user's main language; return a code (e.g. "fr") or "" if skipped."""
-    idx = _choice(ask, out, "Ta langue principale ? (recherche dans ta langue + anglais)",
+    idx = _choice(ask, out, "Your main language? (search works in it + English)",
                   [name for name, _ in LANGUAGES])
     return LANGUAGES[idx][1] if idx is not None else ""
 
@@ -93,39 +93,39 @@ def _language(ask: AskFn, out: OutFn) -> str:
 def collect_answers(ask: AskFn, out: OutFn) -> dict[str, Any]:
     """Run the guided questionnaire and return the raw answers. A filing tool
     handles OLD documents, so most fields are MULTI-VALUE and ask for current AND
-    past (jobs, providers, homes…). Everything is skippable with Entrée."""
+    past (jobs, providers, homes…). Everything is skippable with Enter."""
     a: dict[str, Any] = {}
 
-    out("\n1/6 · Ta langue")
+    out("\n1/6 · Your language")
     a["language"] = _language(ask, out)
 
-    out("\n2/6 · Toi")
-    a["first_name"] = _text(ask, out, "Prénom ?")
-    a["last_name"] = _text(ask, out, "Nom de famille ?")
-    a["aliases"] = _csv(ask, out, "Pseudo(s) en ligne ? (te reconnaître dans captures, exports, messages)")
+    out("\n2/6 · You")
+    a["first_name"] = _text(ask, out, "First name?")
+    a["last_name"] = _text(ask, out, "Last name?")
+    a["aliases"] = _csv(ask, out, "Online handle(s)? (to recognise you in screenshots, exports, messages)")
 
-    out("\n3/6 · Ton travail   (actuel ET passé — tu as peut-être de vieux documents)")
-    a["professions"] = _csv(ask, out, "Tes métiers (actuels et passés) ?")
-    a["employers"] = _csv(ask, out, "Tes employeurs (actuels et passés) ?")
-    a["businesses"] = _csv(ask, out, "Tes activités / entreprises perso (actuelles et passées) ?")
-    a["work_names"] = _csv(ask, out, "Des noms qui veulent dire « c'est mon travail » ? (clients, projets, outils, serveurs)")
+    out("\n3/6 · Your work   (current AND past — you may have old documents)")
+    a["professions"] = _csv(ask, out, "Your professions (current and past)?")
+    a["employers"] = _csv(ask, out, "Your employers (current and past)?")
+    a["businesses"] = _csv(ask, out, "Your own activities / businesses (current and past)?")
+    a["work_names"] = _csv(ask, out, "Names that mean \"this is my work\"? (clients, projects, tools, servers)")
 
-    out("\n4/6 · Tes centres d'intérêt   (crée seulement ces dossiers-là)")
+    out("\n4/6 · Your interests   (only these folders get created)")
     a["interests"] = _checklist(ask, out, INTERESTS)
-    a["online_content"] = _csv(ask, out, "Tu crées / publies du contenu en ligne ? (vidéos, posts, streams, podcasts — plateformes ou pseudos)")
+    a["online_content"] = _csv(ask, out, "Do you create / publish content online? (videos, posts, streams, podcasts — platforms or handles)")
 
-    out("\n5/6 · Ton foyer   (optionnel — Entrée pour passer)")
-    a["banks"] = _csv(ask, out, "Banque(s), actuelles et passées ?")
-    a["insurers"] = _csv(ask, out, "Assurance(s) ?")
-    a["energy"] = _csv(ask, out, "Énergie / eau — fournisseurs actuels et passés ?")
-    a["telecom"] = _csv(ask, out, "Téléphone / internet — fournisseurs (plusieurs possibles) ?")
-    a["rentals"] = _csv(ask, out, "Logements en location, actuels et passés ? (ville ou rue — pour reconnaître baux, quittances, états des lieux)")
-    a["properties"] = _csv(ask, out, "Biens immobiliers que tu possèdes / as possédés ? (ville ou rue — pour reconnaître actes, taxe foncière, prêt)")
-    a["vehicles"] = _csv(ask, out, "Véhicule(s) ? (ex: voiture, moto)")
-    a["household"] = _csv(ask, out, "Prénoms du foyer (conjoint, enfants…) ?")
+    out("\n5/6 · Your household   (optional — Enter to skip)")
+    a["banks"] = _csv(ask, out, "Bank(s), current and past?")
+    a["insurers"] = _csv(ask, out, "Insurer(s)?")
+    a["energy"] = _csv(ask, out, "Energy / water — current and past providers?")
+    a["telecom"] = _csv(ask, out, "Phone / internet — providers (several possible)?")
+    a["rentals"] = _csv(ask, out, "Rented homes, current and past? (city or street — to recognise leases, rent receipts, inventories)")
+    a["properties"] = _csv(ask, out, "Properties you own / have owned? (city or street — to recognise deeds, property tax, mortgage)")
+    a["vehicles"] = _csv(ask, out, "Vehicle(s)? (e.g. car, motorbike)")
+    a["household"] = _csv(ask, out, "First names in your household (partner, children…)?")
 
-    out("\n6/6 · Autre chose à savoir ?")
-    a["notes"] = _text(ask, out, "(une phrase, ou Entrée)")
+    out("\n6/6 · Anything else to know?")
+    a["notes"] = _text(ask, out, "(one sentence, or Enter)")
     return a
 
 
@@ -191,40 +191,40 @@ def render_context(a: dict[str, Any]) -> str:
 def setup_context(*, ask: AskFn = input, out: OutFn = print) -> Path | None:
     """Run the questionnaire, show a recap, and (on confirm) write the context
     file. Returns the written path, or None if the user cancelled."""
-    out("Quelques questions pour bien ranger tes fichiers.")
-    out("Entrée = passer · plusieurs réponses = VIRGULES (ex: BNP Paribas, Crédit Agricole)")
-    out("Tout reste sur ta machine (jamais committé, jamais partagé).")
+    out("A few questions to file your documents well.")
+    out("Enter = skip · several answers = COMMAS (e.g. BNP Paribas, Barclays)")
+    out("Everything stays on your machine (never committed, never shared).")
     answers = collect_answers(ask, out)
 
     rendered = render_context(answers)
     out("\n" + "─" * 56)
-    out("Voici ce que j'ai retenu :\n")
+    out("Here is what I captured:\n")
     out(rendered)
     out("─" * 56)
 
-    if _choice(ask, out, "C'est bon ?", ["Enregistrer", "Annuler"]) != 0:
-        out("Annulé. Rien n'a été enregistré.")
+    if _choice(ask, out, "Looks good?", ["Save", "Cancel"]) != 0:
+        out("Cancelled. Nothing was saved.")
         return None
 
     target = default_context_write_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(rendered, encoding="utf-8")
-    out(f"✓ Contexte enregistré : {target}")
+    out(f"✓ Context saved: {target}")
 
     language = answers.get("language")
     if language:
         from procrafiler.config import default_runtime_paths, set_user_language
         try:
             set_user_language(default_runtime_paths(), language)
-            out(f"✓ Langue principale : {language} (recherche multilingue)")
+            out(f"✓ Main language: {language} (multilingual search)")
         except ValueError:
             pass
 
     active = active_context_path()
     if active is not None and active.resolve() != target.resolve():
         out(
-            f"⚠ Attention : l'app lira d'abord {active} (priorité plus haute). "
-            "Déplace/supprime ce fichier, ou pointe PROCRAFILER_CONTEXT_FILE vers le bon."
+            f"⚠ Warning: the app will read {active} first (higher priority). "
+            "Move/remove that file, or point PROCRAFILER_CONTEXT_FILE at the right one."
         )
-    out("Le refaire quand tu veux : procrafiler setup-context")
+    out("Run it again any time: procrafiler setup-context")
     return target
