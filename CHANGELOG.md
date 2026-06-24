@@ -9,10 +9,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-24 — Guided first-run setup & AI selection
+
+A friendly first run and a clear way to choose the AI. `procrafiler setup` now walks you through **where your files live** (Inbox, Library, optional Mirror — advised on a separate disk), **which AI** reads them (Mistral API by default, or all-local Ollama from a tested preset), and **who you are** — writing your env file for you, with no hand-editing. The whole first-run interface is now in **English**.
+
 ### Added
 
-- **AI provider selection, made simple.** A new **[docs/ai-providers.md](docs/ai-providers.md)** explains the two providers (Mistral API vs local Ollama), the per-task chains, and gives **ready-to-paste profiles** (all-API / all-local / mixed) with **tested models** and **recommendations by GPU VRAM**. `.env.example` is rewritten to match and points to the guide. `procrafiler setup` now has an **AI step**: pick *Mistral API* (default — it also stores your `MISTRAL_API_KEY`), *all-local Ollama* (writes a tested preset: `gemma4:12b` / `minicpm-v` / `qwen2.5vl:7b`), or *configure it later*. `mistral-ocr-latest` keeps you on the newest Mistral OCR.
 - **Guided first-run `procrafiler setup`.** Instead of hand-editing the env file, a single guided run asks where your **Inbox**, **Library** and an optional **Mirror** should live (defaults proposed, accept with Enter or type your own), writes those paths to the env file (keeping your AI key + chains), creates **only** the folders you chose, then flows into the "who you are" context questionnaire. The **mirror is optional** — decline it and no mirror folder is created and `mirror_sync` is turned off (the pipeline, `doctor` and `init-layout` all honour that). When kept, `setup` advises putting the mirror on a **different disk** than the library (e.g. SSD + HDD) and **warns** if you pick the same disk — a mirror there wouldn't survive that disk failing. `install.sh` now points to `procrafiler setup` as the next step.
+- **AI provider selection, made simple.** A new **[docs/ai-providers.md](docs/ai-providers.md)** explains the two providers (Mistral API vs local Ollama), the per-task chains, and gives **ready-to-paste profiles** (all-API / all-local / mixed) with **tested models** and **recommendations by GPU VRAM**. `.env.example` is rewritten to match and points to the guide. `procrafiler setup` now has an **AI step**: pick *Mistral API* (default — it also stores your `MISTRAL_API_KEY`), *all-local Ollama* (writes a tested preset: `gemma4:12b` / `minicpm-v` / `qwen2.5vl:7b`), or *configure it later*. `mistral-ocr-latest` keeps you on the newest Mistral OCR.
 
 ### Changed
 
