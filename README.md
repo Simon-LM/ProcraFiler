@@ -291,7 +291,7 @@ The installer creates an isolated virtualenv and, on first install, an env file 
 procrafiler setup
 ```
 
-It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library) should live — press Enter to accept each proposed default, or type your own. It writes those paths to your env file, creates **only** the folders you chose (decline the mirror and none is created), then runs the short "who you are" questionnaire that helps the AI file your documents. Re-run it any time.
+It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library — ideally on a **different disk**, e.g. Library on SSD, Mirror on HDD, so it survives a disk failure) should live — press Enter to accept each proposed default, or type your own. It writes those paths to your env file, creates **only** the folders you chose (decline the mirror and none is created), then runs the short "who you are" questionnaire that helps the AI file your documents. Re-run it any time.
 
 **3. Set your AI key.** Edit your env file and set `MISTRAL_API_KEY` (and/or point per-task chains at a local Ollama). The chains come pre-filled with sensible Mistral defaults, so with a key it works out of the box; a task left empty just sends files that would need it to manual review.
 

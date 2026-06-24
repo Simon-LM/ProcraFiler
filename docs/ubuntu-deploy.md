@@ -73,7 +73,7 @@ Run the guided setup to choose where your files live and tell the app who you ar
 procrafiler setup
 ```
 
-It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library) should live — press Enter to accept each default or type your own — writes those paths to the env file (keeping your API key + AI chains), creates **only** the folders you chose, then runs the short "who you are" questionnaire. The mirror is optional: decline it and no mirror folder is created (`mirror_sync` is turned off). Re-run `procrafiler setup` any time.
+It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup copy of the library — ideally on a **different disk** than the Library, e.g. Library on SSD and Mirror on HDD, so it survives a disk failure) should live — press Enter to accept each default or type your own — writes those paths to the env file (keeping your API key + AI chains), creates **only** the folders you chose, then runs the short "who you are" questionnaire. The mirror is optional: decline it and no mirror folder is created (`mirror_sync` is turned off). If you put the mirror on the same disk as the library, `setup` warns you. Re-run `procrafiler setup` any time.
 
 ## 4) Update to the latest release
 
