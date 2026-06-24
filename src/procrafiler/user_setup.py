@@ -14,6 +14,7 @@ The mirror is OPTIONAL: a user who declines it gets no mirror folder and the
 
 from __future__ import annotations
 
+import getpass
 import os
 from pathlib import Path
 from typing import Callable
@@ -27,11 +28,26 @@ from procrafiler.user_context_setup import setup_context
 
 AskFn = Callable[[str], str]
 OutFn = Callable[[str], None]
+SecretFn = Callable[[str], str]  # like ask, but the input is not echoed (API key)
 
 # The three locations the user chooses, mapped to the env vars the app reads.
 _INBOX_ENV = "PROCRAFILER_WORKSPACE_DIR"
 _LIBRARY_ENV = "PROCRAFILER_LIBRARY_DIR"
 _MIRROR_ENV = "PROCRAFILER_LIBRARY_MIRROR_DIR"
+
+# Tested provider presets written to the env file (see docs/ai-providers.md).
+_MISTRAL_PRESET = {
+    "PROCRAFILER_AI_ANALYSIS_PRIMARY": "mistral:mistral-small-latest",
+    "PROCRAFILER_AI_ORGANIZE_PRIMARY": "mistral:mistral-medium-latest",
+    "PROCRAFILER_AI_OCR_PRIMARY": "mistral:mistral-ocr-latest",
+    "PROCRAFILER_AI_IMAGE_PRIMARY": "mistral:mistral-medium-latest",
+}
+_OLLAMA_PRESET = {
+    "PROCRAFILER_AI_ANALYSIS_PRIMARY": "ollama:gemma4:12b",
+    "PROCRAFILER_AI_ORGANIZE_PRIMARY": "ollama:gemma4:12b",
+    "PROCRAFILER_AI_OCR_PRIMARY": "ollama:minicpm-v",
+    "PROCRAFILER_AI_IMAGE_PRIMARY": "ollama:qwen2.5vl:7b",
+}
 
 
 def default_setup_paths() -> dict[str, Path]:
@@ -209,12 +225,55 @@ def apply_setup(choices: dict[str, Path | None], *, out: OutFn) -> Path:
     return env_path
 
 
-def setup(*, ask: AskFn = input, out: OutFn = print) -> int:
+def _ask_choice(ask: AskFn, out: OutFn, options: list[str]) -> int:
+    """Numbered menu; returns the chosen index. Empty/invalid input → 0 (first =
+    the recommended default)."""
+    for i, opt in enumerate(options, 1):
+        out(f"  {i}) {opt}")
+    raw = ask("› ").strip()
+    return int(raw) - 1 if raw.isdigit() and 1 <= int(raw) <= len(options) else 0
+
+
+def configure_ai(ask: AskFn, out: OutFn, ask_secret: SecretFn) -> None:
+    """Ask which AI provider to use and write the matching tested preset to the
+    env file. Default = Mistral API (also offers to store the API key)."""
+    out("\nHow should the AI read and classify your documents?")
+    choice = _ask_choice(ask, out, [
+        "Online — Mistral API (recommended: simple, reliable)",
+        "All local — Ollama (free, offline; slower; depends on your VRAM)",
+        "I'll configure it myself later (edit the .env)",
+    ])
+    env_path = setup_env_path()
+
+    if choice == 1:  # all local Ollama
+        update_env_file(env_path, dict(_OLLAMA_PRESET))
+        out("✓ AI set to local Ollama (gemma4:12b · minicpm-v · qwen2.5vl:7b).")
+        out("  Make sure Ollama is running and the models are pulled. Pick models")
+        out("  for your VRAM in docs/ai-providers.md. Local is private + free, but slower.")
+        return
+
+    if choice == 2:  # configure later
+        out(f"  Left as-is — the defaults in {env_path} are the Mistral API.")
+        out("  See docs/ai-providers.md for tested models (API + local by VRAM).")
+        return
+
+    # choice 0 → Mistral API (the default)
+    update_env_file(env_path, dict(_MISTRAL_PRESET))
+    out("✓ AI set to the Mistral API (the default).")
+    key = ask_secret("Mistral API key (or Enter to add it later): ").strip()
+    if key:
+        update_env_file(env_path, {"MISTRAL_API_KEY": key})
+        out("✓ API key saved.")
+    else:
+        out(f"  No key yet — add MISTRAL_API_KEY to {env_path} before your first run.")
+
+
+def setup(*, ask: AskFn = input, out: OutFn = print, ask_secret: SecretFn = getpass.getpass) -> int:
     """Guided first run: choose where files live (Inbox/Library/optional Mirror),
-    then who you are (`setup-context`). Returns a process exit code."""
+    which AI, then who you are (`setup-context`). Returns a process exit code."""
     out("ProcraFiler — first run")
     out("=" * 23)
-    out("Two steps: (1) where to keep your files, then (2) who you are (to help the AI).")
+    out("Three steps: (1) where your files live, (2) which AI, (3) who you are.")
 
     paths_saved = False
     try:
@@ -245,8 +304,12 @@ def setup(*, ask: AskFn = input, out: OutFn = print) -> int:
         apply_setup(choices, out=out)
         paths_saved = True
 
-        # Single first run: flow straight into the context questionnaire (who you are).
-        out("\n— Step 2: who are you? (helps the AI file your documents; all optional) —")
+        # Step 2: which AI reads & classifies the documents.
+        out("\n— Step 2: which AI —")
+        configure_ai(ask, out, ask_secret)
+
+        # Step 3: who you are (flows straight into the context questionnaire).
+        out("\n— Step 3: who are you? (helps the AI file your documents; all optional) —")
         setup_context(ask=ask, out=out)
     except (EOFError, KeyboardInterrupt):
         out("")
