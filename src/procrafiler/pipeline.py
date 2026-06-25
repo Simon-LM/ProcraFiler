@@ -331,6 +331,7 @@ def _write_catalog_snapshot(
     now_utc: datetime | None = None,
     *,
     features: dict[str, bool] | None = None,
+    target: Path | None = None,
 ) -> None:
     if features is not None and not features.get("catalog_snapshot", True):
         return
@@ -354,14 +355,17 @@ def _write_catalog_snapshot(
             "schema_version": "1.0",
             "generated_at_utc": _utc_iso(now_utc),
             "source_db": str(paths.catalog_db_file),
+            "library_root": str(paths.library_root),
             "documents_count": len(documents),
             "last_update_utc": latest,
         },
         "documents": documents,
     }
-    tmp_path = paths.catalog_snapshot_file.with_suffix(".tmp")
+    target_path = target or paths.catalog_snapshot_file
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target_path.with_suffix(".tmp")
     tmp_path.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(paths.catalog_snapshot_file)
+    tmp_path.replace(target_path)
 
 
 @dataclass(frozen=True)

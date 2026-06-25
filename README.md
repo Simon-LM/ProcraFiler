@@ -177,8 +177,9 @@ procrafiler status                  # paths, features, policy, deletion mode, la
 procrafiler --version               # the installed version (always tracks the release tag)
 procrafiler doctor                  # check paths, env, AI config, catalog, lock (exit non-zero on FAIL)
 procrafiler rescan                  # follow hand moves/renames/deletes in the library into the catalog (no AI)
-procrafiler scrub                   # integrity check: re-hash stored docs vs the catalog (library + mirror); --limit N, --no-mirror, --repair (heal)
+procrafiler scrub                   # integrity check + self-heal (re-hash vs catalog; --repair); also refreshes the mirror's catalog copy
 procrafiler verify-catalog          # check the catalog DB integrity; --rebuild reconstructs it from catalog_snapshot.json if corrupt/lost
+procrafiler restore --from <mirror> # disaster recovery: rebuild the library + catalog from a self-contained mirror
 procrafiler deleted-history         # list library files you deleted by hand (from the action log)
 procrafiler deletion-mode [MODE]    # show, or set how a hand-deleted doc is recorded (tombstone|purge)
 procrafiler language [CODE]         # show, or set your primary language (search works in it + English)
