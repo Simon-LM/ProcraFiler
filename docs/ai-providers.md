@@ -68,14 +68,16 @@ analysis/organize ✅ (7.6 GB — spills a bit at 12 GB). Local `ORGANIZE` on th
 model and `gemma4:26b` are not yet validated. Avoid reasoning/coder/guard models
 (`deepseek-r1`, `*-coder`, `llama-guard`) — they don't return clean JSON.
 
-> **Timeouts are provider-aware — two separate knobs.** A local model that is merely
-> *slow* on a weaker machine or a large file must not be killed mid-generation and
-> dropped to manual review. So the per-call default is **moderate for the API
-> (`PROCRAFILER_AI_TIMEOUT`, 60 s)** and **generous for local Ollama
-> (`PROCRAFILER_AI_LOCAL_TIMEOUT`, 15 min) — applied automatically**, no setting
-> required. Set the one you mean; a per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides
-> either. (`qwen3.5:9b`'s earlier "empty" results were just the old 60 s default cutting
-> off its ~87 s run.)
+> **Timeouts are provider-aware — two separate knobs.**
+> - **API (Mistral)** — `PROCRAFILER_AI_TIMEOUT` (default 60 s): a normal total deadline.
+> - **Local (Ollama)** — `PROCRAFILER_AI_LOCAL_TIMEOUT` (default 15 min): local calls
+>   **stream**, so this is a **no-progress (idle) timeout**, *not* a total deadline. As
+>   long as the model keeps producing tokens it is **never** killed — however slow the
+>   machine or large the file; only a truly *stalled* call (no output for that long) is
+>   aborted. So a merely-slow local model just takes longer, it doesn't fail.
+>
+> A per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides either. (`qwen3.5:9b`'s earlier
+> "empty" results were just the old 60 s total deadline cutting off its ~87 s run.)
 
 ## Profile 3 — Mixed
 

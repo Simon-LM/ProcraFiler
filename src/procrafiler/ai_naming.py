@@ -225,6 +225,41 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         raise ProviderCallError(f"NETWORK_ERROR: {err}") from err
 
 
+def _post_ollama_chat_stream(url: str, payload: dict[str, Any], idle_timeout: int) -> tuple[int, str]:
+    """POST to Ollama with `stream=true` and accumulate the streamed
+    `message.content`. `idle_timeout` is a NO-PROGRESS (idle) timeout, not a total
+    deadline: `urlopen`'s socket timeout applies to each read, so a model that keeps
+    producing tokens never times out — only a truly-stalled one (crashed/deadlocked)
+    does. This is what lets a merely-slow local model run as long as it needs."""
+    _ai_throttle()
+    data = json.dumps({**payload, "stream": True}).encode("utf-8")
+    req = Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    parts: list[str] = []
+    try:
+        with urlopen(req, timeout=idle_timeout) as resp:
+            if resp.status >= 400:
+                return resp.status, resp.read().decode("utf-8", "replace")
+            for raw_line in resp:  # each read may block up to idle_timeout
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                message = obj.get("message")
+                if isinstance(message, dict) and message.get("content"):
+                    parts.append(str(message["content"]))
+                if obj.get("done"):
+                    break
+            return resp.status, "".join(parts)
+    except HTTPError as err:
+        return err.code, err.read().decode("utf-8", "replace")
+    except OSError as err:
+        raise ProviderCallError(f"NETWORK_ERROR: {err}") from err
+
+
 def call_mistral_chat(prompt: str, model: str, timeout: int = 60, **api_params: Any) -> str:
     api_key = os.getenv("MISTRAL_API_KEY")
     if not api_key:
@@ -275,28 +310,26 @@ def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
     # local models otherwise wrap or mangle it. `num_ctx` lifts the 2048-token
     # default so the full prompt isn't truncated. Vision/OCR use a different
     # function (free text), so they are unaffected.
-    status_code, raw_content = _post_json(
+    #
+    # STREAMING: the response is consumed token by token, and `timeout` is treated as
+    # a NO-PROGRESS (idle) timeout — a slow local model that keeps producing is never
+    # killed for being slow, only a truly-stalled one is. There is no total deadline.
+    status_code, content = _post_ollama_chat_stream(
         OLLAMA_CHAT_URL,
         payload={
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
             "format": "json",
             "options": {"num_ctx": _ollama_num_ctx()},
         },
-        headers={"Content-Type": "application/json"},
-        timeout=timeout,
+        idle_timeout=timeout,
     )
-    body = _safe_json_loads(raw_content)
 
     if status_code >= 400:
-        raise ProviderCallError(f"OLLAMA_ERROR_{status_code}: {body}")
-
-    try:
-        content = body["message"]["content"]
-    except Exception as exc:
-        raise ProviderCallError(f"OLLAMA_BAD_RESPONSE: {exc}") from exc
-    return str(content).strip()
+        raise ProviderCallError(f"OLLAMA_ERROR_{status_code}: {content}")
+    if not content.strip():
+        raise ProviderCallError("OLLAMA_BAD_RESPONSE: empty content")
+    return content.strip()
 
 
 def _extract_json_dict(raw_output: str) -> dict[str, Any] | None:
