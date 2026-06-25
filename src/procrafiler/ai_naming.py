@@ -78,21 +78,23 @@ def task_chain_from_env(task: str) -> list[ChainEntry]:
     return chain
 
 
-# Local providers (Ollama) run on the user's own hardware: inference is far slower
-# and varies wildly with the machine and the file size. So when no explicit timeout
-# is set, give them a GENEROUS default — a merely-slow call must not be killed and
-# dropped to manual review. The fast API keeps the moderate default. An explicit
-# PROCRAFILER_AI[_<TASK>]_TIMEOUT always wins for either.
+# Timeouts are PROVIDER-AWARE, with two separate knobs:
+#   - API (Mistral): `PROCRAFILER_AI_TIMEOUT` (moderate default, 60s) — the API is fast.
+#   - Local (Ollama): `PROCRAFILER_AI_LOCAL_TIMEOUT` (generous default, 900s) — local
+#     inference is far slower + varies with the machine and file size, so a merely-slow
+#     call must not be killed and dropped to manual review.
+# A per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides either (it's the most specific).
 _LOCAL_PROVIDERS = frozenset({"ollama"})
 _LOCAL_DEFAULT_TIMEOUT = 900
 
 
 def _task_timeout_from_env(task: str, default_value: int = 60, *, provider: str | None = None) -> int:
     task_key = task.strip().upper()
-    task_value = os.environ.get(f"PROCRAFILER_AI_{task_key}_TIMEOUT")
-    global_value = os.environ.get("PROCRAFILER_AI_TIMEOUT")
+    is_local = provider in _LOCAL_PROVIDERS
+    provider_var = "PROCRAFILER_AI_LOCAL_TIMEOUT" if is_local else "PROCRAFILER_AI_TIMEOUT"
 
-    for raw in (task_value, global_value):
+    # Precedence: per-task override (any provider) > the provider's own knob > default.
+    for raw in (os.environ.get(f"PROCRAFILER_AI_{task_key}_TIMEOUT"), os.environ.get(provider_var)):
         if raw is None or not raw.strip():
             continue
         try:
@@ -102,7 +104,7 @@ def _task_timeout_from_env(task: str, default_value: int = 60, *, provider: str 
         if parsed > 0:
             return parsed
 
-    if provider in _LOCAL_PROVIDERS:
+    if is_local:
         return max(default_value, _LOCAL_DEFAULT_TIMEOUT)
     return default_value
 
