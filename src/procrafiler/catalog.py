@@ -44,6 +44,11 @@ class CatalogRepository:
                 # and reorganization without re-reading the file. NULL when the
                 # analysis step could not run.
                 conn.execute("ALTER TABLE documents ADD COLUMN content_json TEXT")
+            if "last_verified_utc" not in existing_columns:
+                # ISO-8601 UTC of the last time the integrity scrub re-hashed this
+                # document and it matched the catalog sha256. NULL = never verified
+                # (scrubbed first). See docs/durability.md.
+                conn.execute("ALTER TABLE documents ADD COLUMN last_verified_utc TEXT")
             conn.commit()
 
     def upsert_document(
@@ -196,3 +201,29 @@ class CatalogRepository:
                 """
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def documents_for_scrub(self, *, limit: int | None = None) -> list[dict[str, str | None]]:
+        """Stored library documents to verify, least-recently-verified first
+        (NULL `last_verified_utc` = never checked → sorts first in SQLite ASC)."""
+        query = (
+            "SELECT doc_id, sha256, current_filename, current_path, last_verified_utc "
+            "FROM documents WHERE status = 'LIBRARY_STORED' "
+            "ORDER BY last_verified_utc ASC"
+        )
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def mark_verified(self, doc_ids: list[str], *, when_utc: str) -> None:
+        """Record that these documents' content matched the catalog at `when_utc`."""
+        if not doc_ids:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                "UPDATE documents SET last_verified_utc = ? WHERE doc_id = ?",
+                [(when_utc, doc_id) for doc_id in doc_ids],
+            )
+            conn.commit()

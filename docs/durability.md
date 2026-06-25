@@ -196,12 +196,12 @@ keep N, prune the oldest.
 
 Pure Python, no new deps, no root. Lays the manifest + restore foundations.
 
-- [ ] Catalog: add `last_verified_utc` (guarded `ALTER`, like `flow_state`/`content_json`).
+- [x] Catalog: add `last_verified_utc` (guarded `ALTER`, like `flow_state`/`content_json`). **Done.**
 - [ ] `manifest.json` writer for the library and the mirror (path, sha256, size, doc_id,
       updated_at, last_verified); written atomically (tmp+rename).
-- [ ] `procrafiler scrub` — incremental re-hash (oldest-verified first, `--full` option),
-      compare to catalog, update `last_verified`, collect mismatches; printed report +
-      action-log entries; non-zero exit on unrecoverable corruption.
+- [x] `procrafiler scrub` — incremental re-hash (`--limit N`, least-recently-verified
+      first), compare to catalog (library + mirror), update `last_verified`, collect
+      mismatches; printed report; non-zero exit on a problem. **Done** (`scrub.py`).
 - [ ] `heal` (inside scrub or `--repair`) — mirror file ≠ catalog & library matches →
       restore mirror from library; library file ≠ catalog → flag + offer restore from the
       versioned mirror; never overwrite the only good copy.
