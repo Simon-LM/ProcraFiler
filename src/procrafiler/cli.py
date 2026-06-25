@@ -55,6 +55,8 @@ from procrafiler.pipeline import (
     reconcile_catalog_snapshot,
     run_review,
 )
+from procrafiler.backup import backup_reminder, create_backup, last_backup_utc, restore_from_archive
+from procrafiler.backup import format_report as format_backup_report
 from procrafiler.catalog import CatalogRepository
 from procrafiler.catalog_verify import format_report as format_catalog_report
 from procrafiler.catalog_verify import verify_catalog
@@ -117,12 +119,20 @@ def build_parser() -> argparse.ArgumentParser:
     verify_cat.add_argument("--rebuild", action="store_true",
                             help="If the DB is corrupt/lost, rebuild it from the snapshot (old DB kept aside)")
 
+    backup_p = subparsers.add_parser(
+        "backup",
+        help="Write a dated, self-contained backup archive of the library + catalog (immutable)",
+    )
+    backup_p.add_argument("--to", dest="to_dir", required=True,
+                          help="Directory to write the dated .tar.gz (+ .sha256) into")
+
     restore_p = subparsers.add_parser(
         "restore",
-        help="Rebuild the library + catalog from a self-contained mirror after a loss",
+        help="Disaster recovery: rebuild the library + catalog from a mirror or a backup archive",
     )
-    restore_p.add_argument("--from", dest="from_dir", required=True,
-                           help="Path to the mirror directory to restore from")
+    restore_src = restore_p.add_mutually_exclusive_group(required=True)
+    restore_src.add_argument("--from", dest="from_dir", help="A mirror directory to restore from")
+    restore_src.add_argument("--from-archive", dest="from_archive", help="A backup archive (.tar.gz) to restore from")
 
     subparsers.add_parser(
         "review",
@@ -245,6 +255,11 @@ def cmd_status() -> int:
     print(f"- deletion_mode: {get_deletion_mode(paths)}")
     print("Search")
     print(f"- language: {get_user_language(paths)}")
+    print("Durability")
+    print(f"- last_offline_backup: {last_backup_utc(paths) or 'never'}")
+    reminder = backup_reminder(paths, now_utc=_resolve_now_utc().isoformat())
+    if reminder is not None:
+        print(f"  ⚠ {reminder}")
     return 0
 
 
@@ -647,13 +662,29 @@ def cmd_scrub(limit: int | None, no_mirror: bool, repair: bool) -> int:
     return 0 if report.healthy else 1
 
 
-def cmd_restore(from_dir: str) -> int:
+def cmd_backup(to_dir: str) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
-    mirror_dir = Path(from_dir).expanduser()
     try:
         with runtime_lock(paths):
-            report = restore_from_mirror(paths, mirror_dir, now_utc=_resolve_now_utc().isoformat())
+            report = create_backup(paths, Path(to_dir).expanduser(), now_utc=_resolve_now_utc().isoformat())
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(format_backup_report(report))
+    return 0
+
+
+def cmd_restore(from_dir: str | None, from_archive: str | None) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    now = _resolve_now_utc().isoformat()
+    try:
+        with runtime_lock(paths):
+            if from_archive is not None:
+                report = restore_from_archive(paths, Path(from_archive).expanduser(), now_utc=now)
+            else:
+                report = restore_from_mirror(paths, Path(str(from_dir)).expanduser(), now_utc=now)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -756,8 +787,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_scrub(args.limit, args.no_mirror, args.repair)
     if args.command == "verify-catalog":
         return cmd_verify_catalog(args.rebuild)
+    if args.command == "backup":
+        return cmd_backup(args.to_dir)
     if args.command == "restore":
-        return cmd_restore(args.from_dir)
+        return cmd_restore(args.from_dir, args.from_archive)
     if args.command == "deleted-history":
         return cmd_deleted_history(args.limit)
 

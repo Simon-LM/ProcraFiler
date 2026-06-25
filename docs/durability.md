@@ -214,10 +214,17 @@ Pure Python, no new deps, no root. Lays the manifest + restore foundations.
       Phase-2 concern.)*
 - [x] `procrafiler restore --from <mirror>` — rebuild library + catalog from the mirror
       unit, re-rooting paths to the new library location. **Done** (`restore.py`).
-- [ ] `procrafiler backup --to <path> [--only documents] [--encrypt]` — consistent dated
-      bundle (+ `.sha256`); `restore --from-archive`.
-- [ ] Backup reminder — store last-backup date; nudge in `doctor`/`status`.
-- [ ] Offline tests for each; docs (README + this file) updated.
+- [x] `procrafiler backup --to <dir>` — consistent dated bundle (`.tar.gz` + `.sha256`),
+      mirror-shaped; `restore --from-archive`. **Done** (`backup.py`).
+      *Pending:* `--encrypt` (next small slice) and `--only documents` selection (Phase 2/3).
+- [x] Backup reminder — last-backup date recorded; `status` shows it and nudges when
+      overdue. **Done**.
+- [x] Offline tests for each; docs (README + this file) updated. **Done.**
+
+> **Phase 1 is complete** (scrub · heal · verify-catalog · replicate-catalog · restore ·
+> backup), all on the existing single local mirror, pure Python. Remaining for full
+> coverage: `--encrypt` for the cold backup, then Phases 2–4 (multi-replica/LAN, rclone
+> cloud, SMART).
 
 ### Phase 2 — Multiple replicas & reconciliation (≥3 copies, LAN)
 

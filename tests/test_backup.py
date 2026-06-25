@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+
+from procrafiler.backup import (
+    backup_reminder,
+    create_backup,
+    last_backup_utc,
+    restore_from_archive,
+)
+from procrafiler.catalog import CatalogRepository
+from procrafiler.config import default_runtime_paths, ensure_runtime_layout
+
+_NOW = "2026-06-24T12:00:00+00:00"
+_DOCS = {"Personal/a.txt": b"alpha", "Work/sub/b.txt": b"beta"}
+
+
+def _set_env(base: Path) -> None:
+    for var, sub in (("WORKSPACE_DIR", "Inbox"), ("LIBRARY_DIR", "Library"),
+                     ("LIBRARY_MIRROR_DIR", "Mirror"), ("HOME", "state"), ("CONFIG_HOME", "config")):
+        os.environ[f"PROCRAFILER_{var}"] = str(base / sub)
+
+
+class TestBackup(unittest.TestCase):
+    def setUp(self) -> None:
+        self._snapshot = {k: v for k, v in os.environ.items() if k.startswith("PROCRAFILER_")}
+        for k in list(os.environ):
+            if k.startswith("PROCRAFILER_"):
+                del os.environ[k]
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        _set_env(self.tmp / "src")
+        self.src = default_runtime_paths()
+        ensure_runtime_layout(self.src)
+        cat = CatalogRepository(self.src.catalog_db_file)
+        cat.init_schema()
+        for rel, content in _DOCS.items():
+            f = self.src.library_root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(content)
+            cat.upsert_document(
+                doc_id=rel, sha256=hashlib.sha256(content).hexdigest(),
+                current_filename=Path(rel).name, current_path=str(self.src.library_root / rel),
+                status="LIBRARY_STORED", updated_at_utc="2026-01-01T00:00:00+00:00",
+                content_json='{"name": "Doc"}',
+            )
+        self.backup_dir = self.tmp / "backups"
+
+    def tearDown(self) -> None:
+        for k in [k for k in os.environ if k.startswith("PROCRAFILER_")]:
+            del os.environ[k]
+        os.environ.update(self._snapshot)
+        self._tmp.cleanup()
+
+    def test_create_writes_dated_archive_and_matching_checksum(self) -> None:
+        report = create_backup(self.src, self.backup_dir, now_utc=_NOW)
+        archive = Path(report.archive)
+        self.assertTrue(archive.is_file())
+        self.assertTrue(archive.name.startswith("procrafiler-backup-"))
+        self.assertEqual((report.files, report.documents), (2, 2))
+        # checksum file matches the archive
+        checksum = archive.with_name(archive.name + ".sha256").read_text(encoding="utf-8").split()[0]
+        self.assertEqual(checksum, hashlib.sha256(archive.read_bytes()).hexdigest())
+        # last-backup date recorded
+        self.assertEqual(last_backup_utc(self.src), _NOW)
+
+    def test_archive_is_mirror_shaped(self) -> None:
+        report = create_backup(self.src, self.backup_dir, now_utc=_NOW)
+        with tarfile.open(report.archive, "r:*") as tar:
+            names = set(tar.getnames())
+        self.assertIn("Personal/a.txt", names)
+        self.assertIn("Work/sub/b.txt", names)
+        self.assertIn(".procrafiler/catalog_snapshot.json", names)
+
+    def test_backup_then_restore_archive_roundtrip(self) -> None:
+        report = create_backup(self.src, self.backup_dir, now_utc=_NOW)
+        # Restore into a fresh, different location.
+        _set_env(self.tmp / "dst")
+        dst = default_runtime_paths()
+        ensure_runtime_layout(dst)
+        restored = restore_from_archive(dst, Path(report.archive), now_utc=_NOW)
+        self.assertEqual((restored.files_copied, restored.documents_restored), (2, 2))
+        self.assertEqual((dst.library_root / "Personal/a.txt").read_bytes(), b"alpha")
+        cat = CatalogRepository(dst.catalog_db_file)
+        self.assertTrue(cat.integrity_ok())
+        docs = cat.list_documents()
+        self.assertTrue(all(str(d["current_path"]).startswith(str(dst.library_root)) for d in docs))
+        self.assertEqual(json.loads(str(docs[0]["content_json"])), {"name": "Doc"})
+
+    def test_reminder_never_then_fresh_then_overdue(self) -> None:
+        self.assertIn("No offline backup yet", str(backup_reminder(self.src, now_utc=_NOW)))
+        create_backup(self.src, self.backup_dir, now_utc=_NOW)
+        self.assertIsNone(backup_reminder(self.src, now_utc=_NOW))  # just backed up
+        self.assertIn("days ago", str(backup_reminder(self.src, now_utc="2026-12-01T00:00:00+00:00")))
+
+    def test_restore_missing_archive_raises(self) -> None:
+        with self.assertRaises(FileNotFoundError):
+            restore_from_archive(self.src, self.tmp / "nope.tar.gz", now_utc=_NOW)
+
+
+if __name__ == "__main__":
+    unittest.main()
