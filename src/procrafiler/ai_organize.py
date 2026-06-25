@@ -228,7 +228,7 @@ def organize_set(
     if not chain_entries:
         return _empty_result(provider="none", model="none", reason="chain_not_configured", documents=documents)
 
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ORGANIZE", default_value=90)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ORGANIZE", default_value=90, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("ORGANIZE", default_value=2)
     prompt = _build_organize_prompt(documents, base_categories, existing_paths, source_folder, user_context)
 

@@ -20,10 +20,12 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Models assigned for the agent's local tests (easy to change here).
-# gemma4:12b classifies text well and fits 12GB VRAM; qwen3.5:9b returned empty
-# on the full analysis prompt, so it is not used here.
-ANALYSIS_MODEL = "gemma4:12b"
+# Local models for the e2e tests (easy to change here).
+# qwen3.5:9b (6.6GB) FITS in 12GB VRAM (no CPU spill) → faster + cooler than
+# gemma4:12b, and produces clean analysis JSON (~87s/call). Its earlier "empty"
+# result was a 60s-timeout cut-off, not a model limitation — the tests use a
+# generous timeout below.
+ANALYSIS_MODEL = "qwen3.5:9b"
 VISION_MODEL = "qwen2.5vl:7b"
 OCR_MODEL = "minicpm-v:latest"
 

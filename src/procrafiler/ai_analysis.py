@@ -328,7 +328,7 @@ def analyze_content(
     if not text.strip():
         return _empty_result(provider="none", model="none", reason="no_content")
 
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
     prompt = _build_analysis_prompt(
         text, base_categories, existing_paths, original_filename, source_folder, user_context,
@@ -418,7 +418,7 @@ def _keywords_from_chain(
 ) -> list[str]:
     """Run a prompt through the chain and return the JSON `keywords` list, or []
     on total failure. Shared by `translate_keywords` and `expand_query`."""
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ANALYSIS", default_value=60, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
     for entry in chain_entries:
         for attempt in range(retry_count + 1):

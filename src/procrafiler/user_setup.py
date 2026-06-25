@@ -43,10 +43,12 @@ _MISTRAL_PRESET = {
     "PROCRAFILER_AI_IMAGE_PRIMARY": "mistral:mistral-medium-latest",
 }
 _OLLAMA_PRESET = {
-    "PROCRAFILER_AI_ANALYSIS_PRIMARY": "ollama:gemma4:12b",
+    "PROCRAFILER_AI_ANALYSIS_PRIMARY": "ollama:qwen3.5:9b",
     "PROCRAFILER_AI_ORGANIZE_PRIMARY": "ollama:gemma4:12b",
     "PROCRAFILER_AI_OCR_PRIMARY": "ollama:minicpm-v",
     "PROCRAFILER_AI_IMAGE_PRIMARY": "ollama:qwen2.5vl:7b",
+    # No timeout here on purpose: local (ollama) calls get a generous default
+    # automatically (see _task_timeout_from_env); override only to change it.
 }
 
 

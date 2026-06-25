@@ -43,11 +43,11 @@ MISTRAL_API_KEY=<your key>
 ## Profile 2 — All local (Ollama) · private & free, slower
 
 No key, nothing leaves your machine. Pull the models first
-(`ollama pull gemma4:12b`, etc.) and keep Ollama running. Expect **~minutes per
-document**, not seconds.
+(`ollama pull qwen3.5:9b`, etc.) and keep Ollama running. Expect **~minutes per
+document**, not seconds — local calls get a **generous timeout automatically** (see below).
 
 ```dotenv
-PROCRAFILER_AI_ANALYSIS_PRIMARY=ollama:gemma4:12b
+PROCRAFILER_AI_ANALYSIS_PRIMARY=ollama:qwen3.5:9b
 PROCRAFILER_AI_ORGANIZE_PRIMARY=ollama:gemma4:12b
 PROCRAFILER_AI_OCR_PRIMARY=ollama:minicpm-v
 PROCRAFILER_AI_IMAGE_PRIMARY=ollama:qwen2.5vl:7b
@@ -55,16 +55,27 @@ PROCRAFILER_AI_IMAGE_PRIMARY=ollama:qwen2.5vl:7b
 
 ### Pick local models by VRAM
 
-| GPU VRAM | Analysis / Organize | OCR | Image (vision) |
-|----------|---------------------|-----|----------------|
-| **~8 GB** | `gemma4:12b` (7.6 GB) | `minicpm-v` (5.5 GB) | `qwen2.5vl:7b` (6 GB) |
-| **12 GB** | `gemma4:12b` (comfortable) | `minicpm-v` | `qwen2.5vl:7b` |
-| **16 GB+** | `gemma4:26b` (MoE) *or* `mistral-small` | `minicpm-v` | `qwen2.5vl:7b` |
+| GPU VRAM | Analysis | Organize | OCR | Image (vision) |
+|----------|----------|----------|-----|----------------|
+| **~8 GB** | `qwen3.5:9b` (6.6 GB) | `qwen3.5:9b` | `minicpm-v` (5.5 GB) | `qwen2.5vl:7b` (6 GB) |
+| **12 GB** | `qwen3.5:9b` (fits, no CPU spill) | `gemma4:12b` | `minicpm-v` | `qwen2.5vl:7b` |
+| **16 GB+** | `qwen3.5:9b` *or* `gemma4:12b` | `gemma4:26b` *or* `mistral-small` | `minicpm-v` | `qwen2.5vl:7b` |
 
-Tested (on a 12 GB GPU): `gemma4:12b` analysis ✅ (valid output, even extracts the
-document date), `minicpm-v` OCR ✅, `qwen2.5vl:7b` vision ✅. `gemma4:26b` and local
-`ORGANIZE` are not yet validated. Avoid reasoning/coder/guard models
+Tested (on a 12 GB GPU): **`qwen3.5:9b` analysis ✅** — clean JSON incl. the document
+date, ~87 s/call, and at 6.6 GB it **fits 12 GB VRAM** (no spill to CPU → faster +
+cooler than `gemma4:12b`). `minicpm-v` OCR ✅, `qwen2.5vl:7b` vision ✅, `gemma4:12b`
+analysis/organize ✅ (7.6 GB — spills a bit at 12 GB). Local `ORGANIZE` on the small
+model and `gemma4:26b` are not yet validated. Avoid reasoning/coder/guard models
 (`deepseek-r1`, `*-coder`, `llama-guard`) — they don't return clean JSON.
+
+> **Timeouts are provider-aware — two separate knobs.** A local model that is merely
+> *slow* on a weaker machine or a large file must not be killed mid-generation and
+> dropped to manual review. So the per-call default is **moderate for the API
+> (`PROCRAFILER_AI_TIMEOUT`, 60 s)** and **generous for local Ollama
+> (`PROCRAFILER_AI_LOCAL_TIMEOUT`, 15 min) — applied automatically**, no setting
+> required. Set the one you mean; a per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides
+> either. (`qwen3.5:9b`'s earlier "empty" results were just the old 60 s default cutting
+> off its ~87 s run.)
 
 ## Profile 3 — Mixed
 

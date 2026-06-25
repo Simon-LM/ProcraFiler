@@ -7,6 +7,7 @@ from unittest.mock import patch
 from procrafiler.ai_naming import (
     _ai_sampling_params,
     _ai_throttle,
+    _task_timeout_from_env,
     call_mistral_chat,
     parse_provider_chain,
     task_chain_from_env,
@@ -45,6 +46,45 @@ class TestProviderPlumbing(unittest.TestCase):
         # NAMING / CLASSIFICATION were merged into ANALYSIS and are no longer tasks.
         self.assertEqual(task_chain_from_env("NAMING"), [])
         self.assertEqual(task_chain_from_env("CLASSIFICATION"), [])
+
+
+class TestProviderAwareTimeout(unittest.TestCase):
+    _VARS = ("PROCRAFILER_AI_TIMEOUT", "PROCRAFILER_AI_LOCAL_TIMEOUT", "PROCRAFILER_AI_ANALYSIS_TIMEOUT")
+
+    def setUp(self) -> None:
+        self._saved = {k: os.environ.get(k) for k in self._VARS}
+        for k in self._VARS:
+            os.environ.pop(k, None)
+
+    def tearDown(self) -> None:
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _t(self, provider: str | None) -> int:
+        return _task_timeout_from_env("ANALYSIS", default_value=60, provider=provider)
+
+    def test_defaults_moderate_for_api_generous_for_local(self) -> None:
+        self.assertEqual(self._t("mistral"), 60)
+        self.assertEqual(self._t(None), 60)
+        self.assertGreaterEqual(self._t("ollama"), 900)
+
+    def test_api_knob_only_affects_the_api(self) -> None:
+        os.environ["PROCRAFILER_AI_TIMEOUT"] = "30"
+        self.assertEqual(self._t("mistral"), 30)
+        self.assertGreaterEqual(self._t("ollama"), 900)  # local unaffected by the API knob
+
+    def test_local_knob_only_affects_local(self) -> None:
+        os.environ["PROCRAFILER_AI_LOCAL_TIMEOUT"] = "1500"
+        self.assertEqual(self._t("ollama"), 1500)
+        self.assertEqual(self._t("mistral"), 60)  # API unaffected by the local knob
+
+    def test_per_task_override_wins_for_either_provider(self) -> None:
+        os.environ["PROCRAFILER_AI_ANALYSIS_TIMEOUT"] = "1200"
+        self.assertEqual(self._t("ollama"), 1200)
+        self.assertEqual(self._t("mistral"), 1200)
 
 
 class TestAiThrottle(unittest.TestCase):
