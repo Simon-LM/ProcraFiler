@@ -11,7 +11,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
-- **`procrafiler scrub` — integrity check (data-durability, phase 1).** Re-hashes stored documents and compares them to the catalog `sha256`, on the **library** and the **mirror**, so silent corruption (bit rot) or tampering is detected. Incremental (`--limit N`, least-recently-verified first) or full; `--no-mirror` to skip the mirror; exits non-zero on any problem. A new `last_verified_utc` catalog column records when each document was last checked. Detection only for now — automatic repair (`heal`) is the next step. See [docs/durability.md](docs/durability.md).
+- **`procrafiler scrub` — integrity check & self-healing (data-durability, phase 1).** Re-hashes stored documents and compares them to the catalog `sha256`, on the **library** and the **mirror**, so silent corruption (bit rot) or tampering is detected. Incremental (`--limit N`, least-recently-verified first) or full; `--no-mirror` to skip the mirror; exits non-zero on any problem. A new `last_verified_utc` catalog column records when each document was last checked. With **`--repair`** it **heals**: a bad copy is restored from a verified-good one (library ↔ mirror), atomically and re-verified — never from a source that doesn't itself match the catalog, and never when all copies are bad (reported as unrecoverable). Repairs are written to the action log. See [docs/durability.md](docs/durability.md).
 
 ## [0.5.0] - 2026-06-24 — Guided first-run setup & AI selection
 

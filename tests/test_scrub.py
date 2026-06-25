@@ -129,5 +129,62 @@ class TestScrub(_Env):
         self.assertIn("PROBLEMS", format_report(scrub(self.paths, self.catalog, now_utc=_NOW)))
 
 
+class TestHeal(_Env):
+    def _lib(self, rel: str) -> Path:
+        return self.paths.library_root / rel
+
+    def _mir(self, rel: str) -> Path:
+        return self.paths.mirror_root / rel
+
+    def test_repair_mirror_from_library(self) -> None:
+        self._add("Personal/a.txt", b"good")
+        self._mir("Personal/a.txt").write_bytes(b"rotten")
+        report = scrub(self.paths, self.catalog, repair=True, now_utc=_NOW)
+        self.assertTrue(report.healthy)
+        self.assertEqual(len(report.repaired), 1)
+        self.assertEqual((report.repaired[0].where, report.repaired[0].source), ("mirror", "library"))
+        self.assertEqual(self._mir("Personal/a.txt").read_bytes(), b"good")  # restored
+
+    def test_repair_library_from_mirror_and_marks_verified(self) -> None:
+        doc = self._add("Personal/a.txt", b"good")
+        self._lib("Personal/a.txt").write_bytes(b"corrupted")  # canonical copy goes bad
+        report = scrub(self.paths, self.catalog, repair=True, now_utc=_NOW)
+        self.assertTrue(report.healthy)
+        self.assertEqual((report.repaired[0].where, report.repaired[0].source), ("library", "mirror"))
+        self.assertEqual(self._lib("Personal/a.txt").read_bytes(), b"good")  # restored from mirror
+        self.assertEqual(self._last_verified()[doc], _NOW)  # healed → counted as verified
+
+    def test_repair_recreates_missing_mirror(self) -> None:
+        self._add("Personal/a.txt", b"good")
+        self._mir("Personal/a.txt").unlink()
+        report = scrub(self.paths, self.catalog, repair=True, now_utc=_NOW)
+        self.assertTrue(report.healthy)
+        self.assertTrue(self._mir("Personal/a.txt").is_file())
+
+    def test_both_copies_bad_is_unrecoverable(self) -> None:
+        self._add("Personal/a.txt", b"good")
+        self._lib("Personal/a.txt").write_bytes(b"bad1")
+        self._mir("Personal/a.txt").write_bytes(b"bad2")
+        report = scrub(self.paths, self.catalog, repair=True, now_utc=_NOW)
+        self.assertFalse(report.healthy)
+        self.assertEqual(report.repaired, [])  # no good source → nothing restored
+        self.assertTrue(report.repair_attempted)
+        self.assertIn("UNRECOVERABLE", format_report(report))
+
+    def test_repair_is_logged_to_the_action_log(self) -> None:
+        self._add("Personal/a.txt", b"good")
+        self._mir("Personal/a.txt").write_bytes(b"rotten")
+        scrub(self.paths, self.catalog, repair=True, now_utc=_NOW)
+        self.assertIn("heal_restore", self.paths.actions_log_file.read_text(encoding="utf-8"))
+
+    def test_no_repair_without_the_flag(self) -> None:
+        self._add("Personal/a.txt", b"good")
+        self._mir("Personal/a.txt").write_bytes(b"rotten")
+        report = scrub(self.paths, self.catalog, now_utc=_NOW)  # repair defaults False
+        self.assertFalse(report.healthy)
+        self.assertEqual(report.repaired, [])
+        self.assertEqual(self._mir("Personal/a.txt").read_bytes(), b"rotten")  # untouched
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     scrub_p.add_argument("--limit", type=int, default=None,
                          help="Check only N documents, least-recently-verified first (default: all)")
     scrub_p.add_argument("--no-mirror", action="store_true", help="Check the library only, skip the mirror")
+    scrub_p.add_argument("--repair", action="store_true",
+                         help="Heal: restore a bad copy from a verified-good one (library <-> mirror)")
 
     subparsers.add_parser(
         "review",
@@ -603,7 +605,7 @@ def cmd_rescan() -> int:
     return 0
 
 
-def cmd_scrub(limit: int | None, no_mirror: bool) -> int:
+def cmd_scrub(limit: int | None, no_mirror: bool, repair: bool) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     catalog = CatalogRepository(paths.catalog_db_file)
@@ -615,6 +617,7 @@ def cmd_scrub(limit: int | None, no_mirror: bool) -> int:
                 catalog,
                 limit=limit,
                 check_mirror=not no_mirror,
+                repair=repair,
                 now_utc=_resolve_now_utc().isoformat(),
             )
     except RuntimeLockedError as err:
@@ -700,7 +703,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "rescan":
         return cmd_rescan()
     if args.command == "scrub":
-        return cmd_scrub(args.limit, args.no_mirror)
+        return cmd_scrub(args.limit, args.no_mirror, args.repair)
     if args.command == "deleted-history":
         return cmd_deleted_history(args.limit)
 

@@ -1,20 +1,28 @@
-"""Integrity scrub (durability Phase 1, see docs/durability.md).
+"""Integrity scrub & heal (durability Phase 1, see docs/durability.md).
 
 Re-hash stored documents and compare to the catalog `sha256`, on the **library**
-and (when enabled) the **mirror**. This is **detection only** — repairing a bad
-copy from a good one (`heal`) is the next step. The catalog hash is the source of
-truth, so a scrub finds both silent corruption (bit rot) and tampering.
+and (when enabled) the **mirror**. The catalog hash is the source of truth, so a
+scrub finds both silent corruption (bit rot) and tampering.
+
+With `repair=True` (`scrub --repair`) it also **heals**: a bad copy is restored
+from a verified-good one (library ↔ mirror), atomically and re-verified. It never
+restores from a source that does not itself match the catalog hash, and never
+touches a document whose only copies are all bad (reported as unrecoverable).
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import RuntimePaths, load_feature_settings
+from procrafiler.pipeline import _append_action_log
 
 _OK = "ok"
 _CORRUPT = "corrupt"
@@ -35,6 +43,26 @@ def _verify(path: Path, expected_sha256: str) -> str:
     return _OK if _hash_file(path) == expected_sha256 else _CORRUPT
 
 
+def _restore(src: Path, dst: Path, expected_sha256: str) -> bool:
+    """Copy `src`→`dst` atomically, but ONLY if `src` matches the catalog hash and
+    the written copy verifies. Returns False (and changes nothing) otherwise — we
+    never restore from a copy that is not itself known-good."""
+    if not src.is_file() or _hash_file(src) != expected_sha256:
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".heal-tmp")
+    try:
+        shutil.copy2(src, tmp)
+        if _hash_file(tmp) != expected_sha256:
+            tmp.unlink(missing_ok=True)
+            return False
+        os.replace(tmp, dst)
+        return True
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        return False
+
+
 @dataclass
 class ScrubIssue:
     doc_id: str
@@ -44,13 +72,23 @@ class ScrubIssue:
 
 
 @dataclass
+class RepairAction:
+    doc_id: str
+    relative_path: str
+    where: str  # the copy that was rewritten: "library" | "mirror"
+    source: str  # the verified-good copy it was restored from: "mirror" | "library"
+
+
+@dataclass
 class ScrubReport:
     checked: int = 0
     library_ok: int = 0
     mirror_checked: int = 0
     mirror_ok: int = 0
     mirror_enabled: bool = True
+    repair_attempted: bool = False
     issues: list[ScrubIssue] = field(default_factory=list)
+    repaired: list[RepairAction] = field(default_factory=list)
 
     @property
     def corrupt(self) -> int:
@@ -71,16 +109,19 @@ def scrub(
     *,
     limit: int | None = None,
     check_mirror: bool = True,
+    repair: bool = False,
     now_utc: str | None = None,
 ) -> ScrubReport:
     """Verify up to `limit` stored documents (least-recently-verified first;
-    `limit=None` = all). Documents whose **library** copy matches are marked
-    verified; mismatches/missing on either copy are collected as issues."""
+    `limit=None` = all). When `repair`, heal a bad copy from a verified-good one.
+    A document is marked verified only when its **library** copy matches."""
     when = now_utc or datetime.now(timezone.utc).isoformat()
-    mirror_enabled = bool(load_feature_settings(paths)["features"].get("mirror_sync", True))
+    features = load_feature_settings(paths)["features"]
+    mirror_enabled = bool(features.get("mirror_sync", True))
     do_mirror = check_mirror and mirror_enabled
+    op_id = str(uuid4())
 
-    report = ScrubReport(mirror_enabled=mirror_enabled)
+    report = ScrubReport(mirror_enabled=mirror_enabled, repair_attempted=repair)
     verified: list[str] = []
 
     for doc in catalog.documents_for_scrub(limit=limit):
@@ -96,39 +137,71 @@ def scrub(
             rel = None
             rel_str = str(lib_path)
 
-        if _verify(lib_path, expected) == _OK:
-            report.library_ok += 1
-            verified.append(doc_id)  # only mark verified when the library copy is good
-        else:
-            state = _MISSING if not lib_path.is_file() else _CORRUPT
-            report.issues.append(ScrubIssue(doc_id, rel_str, "library", state))
+        lib_state = _verify(lib_path, expected)
+        mir_path = (paths.mirror_root / rel) if (do_mirror and rel is not None) else None
+        mir_state = _verify(mir_path, expected) if mir_path is not None else None
 
-        if do_mirror and rel is not None:
-            mirror_path = paths.mirror_root / rel
+        if repair:
+            # Restore a bad library from a good mirror first…
+            if lib_state != _OK and mir_state == _OK and _restore(mir_path, lib_path, expected):  # type: ignore[arg-type]
+                lib_state = _OK
+                report.repaired.append(RepairAction(doc_id, rel_str, "library", "mirror"))
+                _log_repair(paths, op_id, "library", lib_path, features)
+            # …then restore a bad mirror from the (now) good library.
+            if mir_path is not None and mir_state != _OK and lib_state == _OK and _restore(lib_path, mir_path, expected):
+                mir_state = _OK
+                report.repaired.append(RepairAction(doc_id, rel_str, "mirror", "library"))
+                _log_repair(paths, op_id, "mirror", mir_path, features)
+
+        if lib_state == _OK:
+            report.library_ok += 1
+            verified.append(doc_id)
+        else:
+            report.issues.append(ScrubIssue(doc_id, rel_str, "library", lib_state))
+
+        if mir_path is not None:
             report.mirror_checked += 1
-            mir_state = _verify(mirror_path, expected)
             if mir_state == _OK:
                 report.mirror_ok += 1
             else:
-                report.issues.append(ScrubIssue(doc_id, rel_str, "mirror", mir_state))
+                report.issues.append(ScrubIssue(doc_id, rel_str, "mirror", str(mir_state)))
 
     catalog.mark_verified(verified, when_utc=when)
     return report
 
 
+def _log_repair(paths: RuntimePaths, op_id: str, where: str, path: Path, features: dict[str, bool]) -> None:
+    _append_action_log(
+        paths,
+        operation_id=op_id,
+        action="heal_restore",
+        status="success",
+        message=f"restored {where} copy from the verified-good copy",
+        path_after=str(path),
+        features=features,
+    )
+
+
 def format_report(report: ScrubReport) -> str:
-    lines = [
+    head = (
         f"Scrub: {report.checked} document(s) checked — "
         f"library {report.library_ok}/{report.checked} OK"
-    ]
-    if report.mirror_enabled:
-        lines[0] += f", mirror {report.mirror_ok}/{report.mirror_checked} OK"
-    else:
-        lines[0] += ", mirror disabled"
+    )
+    head += (
+        f", mirror {report.mirror_ok}/{report.mirror_checked} OK"
+        if report.mirror_enabled
+        else ", mirror disabled"
+    )
+    lines = [head]
+    if report.repaired:
+        lines.append(f"Repaired {len(report.repaired)} copies:")
+        for r in report.repaired:
+            lines.append(f"  [repaired] {r.where} ← {r.source}: {r.relative_path}")
     if report.healthy:
         lines.append("All verified copies match the catalog. ✓")
     else:
-        lines.append(f"PROBLEMS: {report.corrupt} corrupt, {report.missing} missing")
+        label = "UNRECOVERABLE" if report.repair_attempted else "PROBLEMS"
+        lines.append(f"{label}: {report.corrupt} corrupt, {report.missing} missing")
         for issue in report.issues:
             lines.append(f"  [{issue.state}] {issue.where}: {issue.relative_path}")
     return "\n".join(lines)
