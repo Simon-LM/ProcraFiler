@@ -1,17 +1,41 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from unittest.mock import patch
 
 from procrafiler.ai_naming import (
+    ProviderCallError,
     _ai_sampling_params,
     _ai_throttle,
     _task_timeout_from_env,
     call_mistral_chat,
+    call_ollama_chat,
     parse_provider_chain,
     task_chain_from_env,
 )
+
+
+class _FakeStreamResp:
+    """A minimal stand-in for an Ollama streaming HTTP response: a context manager
+    that is iterable over newline-delimited JSON byte-lines, with a `.status`."""
+
+    def __init__(self, status: int, lines: list[bytes]) -> None:
+        self.status = status
+        self._lines = lines
+
+    def __enter__(self) -> "_FakeStreamResp":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def __iter__(self):
+        return iter(self._lines)
+
+    def read(self) -> bytes:
+        return b"".join(self._lines)
 
 
 class TestProviderPlumbing(unittest.TestCase):
@@ -46,6 +70,42 @@ class TestProviderPlumbing(unittest.TestCase):
         # NAMING / CLASSIFICATION were merged into ANALYSIS and are no longer tasks.
         self.assertEqual(task_chain_from_env("NAMING"), [])
         self.assertEqual(task_chain_from_env("CLASSIFICATION"), [])
+
+
+class TestOllamaStreaming(unittest.TestCase):
+    def test_accumulates_streamed_content_until_done(self) -> None:
+        lines = [
+            b'{"message": {"content": "{\\"na"}, "done": false}\n',
+            b'{"message": {"content": "me\\": \\"X\\"}"}, "done": true}\n',
+            b'{"message": {"content": "AFTER-DONE should be ignored"}, "done": false}\n',
+        ]
+        with patch("procrafiler.ai_naming.urlopen", return_value=_FakeStreamResp(200, lines)):
+            out = call_ollama_chat("prompt", "qwen3.5:9b", timeout=5)
+        self.assertEqual(out, '{"name": "X"}')  # chunks joined, stopped at done
+
+    def test_http_error_status_raises(self) -> None:
+        with patch("procrafiler.ai_naming.urlopen", return_value=_FakeStreamResp(500, [b'{"error":"boom"}'])):
+            with self.assertRaises(ProviderCallError):
+                call_ollama_chat("p", "m", timeout=5)
+
+    def test_empty_stream_raises(self) -> None:
+        lines = [b'{"message": {"content": ""}, "done": true}\n']
+        with patch("procrafiler.ai_naming.urlopen", return_value=_FakeStreamResp(200, lines)):
+            with self.assertRaises(ProviderCallError):
+                call_ollama_chat("p", "m", timeout=5)
+
+    def test_request_sets_stream_true_and_idle_timeout(self) -> None:
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):  # noqa: ANN001
+            captured["timeout"] = timeout
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return _FakeStreamResp(200, [b'{"message": {"content": "{}"}, "done": true}\n'])
+
+        with patch("procrafiler.ai_naming.urlopen", fake_urlopen):
+            call_ollama_chat("p", "m", timeout=777)
+        self.assertEqual(captured["timeout"], 777)        # idle timeout passed to the socket
+        self.assertTrue(captured["payload"]["stream"])     # streaming enabled
 
 
 class TestProviderAwareTimeout(unittest.TestCase):
