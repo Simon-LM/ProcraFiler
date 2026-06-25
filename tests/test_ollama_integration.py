@@ -68,9 +68,9 @@ class TestOllamaPipelineIntegration(unittest.TestCase):
         os.environ["PROCRAFILER_AI_IMAGE_TIMEOUT"] = "240"
         os.environ["PROCRAFILER_AI_OCR_TIMEOUT"] = "240"
         # Pause before each real local call so a long sequential run is gentler on
-        # the GPU (these tests can spill past ~12GB VRAM onto the CPU). Override with
-        # PROCRAFILER_AI_THROTTLE to taste; calls are always sequential, never parallel.
-        os.environ.setdefault("PROCRAFILER_AI_THROTTLE", "3")
+        # the GPU. Default 1.5s; raise it via PROCRAFILER_AI_THROTTLE on a machine that
+        # runs hot. Calls are always sequential, never parallel.
+        os.environ.setdefault("PROCRAFILER_AI_THROTTLE", "1.5")
 
         from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 

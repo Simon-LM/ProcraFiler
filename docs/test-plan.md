@@ -52,7 +52,7 @@ Expand `tests/test_ollama_integration.py` (currently 2).
 
 > These run only with `PROCRAFILER_OLLAMA_IT=1` (`make test-ollama`); they are slow
 > and load local models — never part of `make test`. `PROCRAFILER_AI_THROTTLE`
-> (default 3 s here) paces the sequential calls.
+> (default 1.5 s) paces the sequential calls — raise it on a machine that runs hot.
 
 ## 🟠 P2 — Mirror & consistency
 
