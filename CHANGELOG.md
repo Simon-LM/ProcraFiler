@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-25 — Encrypted backups
+
+Completes the data-durability work (v0.6.0) with encrypted cold backups, and is the last feature step before the 1.0 stabilisation pass (more tests, then real-world testing).
+
 ### Added
 
 - **Encrypted backups — `procrafiler backup --to <dir> --encrypt`.** Protects the cold backup bundle with a passphrase (**AES-256-GCM**, key derived via scrypt), for cloud/offsite storage. The output is `…tar.gz.enc`; `restore --from-archive` detects an encrypted backup and asks for the passphrase (or reads `PROCRAFILER_BACKUP_PASSPHRASE`). The passphrase is prompted twice (confirmed) at backup time and never stored — keep it safe, as it cannot be recovered. Adds the `cryptography` dependency.
