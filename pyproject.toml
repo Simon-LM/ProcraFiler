@@ -14,7 +14,7 @@ authors = [
 license = { file = "LICENSE.md" }
 keywords = ["linux", "ubuntu", "file-management", "classification", "ai-assistant"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: End Users/Desktop",
   "License :: OSI Approved :: MIT License",
   "Operating System :: POSIX :: Linux",

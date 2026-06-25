@@ -9,6 +9,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-25 — First stable release
+
+ProcraFiler 1.0. **An update never forces you to reorganize your folders** — install, update and uninstall preserve your library, catalog, settings and keys, the catalog migrates in place, and the version always tracks the release tag.
+
+Everything from the 0.x line is now blessed as stable:
+
+- **Guided first run** (`procrafiler setup`, English) — choose where your files live (Inbox, Library, optional Mirror on a separate disk), pick the AI (Mistral API or local Ollama, from a tested list), then a short "who you are" context step. No config to hand-edit.
+- **AI-first filing** — every document is read for its content; the name, the document date and the destination category come from that content (never the original filename). Files dropped together are grouped into a dated affair/series folder; when the AI is unsure it parks the file in a decisions queue you resolve with `review`.
+- **You stay in control** — reorganize the library by hand and `rescan` follows it into the catalog (no AI, your names/locations win). Offline, typo-tolerant, multilingual `search` (and an opt-in AI-assisted `search-ai`). Nothing is ever deleted without your action.
+- **Data durability** — `scrub` detects silent corruption (bit rot/tampering) and `--repair` heals it from a verified-good copy; `verify-catalog` rebuilds a damaged catalog from its snapshot; `restore` rebuilds everything from a self-contained mirror after a disk loss; `backup` writes immutable, dated, optionally-encrypted offline archives. (Design + the Phase 2–4 roadmap — LAN/multi-replica, cloud via rclone, SMART — in [docs/durability.md](docs/durability.md).)
+
 ### Added
 
 - **Encrypted backups — `procrafiler backup --to <dir> --encrypt`.** Protects the cold backup bundle with a passphrase (**AES-256-GCM**, key derived via scrypt), for cloud/offsite storage. The output is `…tar.gz.enc`; `restore --from-archive` detects an encrypted backup and asks for the passphrase (or reads `PROCRAFILER_BACKUP_PASSPHRASE`). The passphrase is prompted twice (confirmed) at backup time and never stored — keep it safe, as it cannot be recovered. Adds the `cryptography` dependency.
