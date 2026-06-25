@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **Encrypted backups — `procrafiler backup --to <dir> --encrypt`.** Protects the cold backup bundle with a passphrase (**AES-256-GCM**, key derived via scrypt), for cloud/offsite storage. The output is `…tar.gz.enc`; `restore --from-archive` detects an encrypted backup and asks for the passphrase (or reads `PROCRAFILER_BACKUP_PASSPHRASE`). The passphrase is prompted twice (confirmed) at backup time and never stored — keep it safe, as it cannot be recovered. Adds the `cryptography` dependency.
+
 ## [0.6.0] - 2026-06-25 — Data durability: detect, heal, recover
 
 ProcraFiler now protects the archive itself. It detects **silent corruption** (bit rot / tampering), **repairs** it from a good copy, can **rebuild** a damaged catalog, **restart** from a mirror after a disk loss, and write **immutable offline backups** — all on the existing local mirror, pure Python, no new dependencies. The full design (and the Phase 2–4 roadmap: LAN/multi-replica, cloud via rclone, SMART) is in [docs/durability.md](docs/durability.md).

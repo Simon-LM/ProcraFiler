@@ -216,7 +216,9 @@ Pure Python, no new deps, no root. Lays the manifest + restore foundations.
       unit, re-rooting paths to the new library location. **Done** (`restore.py`).
 - [x] `procrafiler backup --to <dir>` — consistent dated bundle (`.tar.gz` + `.sha256`),
       mirror-shaped; `restore --from-archive`. **Done** (`backup.py`).
-      *Pending:* `--encrypt` (next small slice) and `--only documents` selection (Phase 2/3).
+- [x] `backup --encrypt` — passphrase-protected bundle (**AES-256-GCM** + scrypt) →
+      `.tar.gz.enc`; restore detects + decrypts. **Done**. *(`--only documents` selection
+      stays a Phase-2/3 concern.)*
 - [x] Backup reminder — last-backup date recorded; `status` shows it and nudges when
       overdue. **Done**.
 - [x] Offline tests for each; docs (README + this file) updated. **Done.**
