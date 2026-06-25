@@ -2,242 +2,242 @@
 
 # File durability — design (draft / not yet implemented)
 
-> Status: **design to validate before coding.** This captures the architecture so
-> the early phases can ship small while later ones (LAN, cloud, encrypted backups)
-> plug in without a rewrite. Open questions are marked **[?]**.
+> Status: **design to validate, then implement step by step** (see the checklist at the
+> end). It captures the architecture so the early phases ship small while later ones
+> (LAN, cloud, encrypted backups) plug in without a rewrite. Open questions: **[?]**.
 
-ProcraFiler is an **archive**: most files are written once and rarely touched. Two
-risks then matter: **silent corruption** (bit rot on SSD/HDD over years) and **loss
-of a whole disk/location**. Durability answers both: detect & repair corruption,
-and keep enough redundant, self-describing copies to fully restart after a loss.
+ProcraFiler is an **archive**: most files are written once and rarely touched. Two risks
+matter: **silent corruption** (bit rot on SSD/HDD over years) and **loss of a whole
+disk/location**. Durability answers both: detect & repair corruption, and keep enough
+redundant, self-describing copies to fully restart after a loss.
 
 ## Principles (professional baseline)
 
 - **3-2-1-1-0**: ≥3 copies · on ≥2 different media · ≥1 offsite · +1 offline/immutable
   (encrypted cold backup) · 0 *unverified* backups (we scrub, we don't assume).
-- **Checksums + scrub + heal** (ZFS/Btrfs idea, applied at the file level so it works
-  on any filesystem): re-hash files, compare to the catalog's `sha256`, and **repair a
-  bad copy from a good one**. Detection without a repair source is not durability.
-- **Every backup location is self-contained** — documents **+ catalog + snapshot +
-  manifest** — so any one location can fully bootstrap a restore.
-- **Metadata is as precious as the files.** Losing the catalog loses search, dedup
-  tombstones and provenance, so it is replicated and recoverable too.
-- **Security first.** Personal documents never go to a cloud in clear text
-  (client-side encryption), and **keys / `.env` are never replicated** anywhere shared.
-- **Never destroy the only good copy.** Repair = write new → verify hash → then swap.
+- **Checksums + scrub + heal** (ZFS/Btrfs idea, at the file level so it works on any
+  filesystem): re-hash files, compare to the catalog's `sha256`, and **repair a bad copy
+  from a good one**. Detection without a repair source is not durability.
+- **No mandatory single master** (see below): every replica is editable; the system
+  **reconciles**. We *recommend* a primary library to keep things simple, we don't require it.
+- **Every location is self-contained** — documents **+ catalog + snapshot + manifest** —
+  so any one location can fully bootstrap a restore.
+- **Security first.** Personal documents never go to a cloud in clear text (client-side
+  encryption); **keys / `.env` are never replicated** anywhere shared.
+- **Never destroy the only good copy, never lose an edit.** Repair = write new → verify
+  hash → swap. A true conflict keeps **both** versions.
 
-## Authority model & write surfaces (the backbone)
+## Reconciliation model — no single master (the backbone)
 
-There is exactly **one source of truth**: the **primary library + its catalog** (per-file
-`sha256` and an `updated_at` timeline). Everything else is **derived**.
+The truth is **not** one privileged node; it is the **reconciled union of all replicas**,
+computed from three things ProcraFiler already has: the per-file **`sha256`** (content
+identity), the stable **`doc_id`** (document identity, survives edits), and the
+**`updated_at` timeline** + **deletion tombstones**.
 
-- **Mirrors are non-authoritative replicas**, replicated **one-way** (primary → mirror)
-  and **versioned** (the existing `mirror.versions_keep` + `Mirror_Trash` retention keep
-  previous versions). A mirror is for **reading and recovery**, never a place to edit.
-- **Two legitimate write surfaces**, so the user never has to touch a mirror:
-  1. the **primary library** — direct edits are fine; `rescan` absorbs hand
-     moves/renames/edits into the catalog (your location/name win) before each run;
-  2. the **inbox** (local or cloud) — add files from anywhere; **conflict-free** because
-     it is **drained** on intake.
-- **Self-correction:**
-  - Editing a *mirror* by mistake = drift: the next **scrub** sees its hash no longer
-    matches the catalog and **heals it from the primary** (a mirror edit never wins).
-  - A mistake in the *primary* itself is recoverable too: the **versioned mirror** holds
-    the previous good version, so a file can be rolled back. The scrub **flags** a file
-    whose content changed outside a tracked operation, so the user chooses **keep** (it
-    was intentional) or **restore** (accident/corruption).
+**Terminology (kept on purpose):** the main copy is the **library**, the others are
+**mirrors**. The naming is there to **encourage** editing in the library (the simplest
+path, fewest conflicts) — but editing a mirror, or dropping into any inbox, must **never
+break anything**.
 
-> Guidance to surface to users: **work from one place** — edit in the primary library, or
-> add through the inbox; don't edit mirror copies (the app reverts them). The inbox never
-> creates a conflict.
+What makes this conflict-free in practice:
+
+- **Adding from any inbox, on any replica, never conflicts.** It is an **append-mostly**
+  archive: two adds = two documents; the *same* file added in two places = **deduplicated**
+  to one document (same `sha256`). At worst a recognised duplicate, never a conflict.
+- **Moves / renames / deletes on any replica are reconciled**, not lost. Each replica is a
+  full unit (files + catalog/manifest), so a **reconcile** merges them: a newer move wins
+  by **timeline**; a delete is a **tombstone** that propagates without resurrecting the
+  file. This is today's `rescan` (which already lets the user's hand-edits win)
+  **generalised to N locations**.
+- **The one genuinely hard case** (exists in *every* distributed system): the **same
+  `doc_id` edited into different content at two replicas** before they meet. ProcraFiler
+  **never loses data** → it keeps **both** as **conflict copies** (e.g.
+  `…(conflict 2026-06-24, from Proton).pdf`) and surfaces them in **`review`** for the
+  user to resolve (possibly a manual edit). Rare for write-once documents. **[?]** exact
+  resolution UX (auto-pick newest? always ask? manual merge?) — to finalise.
+
+> Guidance surfaced to users: **prefer editing in the library**, or add through **any
+> inbox** (always safe). Editing a mirror works too and is reconciled — it just *may*
+> create a conflict copy if the same file was also changed elsewhere.
 
 ## Existing building blocks (already in the repo)
 
-- `documents.sha256` — a content hash per document, indexed. The scrub's source of truth.
-- `catalog_snapshot.json` — an atomic (tmp+rename) JSON export of the catalog →
-  a corruption-resistant fallback if the SQLite `.db` is damaged.
-- Runtime **lock** → safe cold copies of the DB. **Action log** → audit trail.
-- The **mirror** (`mirror_sync`) → today's second copy and first repair source.
-- `setup` already advises the mirror on a **different disk** than the library.
+- `documents.doc_id` (stable id) + `documents.sha256` (content hash, indexed) → identity
+  for reconcile and the scrub's source of truth.
+- Deletion **tombstones** (id + hash + date) + the **action log** → safe delete propagation
+  and audit trail.
+- `catalog_snapshot.json` — atomic (tmp+rename) JSON export of the catalog → a
+  corruption-resistant fallback if the SQLite `.db` is damaged.
+- `rescan` — already follows hand moves/renames/deletes into the catalog (the seed of
+  reconcile). Runtime **lock** → safe cold copies of the DB.
+- The **mirror** (`mirror_sync`, `mirror.versions_keep`, `Mirror_Trash`) → a versioned
+  second copy and first repair source. `setup` advises it on a **different disk**.
 
 ## Core model: destinations
 
-Generalise the single mirror into an ordered list of **destinations**. A destination
-is four independent choices — this is what lets every future case fit without a rewrite:
+Generalise the single mirror into an ordered list of **destinations**. A destination is
+four independent choices — this is what lets every future case fit without a rewrite:
 
 | Axis | Values | Notes |
 |------|--------|-------|
-| **Transport** | `local` · `lan` · `rclone` | where/how: a path on another disk, a path on another machine, or an rclone remote (cloud). |
-| **Mode** | `mirror` · `backup` | **mirror** = browsable, files stored **as-is** (you can open them at the destination). **backup** = opaque archive (bundled, encrypted), disaster-recovery only. |
-| **Selection** | filter by category / type / size | so a small destination gets a subset (e.g. documents only, no large media). Expressed against catalog metadata. |
-| **Packaging + encryption** | `as-is` / `zip-bundles` · `none` / `client-side crypt` | cloud destinations: encryption **required**; backups: usually zip + encrypt. |
+| **Transport** | `local` · `lan` · `rclone` | a path on another disk · a path/share on another machine · an rclone remote (cloud). |
+| **Mode** | `mirror` · `backup` | **mirror** = browsable replica, files **as-is**, reconciled. **backup** = opaque immutable archive (bundled, encrypted), disaster-recovery only. |
+| **Selection** | by category / type / size | a small destination gets a subset (e.g. documents only, no large media). Expressed against catalog metadata. |
+| **Packaging + encryption** | `as-is` / `zip-bundles` · `none` / `client-side crypt` | cloud: encryption **required**; backups: usually zip + encrypt. |
 
-Examples this expresses cleanly:
-
-- **Local mirror** (today): `local · mirror · all · as-is · none`.
-- **Second machine on the LAN**: `lan · mirror · all · as-is · none`.
-- **Usable cloud drive** (Proton/Google): `rclone · mirror · documents-only · as-is · crypt`.
-- **Cold offsite backup**: `rclone · backup · all · zip-bundles · crypt`.
+Examples: local mirror today = `local · mirror · all · as-is · none`; a LAN machine =
+`lan · mirror · all · as-is · none`; a usable cloud drive = `rclone · mirror · docs-only ·
+as-is · crypt`; a cold offsite backup = `rclone · backup · all · zip-bundles · crypt`.
 
 ### Manifest (per destination)
 
-Each destination carries a `manifest.json`: for every item, `{relative_path, sha256,
-size, doc_id, last_verified}`. It makes a destination **verifiable without downloading**
-(compare remote hashes, e.g. via `rclone check`) and **bootstrappable** (rebuild the
-catalog from it).
+Each destination carries a `manifest.json`: per item `{relative_path, sha256, size,
+doc_id, updated_at, last_verified}`. It makes a destination **verifiable without
+downloading** (compare hashes, e.g. `rclone check`), **reconcilable** (the unit of merge),
+and **bootstrappable** (rebuild the catalog from it).
 
-### Catalog replication = self-contained, restartable units
+### Self-contained, restartable units
 
 Every `mirror`-mode destination also receives `catalog.db` + `catalog_snapshot.json` +
-the manifest. So losing the primary partition is recoverable: point ProcraFiler at a
-destination and `restore` rebuilds library **and** catalog. (Config/keys are *not* in
-the data, by design — re-run `setup` after a restore; the **data** comes from the mirror.)
+the manifest. Losing the primary partition is then recoverable: point ProcraFiler at any
+mirror and `restore` rebuilds library **and** catalog. (Config/keys are not in the data,
+by design — re-run `setup` after a restore; the **data** comes from the mirror.)
 
 ## Cloud specifics
 
 ### Capacity → selective replication (not "everything")
 
-Free tiers are small (Google 15 GB shared, Proton ≈2–5 GB, Dropbox 2 GB, OneDrive 5 GB)
-— fine for **documents**, not for **media**. So a cloud destination uses a **selection
-policy**. Default idea **[?]**:
+Free tiers are small (Google 15 GB shared, Proton ≈2–5 GB, Dropbox 2 GB, OneDrive 5 GB) —
+fine for **documents**, not for **media**. A cloud destination therefore uses a
+**selection policy**. Default idea **[?]**: documents (small) → cloud OK; photos / audio /
+video (large) → local + LAN by default, and to the cloud only as **zip + encrypted cold
+backup** in per-type bundles (`photos/`, `audio/`, `video/`) so they are sent/skipped as a
+group. The catalog knows category + size, so the rules are expressible; a destination is
+**capacity-aware** (reports usage, warns before a configured budget).
 
-- **documents** (small) → cloud OK (fits a free tier);
-- **photos / audio / video** (large) → local + LAN by default; to the cloud only if
-  capacity allows, and preferably as **zip + encrypted cold backup**, in per-type
-  bundles (`photos/`, `audio/`, `video/`) so they can be sent/skipped as a group.
+### Cloud inbox = the friction-free add path
 
-The catalog already knows each document's category and the file knows its size, so these
-rules are expressible. A destination is **capacity-aware**: it reports usage and warns
-before exceeding a configured budget.
-
-### Cloud inbox + cloud mirror = avoid 2-way conflicts
-
-A true two-way sync (you edit files on the drive *and* locally) creates **conflicts**
-(the Dropbox/Drive problem). We sidestep it by separating roles on the cloud:
-
-- **Cloud mirror** = a **read-mostly**, one-way push (ProcraFiler → cloud). You can
-  browse it; you don't edit it. No conflict.
-- **Cloud inbox** = the single **write** surface. You (or your phone) drop files there;
-  ProcraFiler **pulls** them, processes locally, files them into the library — and the
-  pull **drains** the inbox (moves the files out). Because nothing lingers there, there
-  is no persistent divergent state to conflict over.
-
-> User guidance to surface: *the cloud mirror is a copy to read/recover from — to add
-> new files, use the cloud inbox; don't edit the mirror directly.*
-
-If a genuine bidirectional mirror is ever wanted, it becomes `rclone bisync` with
-conflict-copies, using the catalog `sha256` + `updated_at` **timeline** as the arbiter
-(local catalog is canonical). Flagged **advanced / later** — the inbox+read-mirror split
-covers the common need without that complexity. **[?]** conflict policy to finalise.
+The cleanest way to add from a phone or another machine: a **cloud inbox** (a drop folder
+on the drive). ProcraFiler **pulls** it, processes locally, files into the library, and
+the pull **drains** it. Because nothing lingers, an inbox is always conflict-free — this is
+the recommended way to feed the system from anywhere. A cloud **mirror** can also be
+edited (it reconciles), but the inbox is the zero-friction path.
 
 ### Why rclone
 
-One tool covers transport + encryption + verification for dozens of backends (incl.
-Google Drive and Proton Drive): `rclone sync` (1-way), `rclone bisync` (2-way),
-`rclone crypt` (client-side encryption of names + contents), `rclone check` (verify by
-hash against the manifest, no full download).
+One tool covers transport + encryption + verification for dozens of backends (incl. Google
+Drive and Proton Drive): `rclone sync`/`bisync`, `rclone crypt` (client-side encryption of
+names + contents), `rclone check` (verify by hash against the manifest, no full download).
 
 ## Backup trigger & anti-contamination (security-critical)
 
-The cold `backup` (+1/+2) is the insurance against **compromise** (ransomware, a
-hacked machine, human error). So it must **never be reachable for deletion or
-overwrite by the primary machine** — otherwise malware on the primary propagates
-straight into the backup, defeating it. A naive auto-sync to the backup is therefore
-**forbidden**. Acceptable triggers, strongest first:
+The cold `backup` (+1/+2) is the insurance against **compromise** (ransomware, a hacked
+machine, human error). It must **never be deletion/overwrite-reachable from the primary**,
+or malware propagates straight into it. A naive auto-sync to a backup is **forbidden**.
+Acceptable triggers, strongest first:
 
-1. **Manual / offline (air-gap)** — produce an encrypted bundle, the user places it on
-   external media and **unplugs**. Malware can't touch an unplugged disk. **Default for +1.**
+1. **Manual / offline (air-gap)** — produce an encrypted bundle, the user puts it on
+   external media and **unplugs**. **Default.**
 2. **Immutable / append-only remote** — if automatic, only to a **versioned, immutable**
-   target (e.g. S3 Object Lock / WORM, B2 with versioning) using **write-only credentials
-   with no delete right**. Stolen creds can add, not destroy history. Good for a +2.
-3. **Pull-based** — a trusted machine *pulls* from the primary (which has no write access
-   to the backup store).
+   target (S3 Object Lock / WORM, B2 versioning) with **write-only, no-delete** creds.
+3. **Pull-based** — a trusted machine *pulls* from the primary.
 
-**Avoid** the classic 1-way "mirror with overwrite/delete" as a backup: a ransomware-
-encrypted file would overwrite the good version.
+Two app-level safeguards regardless of trigger:
 
-Two app-level safeguards that limit contamination regardless of trigger:
-
-- **Hash-gated replication** — a file is pushed to a destination only if its `sha256`
-  **matches the catalog** (the known-good version). A silently modified/encrypted file no
-  longer matches → it is **not propagated**, and the **scrub detects** the mismatch and
-  alerts. The catalog hash is thus both the bit-rot *and* the tamper detector.
-- **Versioned / retained backups** — even if a bad version slips in somewhere, prior good
-  versions stay recoverable.
-
-So: the **mirror** (browsable local/LAN copy) may be automatic (convenience + heal), but
-it is **not** the anti-compromise protection; the **cold backup** is, and it stays manual/
-confirmed by default, or automatic **only** to an immutable/versioned target.
+- **Hash-gated replication** — a file is pushed only if its `sha256` **matches the
+  catalog**; a silently modified/encrypted file no longer matches → **not propagated**, and
+  the **scrub flags** it. The catalog hash is both the bit-rot *and* the tamper detector.
+- **Versioned / retained** copies — a bad version can't destroy prior good ones.
 
 ## Creating & restoring a cold backup
 
-A cold backup is **immutable**, so it is the *simplest* part of the system — there is
-**no re-sync and no conflict handling**. You don't update an archive; you create a new
-**dated** one, keep N, and prune the oldest (versioning/retention). Re-sync only ever
-concerns the live mirror.
+A cold backup is **immutable**: no re-sync, no conflict. You create a new **dated** one,
+keep N, prune the oldest.
 
 - **Create** — `procrafiler backup --to <path|-> [--only documents] [--encrypt]` →
-  `procrafiler-backup-YYYY-MM-DD.tar.zst(.age)` (+ a `.sha256` beside it). Its value over
-  a plain `zip` is **consistency** (takes the runtime lock, writes a *fresh* catalog
-  snapshot, *then* bundles, so catalog ↔ files match at one instant — a generic tool
-  would copy a possibly mid-write SQLite DB), **self-containment** (documents or the
-  selected subset **+ catalog + snapshot + manifest** → restorable alone), and a **dated
-  name + checksum** to verify the transfer later.
-- **Restore** — `procrafiler restore --from-archive <file>`: decrypt → unpack → verify
-  (manifest + hashes) → then **reuse the same restore path as the mirror** (once unpacked
-  it is just a library + catalog). The only archive-specific code is decrypt/unpack/verify.
-
-**Reminder, not auto-run.** Because auto-pushing a cold backup is forbidden
-(anti-contamination), ProcraFiler instead **records the last-backup date** and **nudges**:
-`doctor` / `status` / `run` remind you after a configurable interval (e.g. "it's been 3
-months — make an offline backup"). The act stays manual.
-
-**Don't reinvent backup.** For the simple case (an encrypted bundle on a USB stick) the
-built-in command is enough. For serious needs (incremental, deduplicated, immutable,
-multi-backend) wrap proven tools — **restic** / **borg** (encrypted, deduplicated,
-verifiable, via rclone) — rather than reimplementing them. Division of labour:
-
-> ProcraFiler produces the **consistent, self-contained export** (the hard, project-
-> specific part); heavy storage / versioning / encryption is delegated to restic / borg
-> / rclone. A built-in "simple encrypted bundle" covers the basic case.
+  `procrafiler-backup-YYYY-MM-DD.tar.zst(.age)` (+ a `.sha256`). Value over a plain `zip`:
+  **consistency** (takes the lock, writes a *fresh* snapshot, *then* bundles → catalog ↔
+  files match at one instant), **self-containment** (docs/subset + catalog + snapshot +
+  manifest), **dated name + checksum**.
+- **Restore** — `procrafiler restore --from-archive <file>`: decrypt → unpack → verify →
+  reuse the mirror restore path.
+- **Reminder, not auto-run** — record the last-backup date; `doctor` / `status` / `run`
+  **nudge** after a configurable interval ("it's been 3 months — make an offline backup").
+- **Don't reinvent backup** — built-in encrypted bundle for the simple case; wrap
+  **restic** / **borg** / **rclone** for serious incremental/immutable needs. ProcraFiler
+  produces the **consistent self-contained export**; the backup tool handles storage.
 
 ## Operations (future `procrafiler` commands)
 
 1. **replicate** — push new/changed docs + catalog + snapshot + manifest to each
-   destination, honouring its selection/packaging/encryption (generalises `mirror_sync`).
-2. **scrub** — re-hash files (primary + each destination), compare to the catalog, record
-   `last_verified`. Incremental (N oldest-verified per pass) so it stays light.
-3. **heal** — restore a diverged copy from a good one (majority vote when ≥3 copies).
-4. **verify-catalog** — `PRAGMA integrity_check` + DB↔snapshot agreement; rebuild the DB
+   destination, honouring selection/packaging/encryption (generalises `mirror_sync`).
+2. **reconcile** — merge the manifests of all reachable replicas into the union: dedup by
+   `sha256`, identity by `doc_id`, order by timeline, deletes via tombstones; emit
+   **conflict copies** for true divergences. (Cross-location `rescan`.)
+3. **scrub** — re-hash files (incremental, oldest-`last_verified` first), compare to the
+   catalog, record `last_verified`, detect mismatches; report.
+4. **heal** — restore a diverged copy from a good one (majority vote when ≥3 copies).
+5. **verify-catalog** — `PRAGMA integrity_check` + DB↔snapshot agreement; rebuild the DB
    from the snapshot if corrupt.
-5. **restore** — `restore --from <destination>`: rebuild library + catalog from a unit.
-6. **health** — SMART (`smartctl`): warn on real disk wear, not a calendar timer.
-
-## Phases (ship small, grow without rewrite)
-
-- **Phase 1 — Integrity & self-healing with the existing local mirror** (candidate for
-  v1.0.0; pure Python, no new deps, no root): `scrub` (+ `last_verified` column via a
-  guarded `ALTER`), `heal` from the mirror, catalog durability (replicate db + snapshot +
-  manifest, `integrity_check`, rebuild from snapshot), `restore --from`, a scrub report
-  with an alert on unrecoverable corruption. **Lays the destination + manifest model.**
-- **Phase 2 — Multiple destinations (≥3 copies, LAN)**: N destinations, majority-vote heal.
-- **Phase 3 — Cloud via rclone**: `rclone` transport, `crypt` encryption, selection
-  policies, the **cloud inbox + read mirror** split, remote hash verification.
-- **Phase 4 — SMART** disk-health monitoring.
+6. **restore** — `--from <destination>` or `--from-archive <file>`: rebuild from a unit.
+7. **backup** — create the dated encrypted bundle (above).
+8. **health** — SMART (`smartctl`): warn on real disk wear, not a calendar timer.
 
 ## Security rules (hard constraints)
 
 - Keys / `.env` are **never** sent to a mirror, LAN share, or cloud.
 - Cloud (and any untrusted location) gets **client-side encrypted** data only.
-- A `backup`-mode destination is opaque (encrypted bundles); a `mirror`-mode local/LAN
-  destination on trusted storage may stay in clear for browsability.
+- A `backup` destination is opaque (encrypted bundles); a trusted `local`/`lan` mirror may
+  stay in clear for browsability.
+
+## Implementation checklist (step by step)
+
+### Phase 1 — Integrity, self-healing & backup, with the single local mirror (v1.0.0)
+
+Pure Python, no new deps, no root. Lays the manifest + restore foundations.
+
+- [ ] Catalog: add `last_verified_utc` (guarded `ALTER`, like `flow_state`/`content_json`).
+- [ ] `manifest.json` writer for the library and the mirror (path, sha256, size, doc_id,
+      updated_at, last_verified); written atomically (tmp+rename).
+- [ ] `procrafiler scrub` — incremental re-hash (oldest-verified first, `--full` option),
+      compare to catalog, update `last_verified`, collect mismatches; printed report +
+      action-log entries; non-zero exit on unrecoverable corruption.
+- [ ] `heal` (inside scrub or `--repair`) — mirror file ≠ catalog & library matches →
+      restore mirror from library; library file ≠ catalog → flag + offer restore from the
+      versioned mirror; never overwrite the only good copy.
+- [ ] Catalog durability — replicate `catalog.db` + `catalog_snapshot.json` + manifest into
+      the mirror; `procrafiler verify-catalog` (`integrity_check` + db↔snapshot; rebuild
+      db from snapshot if corrupt).
+- [ ] `procrafiler restore --from <mirror>` — rebuild library + catalog from the mirror unit.
+- [ ] `procrafiler backup --to <path> [--only documents] [--encrypt]` — consistent dated
+      bundle (+ `.sha256`); `restore --from-archive`.
+- [ ] Backup reminder — store last-backup date; nudge in `doctor`/`status`.
+- [ ] Offline tests for each; docs (README + this file) updated.
+
+### Phase 2 — Multiple replicas & reconciliation (≥3 copies, LAN)
+
+- [ ] Destinations config (ordered list; `local`/`lan` transport; per-destination selection).
+- [ ] `procrafiler reconcile` — cross-location merge (dedup by sha256, identity by doc_id,
+      timeline, tombstones); **conflict copies** surfaced in `review`.
+- [ ] Per-replica **inbox** ingest (drained), so adds work from any replica.
+- [ ] Majority-vote heal with ≥3 copies.
+
+### Phase 3 — Cloud via rclone
+
+- [ ] `rclone` transport + `crypt`; remote hash verification (`rclone check`).
+- [ ] Capacity-aware selection policies; cloud **inbox** + reconciled cloud mirror.
+- [ ] Immutable cold-backup targets (write-only/versioned).
+
+### Phase 4 — Disk health
+
+- [ ] `procrafiler health` — SMART via `smartctl`; "replace this disk" warnings.
 
 ## Open questions [?]
 
-- Default **selection policy** per destination type (what's "documents", media routing,
+- **Conflict resolution UX** for the same-doc-edited-twice case (auto-newest vs always-ask
+  vs manual merge) and how `review` presents it.
+- Default **selection policy** per destination (what counts as "documents", media routing,
   size thresholds, budgets).
-- **Conflict** policy if/when a real 2-way cloud mirror is offered.
-- **Packaging granularity** of cold backups (one archive vs per-category bundles vs
-  incremental) and how restore reads them.
-- Where destination config lives (settings vs env) and how `setup` exposes it without
+- **Cold-backup packaging** (one archive vs per-category bundles vs delegating to restic/borg).
+- Where **destination config** lives (settings vs env) and how `setup` exposes it without
   overwhelming a first-time user.
