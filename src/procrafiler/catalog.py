@@ -202,6 +202,20 @@ class CatalogRepository:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def integrity_ok(self) -> bool:
+        """True if SQLite's `integrity_check` passes (the DB is structurally sound).
+        A DB so damaged it cannot be opened/queried returns False."""
+        try:
+            with self._connect() as conn:
+                rows = conn.execute("PRAGMA integrity_check").fetchall()
+        except sqlite3.DatabaseError:
+            return False
+        return len(rows) == 1 and str(rows[0][0]).lower() == "ok"
+
+    def count_documents(self) -> int:
+        with self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+
     def documents_for_scrub(self, *, limit: int | None = None) -> list[dict[str, str | None]]:
         """Stored library documents to verify, least-recently-verified first
         (NULL `last_verified_utc` = never checked → sorts first in SQLite ASC)."""
