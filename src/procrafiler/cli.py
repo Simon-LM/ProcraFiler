@@ -56,6 +56,8 @@ from procrafiler.pipeline import (
     run_review,
 )
 from procrafiler.catalog import CatalogRepository
+from procrafiler.catalog_verify import format_report as format_catalog_report
+from procrafiler.catalog_verify import verify_catalog
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
 from procrafiler.scrub import format_report as format_scrub_report
@@ -105,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
     scrub_p.add_argument("--no-mirror", action="store_true", help="Check the library only, skip the mirror")
     scrub_p.add_argument("--repair", action="store_true",
                          help="Heal: restore a bad copy from a verified-good one (library <-> mirror)")
+
+    verify_cat = subparsers.add_parser(
+        "verify-catalog",
+        help="Check the catalog DB integrity; --rebuild reconstructs it from catalog_snapshot.json if corrupt",
+    )
+    verify_cat.add_argument("--rebuild", action="store_true",
+                            help="If the DB is corrupt/lost, rebuild it from the snapshot (old DB kept aside)")
 
     subparsers.add_parser(
         "review",
@@ -627,6 +636,19 @@ def cmd_scrub(limit: int | None, no_mirror: bool, repair: bool) -> int:
     return 0 if report.healthy else 1
 
 
+def cmd_verify_catalog(rebuild: bool) -> int:
+    paths = default_runtime_paths()
+    paths.state_root.mkdir(parents=True, exist_ok=True)  # for the lock; don't touch the DB
+    try:
+        with runtime_lock(paths):
+            report = verify_catalog(paths, rebuild=rebuild, now_utc=_resolve_now_utc().isoformat())
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(format_catalog_report(report))
+    return 0 if report.ok else 1
+
+
 def cmd_deleted_history(limit: int) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -704,6 +726,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_rescan()
     if args.command == "scrub":
         return cmd_scrub(args.limit, args.no_mirror, args.repair)
+    if args.command == "verify-catalog":
+        return cmd_verify_catalog(args.rebuild)
     if args.command == "deleted-history":
         return cmd_deleted_history(args.limit)
 

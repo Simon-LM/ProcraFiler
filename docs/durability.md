@@ -205,9 +205,10 @@ Pure Python, no new deps, no root. Lays the manifest + restore foundations.
 - [x] `heal` (`scrub --repair`) — restore a bad copy from a verified-good one (library ↔
       mirror), atomically + re-verified; never from a non-good source; both-bad =
       unrecoverable; logged to the action log. **Done** (`scrub.py` `_restore`).
-- [ ] Catalog durability — replicate `catalog.db` + `catalog_snapshot.json` + manifest into
-      the mirror; `procrafiler verify-catalog` (`integrity_check` + db↔snapshot; rebuild
-      db from snapshot if corrupt).
+- [x] `procrafiler verify-catalog` (`integrity_check`; rebuild the DB from
+      `catalog_snapshot.json` when corrupt/lost, old DB kept aside). **Done**
+      (`catalog_verify.py`). *Pending:* replicating `catalog.db` + snapshot + manifest
+      into the mirror (with the `restore` slice).
 - [ ] `procrafiler restore --from <mirror>` — rebuild library + catalog from the mirror unit.
 - [ ] `procrafiler backup --to <path> [--only documents] [--encrypt]` — consistent dated
       bundle (+ `.sha256`); `restore --from-archive`.
