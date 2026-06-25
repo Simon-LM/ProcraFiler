@@ -11,6 +11,7 @@ from pathlib import Path
 from procrafiler.backup import (
     backup_reminder,
     create_backup,
+    is_encrypted_archive,
     last_backup_utc,
     restore_from_archive,
 )
@@ -27,7 +28,7 @@ def _set_env(base: Path) -> None:
         os.environ[f"PROCRAFILER_{var}"] = str(base / sub)
 
 
-class TestBackup(unittest.TestCase):
+class _BackupEnv(unittest.TestCase):
     def setUp(self) -> None:
         self._snapshot = {k: v for k, v in os.environ.items() if k.startswith("PROCRAFILER_")}
         for k in list(os.environ):
@@ -58,6 +59,8 @@ class TestBackup(unittest.TestCase):
         os.environ.update(self._snapshot)
         self._tmp.cleanup()
 
+
+class TestBackup(_BackupEnv):
     def test_create_writes_dated_archive_and_matching_checksum(self) -> None:
         report = create_backup(self.src, self.backup_dir, now_utc=_NOW)
         archive = Path(report.archive)
@@ -102,6 +105,38 @@ class TestBackup(unittest.TestCase):
     def test_restore_missing_archive_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):
             restore_from_archive(self.src, self.tmp / "nope.tar.gz", now_utc=_NOW)
+
+
+class TestEncryptedBackup(_BackupEnv):
+    def test_encrypted_archive_is_not_a_plain_tar_but_roundtrips(self) -> None:
+        report = create_backup(self.src, self.backup_dir, now_utc=_NOW, passphrase="s3cret")
+        archive = Path(report.archive)
+        self.assertTrue(report.encrypted)
+        self.assertTrue(archive.name.endswith(".tar.gz.enc"))
+        self.assertTrue(is_encrypted_archive(archive))
+        with self.assertRaises(tarfile.ReadError):  # it's encrypted, not a tar
+            tarfile.open(archive, "r:*")
+
+        # roundtrip into a fresh location with the right passphrase
+        _set_env(self.tmp / "dst")
+        dst = default_runtime_paths()
+        ensure_runtime_layout(dst)
+        restored = restore_from_archive(dst, archive, now_utc=_NOW, passphrase="s3cret")
+        self.assertEqual(restored.documents_restored, 2)
+        self.assertEqual((dst.library_root / "Personal/a.txt").read_bytes(), b"alpha")
+
+    def test_wrong_passphrase_fails(self) -> None:
+        report = create_backup(self.src, self.backup_dir, now_utc=_NOW, passphrase="right")
+        _set_env(self.tmp / "dst")
+        dst = default_runtime_paths()
+        ensure_runtime_layout(dst)
+        with self.assertRaises(ValueError):
+            restore_from_archive(dst, Path(report.archive), now_utc=_NOW, passphrase="wrong")
+
+    def test_encrypted_archive_needs_a_passphrase(self) -> None:
+        report = create_backup(self.src, self.backup_dir, now_utc=_NOW, passphrase="x")
+        with self.assertRaises(ValueError):
+            restore_from_archive(self.src, Path(report.archive), now_utc=_NOW)  # no passphrase
 
 
 if __name__ == "__main__":

@@ -55,7 +55,13 @@ from procrafiler.pipeline import (
     reconcile_catalog_snapshot,
     run_review,
 )
-from procrafiler.backup import backup_reminder, create_backup, last_backup_utc, restore_from_archive
+from procrafiler.backup import (
+    backup_reminder,
+    create_backup,
+    is_encrypted_archive,
+    last_backup_utc,
+    restore_from_archive,
+)
 from procrafiler.backup import format_report as format_backup_report
 from procrafiler.catalog import CatalogRepository
 from procrafiler.catalog_verify import format_report as format_catalog_report
@@ -125,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backup_p.add_argument("--to", dest="to_dir", required=True,
                           help="Directory to write the dated .tar.gz (+ .sha256) into")
+    backup_p.add_argument("--encrypt", action="store_true",
+                          help="Encrypt the bundle with a passphrase (AES-256-GCM) for cloud/offsite storage")
 
     restore_p = subparsers.add_parser(
         "restore",
@@ -662,12 +670,37 @@ def cmd_scrub(limit: int | None, no_mirror: bool, repair: bool) -> int:
     return 0 if report.healthy else 1
 
 
-def cmd_backup(to_dir: str) -> int:
+def _resolve_passphrase(*, confirm: bool) -> str | None:
+    """The backup passphrase from PROCRAFILER_BACKUP_PASSPHRASE, else a hidden
+    prompt (asked twice when `confirm`). Returns None to abort."""
+    env = os.environ.get("PROCRAFILER_BACKUP_PASSPHRASE")
+    if env:
+        return env
+    import getpass
+    first = getpass.getpass("Backup passphrase: ")
+    if not first:
+        return None
+    if confirm and getpass.getpass("Confirm passphrase: ") != first:
+        print("Passphrases don't match.")
+        return None
+    return first
+
+
+def cmd_backup(to_dir: str, encrypt: bool) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
+    passphrase = None
+    if encrypt:
+        passphrase = _resolve_passphrase(confirm=True)
+        if passphrase is None:
+            print("No passphrase — aborting.")
+            return 1
     try:
         with runtime_lock(paths):
-            report = create_backup(paths, Path(to_dir).expanduser(), now_utc=_resolve_now_utc().isoformat())
+            report = create_backup(
+                paths, Path(to_dir).expanduser(),
+                now_utc=_resolve_now_utc().isoformat(), passphrase=passphrase,
+            )
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -679,16 +712,24 @@ def cmd_restore(from_dir: str | None, from_archive: str | None) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     now = _resolve_now_utc().isoformat()
+    passphrase = None
+    if from_archive is not None and is_encrypted_archive(Path(from_archive).expanduser()):
+        passphrase = _resolve_passphrase(confirm=False)
+        if passphrase is None:
+            print("This backup is encrypted — a passphrase is required.")
+            return 1
     try:
         with runtime_lock(paths):
             if from_archive is not None:
-                report = restore_from_archive(paths, Path(from_archive).expanduser(), now_utc=now)
+                report = restore_from_archive(
+                    paths, Path(from_archive).expanduser(), now_utc=now, passphrase=passphrase
+                )
             else:
                 report = restore_from_mirror(paths, Path(str(from_dir)).expanduser(), now_utc=now)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
-    except FileNotFoundError as err:
+    except (FileNotFoundError, ValueError) as err:
         print(str(err))
         return 1
     print(format_restore_report(report))
@@ -788,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "verify-catalog":
         return cmd_verify_catalog(args.rebuild)
     if args.command == "backup":
-        return cmd_backup(args.to_dir)
+        return cmd_backup(args.to_dir, args.encrypt)
     if args.command == "restore":
         return cmd_restore(args.from_dir, args.from_archive)
     if args.command == "deleted-history":

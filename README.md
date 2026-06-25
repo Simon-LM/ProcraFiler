@@ -179,7 +179,7 @@ procrafiler doctor                  # check paths, env, AI config, catalog, lock
 procrafiler rescan                  # follow hand moves/renames/deletes in the library into the catalog (no AI)
 procrafiler scrub                   # integrity check + self-heal (re-hash vs catalog; --repair); also refreshes the mirror's catalog copy
 procrafiler verify-catalog          # check the catalog DB integrity; --rebuild reconstructs it from catalog_snapshot.json if corrupt/lost
-procrafiler backup --to <dir>       # write a dated, self-contained backup archive (.tar.gz + .sha256) for offline/air-gapped storage
+procrafiler backup --to <dir>       # write a dated, self-contained backup archive (.tar.gz + .sha256); --encrypt for a passphrase-protected (AES-256-GCM) bundle
 procrafiler restore --from <mirror> # disaster recovery: rebuild the library + catalog from a mirror (or --from-archive <file>)
 procrafiler deleted-history         # list library files you deleted by hand (from the action log)
 procrafiler deletion-mode [MODE]    # show, or set how a hand-deleted doc is recorded (tombstone|purge)
