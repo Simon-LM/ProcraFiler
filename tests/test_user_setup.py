@@ -242,9 +242,10 @@ class TestConfigureAI(_EnvIsolated):
         _, out = _sink()
         configure_ai(_scripted(["2"]), out, lambda _p: "")  # secret unused for local
         text = self._env().read_text()
-        self.assertIn("PROCRAFILER_AI_ANALYSIS_PRIMARY=ollama:gemma4:12b", text)
+        self.assertIn("PROCRAFILER_AI_ANALYSIS_PRIMARY=ollama:qwen3.5:9b", text)
         self.assertIn("PROCRAFILER_AI_OCR_PRIMARY=ollama:minicpm-v", text)
         self.assertIn("PROCRAFILER_AI_IMAGE_PRIMARY=ollama:qwen2.5vl:7b", text)
+        self.assertIn("PROCRAFILER_AI_TIMEOUT=600", text)  # generous local timeout
 
     def test_configure_later_writes_nothing(self) -> None:
         _, out = _sink()
