@@ -26,6 +26,31 @@ and keep enough redundant, self-describing copies to fully restart after a loss.
   (client-side encryption), and **keys / `.env` are never replicated** anywhere shared.
 - **Never destroy the only good copy.** Repair = write new → verify hash → then swap.
 
+## Authority model & write surfaces (the backbone)
+
+There is exactly **one source of truth**: the **primary library + its catalog** (per-file
+`sha256` and an `updated_at` timeline). Everything else is **derived**.
+
+- **Mirrors are non-authoritative replicas**, replicated **one-way** (primary → mirror)
+  and **versioned** (the existing `mirror.versions_keep` + `Mirror_Trash` retention keep
+  previous versions). A mirror is for **reading and recovery**, never a place to edit.
+- **Two legitimate write surfaces**, so the user never has to touch a mirror:
+  1. the **primary library** — direct edits are fine; `rescan` absorbs hand
+     moves/renames/edits into the catalog (your location/name win) before each run;
+  2. the **inbox** (local or cloud) — add files from anywhere; **conflict-free** because
+     it is **drained** on intake.
+- **Self-correction:**
+  - Editing a *mirror* by mistake = drift: the next **scrub** sees its hash no longer
+    matches the catalog and **heals it from the primary** (a mirror edit never wins).
+  - A mistake in the *primary* itself is recoverable too: the **versioned mirror** holds
+    the previous good version, so a file can be rolled back. The scrub **flags** a file
+    whose content changed outside a tracked operation, so the user chooses **keep** (it
+    was intentional) or **restore** (accident/corruption).
+
+> Guidance to surface to users: **work from one place** — edit in the primary library, or
+> add through the inbox; don't edit mirror copies (the app reverts them). The inbox never
+> creates a conflict.
+
 ## Existing building blocks (already in the repo)
 
 - `documents.sha256` — a content hash per document, indexed. The scrub's source of truth.
@@ -161,6 +186,11 @@ concerns the live mirror.
 - **Restore** — `procrafiler restore --from-archive <file>`: decrypt → unpack → verify
   (manifest + hashes) → then **reuse the same restore path as the mirror** (once unpacked
   it is just a library + catalog). The only archive-specific code is decrypt/unpack/verify.
+
+**Reminder, not auto-run.** Because auto-pushing a cold backup is forbidden
+(anti-contamination), ProcraFiler instead **records the last-backup date** and **nudges**:
+`doctor` / `status` / `run` remind you after a configurable interval (e.g. "it's been 3
+months — make an offline backup"). The act stays manual.
 
 **Don't reinvent backup.** For the simple case (an encrypted bundle on a USB stick) the
 built-in command is enough. For serious needs (incremental, deduplicated, immutable,
