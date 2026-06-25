@@ -177,6 +177,7 @@ procrafiler status                  # paths, features, policy, deletion mode, la
 procrafiler --version               # the installed version (always tracks the release tag)
 procrafiler doctor                  # check paths, env, AI config, catalog, lock (exit non-zero on FAIL)
 procrafiler rescan                  # follow hand moves/renames/deletes in the library into the catalog (no AI)
+procrafiler scrub                   # integrity check: re-hash stored docs vs the catalog (library + mirror); --limit N, --no-mirror
 procrafiler deleted-history         # list library files you deleted by hand (from the action log)
 procrafiler deletion-mode [MODE]    # show, or set how a hand-deleted doc is recorded (tombstone|purge)
 procrafiler language [CODE]         # show, or set your primary language (search works in it + English)
@@ -197,7 +198,7 @@ procrafiler feature-set <name> <on|off>   # toggle actions_log / catalog_snapsho
 procrafiler policy-effective        # show effective runtime policy (see "Runtime Policy" below)
 ```
 
-Mutating commands (`process-*`, `rescan`, `library-trash`, `purge-mirror-trash`, `enrich-keywords`) take a runtime lock, so two runs never race on the same Inbox. That is the complete command surface (run `procrafiler --help` for the live list).
+Mutating commands (`process-*`, `rescan`, `scrub`, `library-trash`, `purge-mirror-trash`, `enrich-keywords`) take a runtime lock, so two runs never race on the same Inbox. That is the complete command surface (run `procrafiler --help` for the live list).
 
 ## Feature Controls (Terminal)
 

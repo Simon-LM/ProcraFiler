@@ -55,8 +55,11 @@ from procrafiler.pipeline import (
     reconcile_catalog_snapshot,
     run_review,
 )
+from procrafiler.catalog import CatalogRepository
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
+from procrafiler.scrub import format_report as format_scrub_report
+from procrafiler.scrub import scrub as run_scrub
 
 EXIT_TEMPFAIL = 75  # sysexits.h: temp resource shortage; reused for "lock held"
 
@@ -92,6 +95,14 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile-snapshot",
         help="Compare catalog_snapshot.json against catalog.db and rewrite the snapshot if out of sync",
     )
+
+    scrub_p = subparsers.add_parser(
+        "scrub",
+        help="Integrity check: re-hash stored documents vs the catalog (library + mirror); exit non-zero on a problem",
+    )
+    scrub_p.add_argument("--limit", type=int, default=None,
+                         help="Check only N documents, least-recently-verified first (default: all)")
+    scrub_p.add_argument("--no-mirror", action="store_true", help="Check the library only, skip the mirror")
 
     subparsers.add_parser(
         "review",
@@ -592,6 +603,27 @@ def cmd_rescan() -> int:
     return 0
 
 
+def cmd_scrub(limit: int | None, no_mirror: bool) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    catalog = CatalogRepository(paths.catalog_db_file)
+    catalog.init_schema()
+    try:
+        with runtime_lock(paths):
+            report = run_scrub(
+                paths,
+                catalog,
+                limit=limit,
+                check_mirror=not no_mirror,
+                now_utc=_resolve_now_utc().isoformat(),
+            )
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    print(format_scrub_report(report))
+    return 0 if report.healthy else 1
+
+
 def cmd_deleted_history(limit: int) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -667,6 +699,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_enrich_keywords(args.force)
     if args.command == "rescan":
         return cmd_rescan()
+    if args.command == "scrub":
+        return cmd_scrub(args.limit, args.no_mirror)
     if args.command == "deleted-history":
         return cmd_deleted_history(args.limit)
 

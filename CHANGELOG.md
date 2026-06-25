@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **`procrafiler scrub` — integrity check (data-durability, phase 1).** Re-hashes stored documents and compares them to the catalog `sha256`, on the **library** and the **mirror**, so silent corruption (bit rot) or tampering is detected. Incremental (`--limit N`, least-recently-verified first) or full; `--no-mirror` to skip the mirror; exits non-zero on any problem. A new `last_verified_utc` catalog column records when each document was last checked. Detection only for now — automatic repair (`heal`) is the next step. See [docs/durability.md](docs/durability.md).
+
 ## [0.5.0] - 2026-06-24 — Guided first-run setup & AI selection
 
 A friendly first run and a clear way to choose the AI. `procrafiler setup` now walks you through **where your files live** (Inbox, Library, optional Mirror — advised on a separate disk), **which AI** reads them (Mistral API by default, or all-local Ollama from a tested preset), and **who you are** — writing your env file for you, with no hand-editing. The whole first-run interface is now in **English**.
