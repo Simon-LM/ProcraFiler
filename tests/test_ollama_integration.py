@@ -60,13 +60,17 @@ class TestOllamaPipelineIntegration(unittest.TestCase):
         # Point every task at LOCAL Ollama. Set BEFORE any run: these win over a
         # repo .env (load_runtime_env only sets a var if absent) → no Mistral.
         os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = f"ollama:{ANALYSIS_MODEL}"
+        os.environ["PROCRAFILER_AI_ORGANIZE_PRIMARY"] = f"ollama:{ANALYSIS_MODEL}"
         os.environ["PROCRAFILER_AI_IMAGE_PRIMARY"] = f"ollama:{VISION_MODEL}"
         os.environ["PROCRAFILER_AI_OCR_PRIMARY"] = f"ollama:{OCR_MODEL}"
         os.environ["PROCRAFILER_AI_ANALYSIS_TIMEOUT"] = "240"
+        os.environ["PROCRAFILER_AI_ORGANIZE_TIMEOUT"] = "240"
         os.environ["PROCRAFILER_AI_IMAGE_TIMEOUT"] = "240"
         os.environ["PROCRAFILER_AI_OCR_TIMEOUT"] = "240"
-        # Space out local calls so a sequential run doesn't overheat the GPU.
-        os.environ["PROCRAFILER_AI_THROTTLE"] = "1.5"
+        # Pause before each real local call so a long sequential run is gentler on
+        # the GPU (these tests can spill past ~12GB VRAM onto the CPU). Override with
+        # PROCRAFILER_AI_THROTTLE to taste; calls are always sequential, never parallel.
+        os.environ.setdefault("PROCRAFILER_AI_THROTTLE", "3")
 
         from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 
@@ -76,8 +80,10 @@ class TestOllamaPipelineIntegration(unittest.TestCase):
 
     def tearDown(self) -> None:
         for key in (
-            "PROCRAFILER_AI_ANALYSIS_PRIMARY", "PROCRAFILER_AI_IMAGE_PRIMARY", "PROCRAFILER_AI_OCR_PRIMARY",
-            "PROCRAFILER_AI_ANALYSIS_TIMEOUT", "PROCRAFILER_AI_IMAGE_TIMEOUT", "PROCRAFILER_AI_OCR_TIMEOUT",
+            "PROCRAFILER_AI_ANALYSIS_PRIMARY", "PROCRAFILER_AI_ORGANIZE_PRIMARY",
+            "PROCRAFILER_AI_IMAGE_PRIMARY", "PROCRAFILER_AI_OCR_PRIMARY",
+            "PROCRAFILER_AI_ANALYSIS_TIMEOUT", "PROCRAFILER_AI_ORGANIZE_TIMEOUT",
+            "PROCRAFILER_AI_IMAGE_TIMEOUT", "PROCRAFILER_AI_OCR_TIMEOUT",
             "PROCRAFILER_AI_THROTTLE",
         ):
             os.environ.pop(key, None)
@@ -133,6 +139,78 @@ class TestOllamaPipelineIntegration(unittest.TestCase):
         self.assertEqual(summary["errors"], 0)
         # It was read by the vision model and filed (not stuck unreadable).
         self.assertGreaterEqual(summary["processed"] + summary["pending_decisions"], 1)
+
+    def _make_scanned_pdf(self, path: Path, lines: list[str]) -> None:
+        """An image-only PDF (no text layer) — forces the OCR path."""
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (1000, 500), "white")
+        draw = ImageDraw.Draw(img)
+        y = 40
+        for line in lines:
+            draw.text((40, y), line, fill="black")
+            y += 70
+        img.save(path, "PDF", resolution=150.0)
+
+    def test_scanned_pdf_is_ocr_read_via_ollama(self) -> None:
+        self._require(OCR_MODEL)
+        from procrafiler.pipeline import process_all_inbox_files
+
+        self._make_scanned_pdf(
+            self.paths.inbox_dir / "scan.pdf",
+            ["CERTIFICAT MEDICAL", "Patient: Jean Dupont", "Date: 05/04/2026"],
+        )
+        summary = process_all_inbox_files(self.paths, now_utc=self.now)
+        # The image-only PDF went through the local OCR path end-to-end and was
+        # filed (or parked for review) — no pipeline error.
+        self.assertEqual(summary["errors"], 0)
+        self.assertGreaterEqual(summary["processed"] + summary["pending_decisions"], 1)
+
+    def test_dropped_folder_is_organized_via_ollama(self) -> None:
+        self._require(ANALYSIS_MODEL)
+        from procrafiler.pipeline import process_all_inbox_files
+
+        affair = self.paths.inbox_dir / "degat-eaux"
+        affair.mkdir()
+        (affair / "devis.txt").write_text(
+            "Devis reparation degat des eaux salle de bain. Plombier Martin. 850 EUR.",
+            encoding="utf-8",
+        )
+        (affair / "facture.txt").write_text(
+            "Facture reparation degat des eaux. Plombier Martin. 850 EUR. Payee le 12/04/2026.",
+            encoding="utf-8",
+        )
+        summary = process_all_inbox_files(self.paths, now_utc=self.now)
+        # The set-aware organize pass ran (ORGANIZE chain set) without error and
+        # both files of the dropped folder were filed.
+        self.assertEqual(summary["errors"], 0)
+        self.assertEqual(len(self._stored_fiches()), 2)
+
+    def test_mixed_batch_is_processed_via_ollama(self) -> None:
+        self._require(ANALYSIS_MODEL)
+        self._require(VISION_MODEL)
+        self._require(OCR_MODEL)
+        from PIL import Image, ImageDraw
+
+        from procrafiler.pipeline import process_all_inbox_files
+
+        # A text doc, an image, and a scanned PDF dropped together at the root —
+        # three different reading paths (local text / vision / OCR) in one run.
+        (self.paths.inbox_dir / "note.txt").write_text(
+            "Carte grise du vehicule Peugeot 208, immatriculation AB-123-CD.",
+            encoding="utf-8",
+        )
+        img = Image.new("RGB", (800, 300), "white")
+        ImageDraw.Draw(img).text((30, 80), "FACTURE INTERNET - 39,99 EUR", fill="black")
+        img.save(self.paths.inbox_dir / "facture.png")
+        self._make_scanned_pdf(self.paths.inbox_dir / "scan.pdf", ["ATTESTATION", "Numero 2026-0042"])
+
+        summary = process_all_inbox_files(self.paths, now_utc=self.now)
+        # The heterogeneous batch ran end-to-end through local models with no
+        # pipeline error, all three were handled, and at least one was read + filed.
+        self.assertEqual(summary["errors"], 0)
+        self.assertGreaterEqual(summary["processed"] + summary["pending_decisions"], 1)
+        self.assertGreaterEqual(len(self._stored_fiches()), 1)
 
 
 if __name__ == "__main__":
