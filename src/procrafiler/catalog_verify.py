@@ -67,11 +67,30 @@ def _read_snapshot_documents(path: Path) -> list[dict] | None:
     return docs if isinstance(docs, list) else None
 
 
+def _reroot(current_path: str, old_root: Path, new_root: Path) -> str:
+    """Move an absolute library path from `old_root` to `new_root`, keeping the
+    relative part. Leaves paths that aren't under `old_root` (e.g. tombstones with
+    an empty path) unchanged."""
+    if not current_path:
+        return current_path
+    try:
+        rel = Path(current_path).relative_to(old_root)
+    except ValueError:
+        return current_path
+    return str(new_root / rel)
+
+
 def rebuild_catalog_from_snapshot(
-    paths: RuntimePaths, snapshot_docs: list[dict], *, now_utc: str | None = None
+    paths: RuntimePaths,
+    snapshot_docs: list[dict],
+    *,
+    now_utc: str | None = None,
+    reroot: tuple[Path, Path] | None = None,
 ) -> tuple[int, str]:
-    """Rebuild a fresh `catalog.db` from the snapshot documents. The existing
-    (corrupt) DB is moved aside first. Returns (count, backup_path)."""
+    """Rebuild a fresh `catalog.db` from the snapshot documents. The existing DB
+    is moved aside first. When `reroot=(old_root, new_root)` is given, each
+    document's `current_path` is moved from the old library location to the new
+    one (used by `restore`). Returns (count, backup_path)."""
     db = paths.catalog_db_file
     stamp = (now_utc or datetime.now(timezone.utc).isoformat()).replace(":", "").replace("-", "")
     backup = db.with_name(db.name + f".corrupt-{stamp}")
@@ -84,11 +103,14 @@ def rebuild_catalog_from_snapshot(
     for doc in snapshot_docs:
         content = doc.get("content")
         content_json = json.dumps(content, ensure_ascii=False) if content else None
+        current_path = str(doc.get("current_path", ""))
+        if reroot is not None:
+            current_path = _reroot(current_path, reroot[0], reroot[1])
         repo.upsert_document(
             doc_id=str(doc.get("doc_id")),
             sha256=str(doc.get("sha256", "")),
             current_filename=str(doc.get("current_filename", "")),
-            current_path=str(doc.get("current_path", "")),
+            current_path=current_path,
             status=str(doc.get("status", "")),
             updated_at_utc=str(doc.get("updated_at_utc", "")),
             flow_state=doc.get("flow_state"),

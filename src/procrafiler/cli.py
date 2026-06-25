@@ -58,6 +58,8 @@ from procrafiler.pipeline import (
 from procrafiler.catalog import CatalogRepository
 from procrafiler.catalog_verify import format_report as format_catalog_report
 from procrafiler.catalog_verify import verify_catalog
+from procrafiler.restore import format_report as format_restore_report
+from procrafiler.restore import replicate_catalog_to_mirror, restore_from_mirror
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
 from procrafiler.scrub import format_report as format_scrub_report
@@ -114,6 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_cat.add_argument("--rebuild", action="store_true",
                             help="If the DB is corrupt/lost, rebuild it from the snapshot (old DB kept aside)")
+
+    restore_p = subparsers.add_parser(
+        "restore",
+        help="Rebuild the library + catalog from a self-contained mirror after a loss",
+    )
+    restore_p.add_argument("--from", dest="from_dir", required=True,
+                           help="Path to the mirror directory to restore from")
 
     subparsers.add_parser(
         "review",
@@ -629,11 +638,30 @@ def cmd_scrub(limit: int | None, no_mirror: bool, repair: bool) -> int:
                 repair=repair,
                 now_utc=_resolve_now_utc().isoformat(),
             )
+            # Keep the mirror self-contained (restorable) by refreshing its catalog copy.
+            replicate_catalog_to_mirror(paths)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
     print(format_scrub_report(report))
     return 0 if report.healthy else 1
+
+
+def cmd_restore(from_dir: str) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+    mirror_dir = Path(from_dir).expanduser()
+    try:
+        with runtime_lock(paths):
+            report = restore_from_mirror(paths, mirror_dir, now_utc=_resolve_now_utc().isoformat())
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+    except FileNotFoundError as err:
+        print(str(err))
+        return 1
+    print(format_restore_report(report))
+    return 0
 
 
 def cmd_verify_catalog(rebuild: bool) -> int:
@@ -728,6 +756,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_scrub(args.limit, args.no_mirror, args.repair)
     if args.command == "verify-catalog":
         return cmd_verify_catalog(args.rebuild)
+    if args.command == "restore":
+        return cmd_restore(args.from_dir)
     if args.command == "deleted-history":
         return cmd_deleted_history(args.limit)
 
