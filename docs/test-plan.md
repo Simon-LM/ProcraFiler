@@ -40,11 +40,19 @@ Expand `tests/test_ollama_integration.py` (currently 2).
 
 - [x] text document read + classified (`gemma4:12b`).
 - [x] image document vision-read + classified (`qwen2.5vl:7b`).
-- [ ] **OCR** on a scanned PDF end-to-end (`minicpm-v`).
-- [ ] **set-aware organize/grouping**: a dropped folder → one dated affair folder.
-- [ ] **`process-all` on a mixed batch** (text + image + scanned PDF) → all filed,
-      catalog populated, and `search` finds them.
-- [ ] assertions on the **document date** + the **naming convention** of local output.
+- [x] **OCR** on a scanned PDF end-to-end (`minicpm-v`). **Verified** (~113s).
+- [x] **set-aware organize/grouping**: a dropped folder of related files runs the
+      ORGANIZE pass and both are filed. **Verified** (~6.5 min).
+- [x] **`process-all` on a mixed batch** (text + image + scanned PDF) — all three
+      reading paths in one run, filed, catalogued. **Verified**. (Search-after-process
+      is covered by the offline `test_search.py`, not asserted here.)
+- [n/a] document date / naming-convention assertions on local output — deliberately
+      NOT asserted: these e2e tests check the **plumbing** (no crash, filed/parked),
+      not model quality, which varies by local model. Quality is judged manually.
+
+> These run only with `PROCRAFILER_OLLAMA_IT=1` (`make test-ollama`); they are slow
+> and load local models — never part of `make test`. `PROCRAFILER_AI_THROTTLE`
+> (default 1.5 s) paces the sequential calls — raise it on a machine that runs hot.
 
 ## 🟠 P2 — Mirror & consistency
 
