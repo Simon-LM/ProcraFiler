@@ -47,9 +47,8 @@ _OLLAMA_PRESET = {
     "PROCRAFILER_AI_ORGANIZE_PRIMARY": "ollama:gemma4:12b",
     "PROCRAFILER_AI_OCR_PRIMARY": "ollama:minicpm-v",
     "PROCRAFILER_AI_IMAGE_PRIMARY": "ollama:qwen2.5vl:7b",
-    # Local inference is slow + varies by machine/file size — a generous per-call
-    # timeout so a merely-slow call isn't killed (see docs/ai-providers.md).
-    "PROCRAFILER_AI_TIMEOUT": "600",
+    # No timeout here on purpose: local (ollama) calls get a generous default
+    # automatically (see _task_timeout_from_env); override only to change it.
 }
 
 

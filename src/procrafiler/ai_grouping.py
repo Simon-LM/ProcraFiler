@@ -207,7 +207,7 @@ def propose_grouping(
     if not chain_entries:
         return _empty_grouping_result(provider="none", model="none", reason="chain_not_configured")
 
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ORGANIZE", default_value=90)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("ORGANIZE", default_value=90, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("ORGANIZE", default_value=2)
     prompt = _build_grouping_prompt(document, candidate_branches)
 

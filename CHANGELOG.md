@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **Local AI: better default model + provider-aware timeouts.** Local **analysis** now defaults to **`qwen3.5:9b`** — it returns clean JSON and at 6.6 GB fits a 12 GB GPU (no CPU spill → faster *and* cooler than `gemma4:12b`, which stays the default for the harder `organize` task). And the per-call **timeout is now provider-aware**: **moderate for the Mistral API (60 s)** but **generous for local Ollama (15 min), applied automatically** — a merely-slow local call (weak machine, large file) is no longer killed and dropped to manual review. Override either with `PROCRAFILER_AI[_<TASK>]_TIMEOUT`. (`qwen3.5:9b`'s earlier "empty" results were just the old 60 s default cutting off its ~87 s generation.)
+
 ## [0.7.0] - 2026-06-25 — Encrypted backups
 
 Completes the data-durability work (v0.6.0) with encrypted cold backups, and is the last feature step before the 1.0 stabilisation pass (more tests, then real-world testing).

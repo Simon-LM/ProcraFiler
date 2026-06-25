@@ -7,6 +7,7 @@ from unittest.mock import patch
 from procrafiler.ai_naming import (
     _ai_sampling_params,
     _ai_throttle,
+    _task_timeout_from_env,
     call_mistral_chat,
     parse_provider_chain,
     task_chain_from_env,
@@ -45,6 +46,34 @@ class TestProviderPlumbing(unittest.TestCase):
         # NAMING / CLASSIFICATION were merged into ANALYSIS and are no longer tasks.
         self.assertEqual(task_chain_from_env("NAMING"), [])
         self.assertEqual(task_chain_from_env("CLASSIFICATION"), [])
+
+
+class TestProviderAwareTimeout(unittest.TestCase):
+    def setUp(self) -> None:
+        self._saved = {k: os.environ.get(k) for k in ("PROCRAFILER_AI_TIMEOUT", "PROCRAFILER_AI_ANALYSIS_TIMEOUT")}
+        for k in self._saved:
+            os.environ.pop(k, None)
+
+    def tearDown(self) -> None:
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_api_keeps_moderate_default_local_gets_generous(self) -> None:
+        self.assertEqual(_task_timeout_from_env("ANALYSIS", default_value=60, provider="mistral"), 60)
+        self.assertEqual(_task_timeout_from_env("ANALYSIS", default_value=60, provider=None), 60)
+        self.assertGreaterEqual(_task_timeout_from_env("ANALYSIS", default_value=60, provider="ollama"), 900)
+
+    def test_explicit_override_wins_for_both_providers(self) -> None:
+        os.environ["PROCRAFILER_AI_TIMEOUT"] = "30"
+        self.assertEqual(_task_timeout_from_env("ANALYSIS", default_value=60, provider="ollama"), 30)
+        self.assertEqual(_task_timeout_from_env("ANALYSIS", default_value=60, provider="mistral"), 30)
+
+    def test_per_task_override_wins(self) -> None:
+        os.environ["PROCRAFILER_AI_ANALYSIS_TIMEOUT"] = "1200"
+        self.assertEqual(_task_timeout_from_env("ANALYSIS", default_value=60, provider="ollama"), 1200)
 
 
 class TestAiThrottle(unittest.TestCase):

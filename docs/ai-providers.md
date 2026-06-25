@@ -44,15 +44,13 @@ MISTRAL_API_KEY=<your key>
 
 No key, nothing leaves your machine. Pull the models first
 (`ollama pull qwen3.5:9b`, etc.) and keep Ollama running. Expect **~minutes per
-document**, not seconds — so set **generous timeouts** (see below).
+document**, not seconds — local calls get a **generous timeout automatically** (see below).
 
 ```dotenv
 PROCRAFILER_AI_ANALYSIS_PRIMARY=ollama:qwen3.5:9b
 PROCRAFILER_AI_ORGANIZE_PRIMARY=ollama:gemma4:12b
 PROCRAFILER_AI_OCR_PRIMARY=ollama:minicpm-v
 PROCRAFILER_AI_IMAGE_PRIMARY=ollama:qwen2.5vl:7b
-# Local inference is slow + varies by machine and file size — be generous:
-PROCRAFILER_AI_TIMEOUT=600
 ```
 
 ### Pick local models by VRAM
@@ -70,12 +68,12 @@ analysis/organize ✅ (7.6 GB — spills a bit at 12 GB). Local `ORGANIZE` on th
 model and `gemma4:26b` are not yet validated. Avoid reasoning/coder/guard models
 (`deepseek-r1`, `*-coder`, `llama-guard`) — they don't return clean JSON.
 
-> **Why generous timeouts.** A local model that is merely *slow* on a weaker machine
-> or a large file shouldn't be killed mid-generation and dropped to manual review. The
-> per-call timeout (`PROCRAFILER_AI_TIMEOUT`, or per task `PROCRAFILER_AI_<TASK>_TIMEOUT`)
-> defaults to 60 s — fine for the fast Mistral API, **too short for local**. Set it high
-> (e.g. **600 s**) for Ollama. (`qwen3.5:9b`'s earlier "empty" results were just the
-> 60 s default cutting off its ~87 s generation.)
+> **Timeouts are provider-aware.** A local model that is merely *slow* on a weaker
+> machine or a large file must not be killed mid-generation and dropped to manual review.
+> So the per-call default is **moderate for the API (60 s)** but **generous for local
+> Ollama (15 min) — applied automatically**, no setting required. Override either with
+> `PROCRAFILER_AI_TIMEOUT` (or per task `PROCRAFILER_AI_<TASK>_TIMEOUT`). (`qwen3.5:9b`'s
+> earlier "empty" results were just the old 60 s default cutting off its ~87 s run.)
 
 ## Profile 3 — Mixed
 

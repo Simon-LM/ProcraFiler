@@ -231,7 +231,7 @@ def read_with_ocr(
     if not chain_entries:
         return AIReadResult(text=None, provider="none", model="none", used_fallback=True, reason="chain_not_configured")
 
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("OCR", default_value=_DEFAULT_OCR_TIMEOUT)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("OCR", default_value=_DEFAULT_OCR_TIMEOUT, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("OCR", default_value=2)
 
     last_error = "unknown"
@@ -326,7 +326,7 @@ def read_with_vision(
     if not chain_entries:
         return AIReadResult(text=None, provider="none", model="none", used_fallback=True, reason="chain_not_configured")
 
-    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("IMAGE", default_value=_DEFAULT_VISION_TIMEOUT)
+    timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("IMAGE", default_value=_DEFAULT_VISION_TIMEOUT, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("IMAGE", default_value=2)
 
     last_error = "unknown"
