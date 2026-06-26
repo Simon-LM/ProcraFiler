@@ -130,18 +130,15 @@ Environment variables:
 
 - `PROCRAFILER_AI_ANALYSIS_PRIMARY` (the unified read→name→classify→summarize call)
 - `PROCRAFILER_AI_ANALYSIS_FALLBACK`
-- `PROCRAFILER_AI_OCR_PRIMARY`
+- `PROCRAFILER_AI_ORGANIZE_PRIMARY` (set-aware pass: group a dropped folder into a dated affair/series)
+- `PROCRAFILER_AI_ORGANIZE_FALLBACK`
+- `PROCRAFILER_AI_OCR_PRIMARY` (scanned / image-only PDFs)
 - `PROCRAFILER_AI_OCR_FALLBACK`
-- `PROCRAFILER_AI_PDF_PRIMARY`
-- `PROCRAFILER_AI_PDF_FALLBACK`
-- `PROCRAFILER_AI_IMAGE_PRIMARY`
+- `PROCRAFILER_AI_IMAGE_PRIMARY` (vision model for images)
 - `PROCRAFILER_AI_IMAGE_FALLBACK`
-- `PROCRAFILER_AI_VIDEO_PRIMARY`
-- `PROCRAFILER_AI_VIDEO_FALLBACK`
-- `PROCRAFILER_AI_SUPERVISOR_PRIMARY`
-- `PROCRAFILER_AI_SUPERVISOR_FALLBACK`
-- `PROCRAFILER_AI_TIMEOUT` / `PROCRAFILER_AI_RETRIES` (global defaults)
-- `PROCRAFILER_AI_ANALYSIS_TIMEOUT` / `PROCRAFILER_AI_ANALYSIS_RETRIES` (task override)
+- `PROCRAFILER_AI_TIMEOUT` (Mistral **API** per-call timeout, default 60 s) / `PROCRAFILER_AI_RETRIES` (global defaults)
+- `PROCRAFILER_AI_LOCAL_TIMEOUT` (**local** Ollama: a *no-progress* / idle timeout, default 15 min — local calls stream, so a merely-slow model is never killed mid-generation; see [docs/ai-providers.md](docs/ai-providers.md))
+- `PROCRAFILER_AI_ANALYSIS_TIMEOUT` / `PROCRAFILER_AI_ANALYSIS_RETRIES` (per-task override — `_<TASK>_TIMEOUT` overrides either the API or the local default)
 - `PROCRAFILER_AI_TEMPERATURE` / `PROCRAFILER_AI_TOP_P` (Mistral sampling; **unset = the provider's own default**, the neutral baseline — set a float, e.g. `0.3`, to override globally)
 - `MISTRAL_API_KEY` (required for Mistral calls)
 

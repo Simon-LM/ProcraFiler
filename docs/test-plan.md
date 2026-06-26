@@ -38,7 +38,7 @@ only `uninstall.sh` is tested (2). Subprocess tests against a temp `$HOME`, like
 
 Expand `tests/test_ollama_integration.py` (currently 2).
 
-- [x] text document read + classified (`gemma4:12b`).
+- [x] text document read + classified (`qwen3.5:9b`, the local analysis default).
 - [x] image document vision-read + classified (`qwen2.5vl:7b`).
 - [x] **OCR** on a scanned PDF end-to-end (`minicpm-v`). **Verified** (~113s).
 - [x] **set-aware organize/grouping**: a dropped folder of related files runs the
