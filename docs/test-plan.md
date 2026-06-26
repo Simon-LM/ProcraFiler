@@ -81,8 +81,9 @@ Expand `tests/test_ollama_integration.py` (currently 2).
       `backup --to` (+ `--encrypt`), `restore --from-archive` (roundtrip → 0,
       missing archive → 1), `deleted-history`. `language` / `deletion-mode` /
       `policy-effective` / `reindex` already have `main([...])` coverage.
-- [ ] **CLI dispatch — remaining**: `features` / `feature-set`, `status` (incl. the
-      durability + backup-reminder lines).
+- [x] **CLI dispatch — remaining**: `features` (lists flags), `feature-set`
+      (toggle persists, bad feature name rejected by argparse), `status` (durability
+      section + `last_offline_backup` line) — `test_cli_dispatch`.
 - [ ] **restore** re-rooting with tombstones / paths outside the library root.
 - [ ] **backup**: empty library; the `.sha256`; a corrupted encrypted archive → clean error.
 - [ ] **mirror.py**: version-quarantine / TTL edge cases.
