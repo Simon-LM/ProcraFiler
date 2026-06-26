@@ -56,12 +56,19 @@ Expand `tests/test_ollama_integration.py` (currently 2).
 
 ## 🟠 P2 — Mirror & consistency
 
-- [ ] **Mirror correctness** (mock AI): after `process-all` the mirror matches the
-      library file-for-file (+ sidecars); after a `rescan` move/rename the mirror
-      follows; `library-trash` moves the mirror copy to mirror trash.
-- [ ] **Hand edit in the library** propagates to the mirror on the next run; deletion
-      tombstone propagation.
-- [ ] **Heal**: a corrupt library file is restored from the versioned mirror.
+- [x] **Mirror correctness** (mock AI): after `process-all` the mirror matches the
+      library file-for-file with identical bytes and no extras, and the mirror
+      feature off writes nothing (`test_mirror_consistency`). After a `rescan`
+      move/rename the mirror copy **and its text sidecar follow** the move — this
+      was a gap (the copy was orphaned at the old path); now fixed in `run_rescan`
+      and covered (`test_mirror_consistency`). `library-trash` → mirror trash is
+      covered by `test_library_trash`.
+- [x] **Deletion tombstone propagation**: a hand deletion quarantines the mirror
+      copy + mirror sidecar to `Mirror_Trash` and tombstones the row
+      (`test_rescan`). *(An in-place content edit of an already-filed library file
+      is not a supported flow — out of P2 scope.)*
+- [x] **Heal**: a corrupt library file is restored from the verified-good mirror
+      copy (`scrub --repair`, `test_scrub`).
 - [ ] **Conflict management = Phase 2 (reconcile not built yet)** → write WITH that
       feature: same doc edited in two places → conflict copy + `review`; adds from two
       inboxes deduped; delete-vs-edit resolved by timeline; cross-location reconcile.

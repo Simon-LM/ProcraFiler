@@ -14,6 +14,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - **Local AI: better default model + provider-aware timeouts.** Local **analysis** now defaults to **`qwen3.5:9b`** — it returns clean JSON and at 6.6 GB fits a 12 GB GPU (no CPU spill → faster *and* cooler than `gemma4:12b`, which stays the default for the harder `organize` task). And the per-call **timeout is now provider-aware, with two separate knobs**: `PROCRAFILER_AI_TIMEOUT` for the **Mistral API** (moderate, 60 s) and `PROCRAFILER_AI_LOCAL_TIMEOUT` for **local Ollama** (generous, 15 min — applied automatically). So a merely-slow local call (weak machine, large file) is no longer killed and dropped to manual review, and you can tune API and local independently. A per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides either. (`qwen3.5:9b`'s earlier "empty" results were just the old 60 s default cutting off its ~87 s generation.)
 - **Local AI calls now stream — the local timeout is a *no-progress* timeout.** Ollama text calls (analysis/organize/grouping) consume the response token by token, so `PROCRAFILER_AI_LOCAL_TIMEOUT` is an **idle (no-progress) timeout, not a total deadline**: as long as the model keeps producing, it is **never** killed — however slow the machine or large the file — and only a truly *stalled* call (no output for that long) is aborted. No arbitrary total cap to guess.
 
+### Fixed
+
+- **The mirror now follows a hand move/rename.** When you reorganise the library by hand and `rescan` repoints the catalog, the document's mirror copy **and its hidden text sidecar now move with it**, instead of being orphaned at the old path with nothing at the new one. The mirror stays a faithful path-for-path replica, so `scrub` and heal find every document where they expect it (no stale orphans, no false "missing" reports). Backed by new offline mirror-consistency tests.
+
 ## [0.7.0] - 2026-06-25 — Encrypted backups
 
 Completes the data-durability work (v0.6.0) with encrypted cold backups, and is the last feature step before the 1.0 stabilisation pass (more tests, then real-world testing).

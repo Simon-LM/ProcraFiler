@@ -961,6 +961,50 @@ def _trash_deleted_artifacts(
         )
 
 
+def _move_mirror_copy(
+    paths: RuntimePaths,
+    old_doc_path: Path,
+    new_doc_path: Path,
+    *,
+    operation_id: str,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+) -> None:
+    """Follow a document's hand move/rename with its mirror copy (and the mirror's
+    text sidecar), so the mirror stays a faithful path-for-path replica of the
+    library. Without this, a hand move would orphan the mirror copy at the OLD
+    path and leave NOTHING at the new one (a later scrub would then see the mirror
+    'missing' at the new path and the stale old copy lingering). The destination is
+    the exact mirror path — no disambiguation — so scrub finds it where it expects.
+    No-op when the mirror copy is absent (mirror off / out of sync is tolerated)."""
+    try:
+        old_rel = old_doc_path.relative_to(paths.library_root)
+        new_rel = new_doc_path.relative_to(paths.library_root)
+    except ValueError:
+        return
+    old_sidecar_rel = _sidecar_path(old_doc_path).relative_to(paths.library_root)
+    new_sidecar_rel = _sidecar_path(new_doc_path).relative_to(paths.library_root)
+    moves = (
+        (paths.mirror_root / old_rel, paths.mirror_root / new_rel,
+         "library_moved_mirror_followed", "Mirror copy moved to follow the hand move/rename (mirror kept in sync)."),
+        (paths.mirror_root / old_sidecar_rel, paths.mirror_root / new_sidecar_rel,
+         "library_moved_mirror_sidecar_followed", "Mirror text sidecar moved to follow the hand move/rename."),
+    )
+    for source, target, action, message in moves:
+        if source == target or not source.is_file():
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            move(str(source), str(target))
+        except OSError:
+            continue
+        _append_action_log(
+            paths, operation_id=operation_id, action=action, status="success",
+            message=message,
+            now_utc=now_utc, path_before=str(source), path_after=str(target), features=features,
+        )
+
+
 def _file_cataloged(
     paths: RuntimePaths,
     catdoc: _CatalogedDoc,
@@ -2470,6 +2514,9 @@ def run_rescan(
         old_path = str(row.get("current_path"))
         final_path = _ensure_timestamp_prefix(new_path, _fiche_effective_dt(row.get("content_json"), new_path, now_utc))
         _move_text_sidecar(Path(old_path), final_path)  # the hidden text copy follows its document
+        _move_mirror_copy(  # the mirror replica follows the move too, staying path-faithful
+            paths, Path(old_path), final_path, operation_id=op, now_utc=now_utc, features=features,
+        )
         repo.upsert_document(
             doc_id=str(row["doc_id"]), sha256=str(row["sha256"]),
             current_filename=final_path.name, current_path=str(final_path),
