@@ -27,11 +27,11 @@ This is the core idea; everything else follows from it.
 - Software suite: ProcraTools
 - Portfolio: [simon-lm.dev](https://simon-lm.dev)
 - GitHub: [github.com/Simon-LM](https://github.com/Simon-LM)
-- ProcraFiler repository: to be added once the repository is created on GitHub
+- ProcraFiler repository: [github.com/Simon-LM/ProcraFiler](https://github.com/Simon-LM/ProcraFiler)
 
 ## Goals
 
-- Automatically process **every** new file from the Downloads folder, regardless of its current name.
+- Automatically process **every** new file dropped into the **Inbox** drop folder (the "vrac"), regardless of its current name — the app only ever processes what is in there, never the rest of your disk.
 - Have an AI read each file's content, and from that reading derive a new descriptive name (under a UTC timestamp prefix) — the original filename is never reused as the basis.
 - Classify files into a main target library by AI, from the file content. The extension only selects which AI capability reads the file; it never decides the name or the destination category.
 - Process an archive folder of unclassified files (legacy files), with duplicate detection.
@@ -159,7 +159,7 @@ procrafiler search-ai <terms>       # deeper search: an AI broadens your query w
 
 `setup-context` is a short, universal questionnaire (who you are, your work + the names that mean *your* work, your interests, your household) that writes your **context file** for you — no config to hand-edit. It only **guides** the AI (the document's content still decides), so a hobby you forgot or a project you didn't list is still handled from the content. Your answers stay on your machine (the context file is gitignored, never committed).
 
-Files you drop **together in a subfolder** are treated as a set: after the per-file pass, `process-all` runs a **set-aware organize pass** (Mistral medium, `PROCRAFILER_AI_ORGANIZE_*`) that groups them into a shared **dated affair/series folder** (e.g. a water-damage claim → `…/Insurance/Degats-eaux-2025-08/`, recurring meter readings → a series folder). With no organize chain configured it's a no-op. Loose files at the Inbox root are handled individually.
+Files you drop **together in a subfolder** are treated as a set: after the per-file pass, `process-all` runs a **set-aware organize pass** (configurable via `PROCRAFILER_AI_ORGANIZE_*`; Mistral medium in the default profile, or a local model) that groups them into a shared **dated affair/series folder** (e.g. a water-damage claim → `…/Insurance/Degats-eaux-2025-08/`, recurring meter readings → a series folder). With no organize chain configured it's a no-op. Loose files at the Inbox root are handled individually.
 
 When the AI cannot confidently place a file but has plausible candidates, it does not guess: the file is parked in the **decisions queue** (`Manual_Review`, status `DECISION_PENDING`) and `process-all` tells you how many are waiting. `procrafiler review` walks them one by one, showing the AI's options — you pick one, type a custom path (a new subfolder, or a brand-new top-level category, which is allowed only here), or skip. Only once you resolve a file is it re-filed and mirrored.
 
@@ -365,7 +365,7 @@ To also remove the config and regenerable state (env file, settings, policy, cat
 
 The IA-first core is implemented end to end:
 
-- **Reading** — every file is read for its content: text files and readable PDFs locally (via `pypdf`), scanned PDFs via Mistral OCR, images via a Mistral vision model.
+- **Reading** — every file is read for its content: text files and readable PDFs locally (via `pypdf`), scanned PDFs via OCR (Mistral by default, or a local Ollama model), images via a vision model (Mistral or local). Which provider/model per task is your choice — see [docs/ai-providers.md](docs/ai-providers.md).
 - **Naming** — the new filename is derived from that content.
 - **Classification** — the destination category is decided by AI from that content, never a guessed category. When the AI is unsure but has candidates, the file enters the **decisions queue** for you to resolve with `procrafiler review`; truly unreadable or optionless files go to plain manual review (`Manual_Review`).
 - **Safety** — the app never deletes your files: duplicates and removals are *moved* to dedicated trash folders for you to empty manually; the only deletion is the explicit `purge-mirror-trash` command, scoped to old mirror backups in `Mirror_Trash`.
