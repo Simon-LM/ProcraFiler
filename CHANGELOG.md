@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-26 — Stabilisation: local-AI tuning, durability fixes & a hardened test pass
+
+The stabilisation milestone before real-world testing (the last gate before v1.0.0). It tunes local AI for slower machines, fixes two data-durability edge cases, and lands a broad **offline test pass** — install / update scripts, local-AI end-to-end, mirror consistency, and the durability commands (`scrub` / `verify-catalog` / `backup` / `restore`) with their edge cases — so the path to 1.0 rests on a tested foundation.
+
 ### Changed
 
 - **Local AI: better default model + provider-aware timeouts.** Local **analysis** now defaults to **`qwen3.5:9b`** — it returns clean JSON and at 6.6 GB fits a 12 GB GPU (no CPU spill → faster *and* cooler than `gemma4:12b`, which stays the default for the harder `organize` task). And the per-call **timeout is now provider-aware, with two separate knobs**: `PROCRAFILER_AI_TIMEOUT` for the **Mistral API** (moderate, 60 s) and `PROCRAFILER_AI_LOCAL_TIMEOUT` for **local Ollama** (generous, 15 min — applied automatically). So a merely-slow local call (weak machine, large file) is no longer killed and dropped to manual review, and you can tune API and local independently. A per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides either. (`qwen3.5:9b`'s earlier "empty" results were just the old 60 s default cutting off its ~87 s generation.)
