@@ -84,9 +84,15 @@ Expand `tests/test_ollama_integration.py` (currently 2).
 - [x] **CLI dispatch — remaining**: `features` (lists flags), `feature-set`
       (toggle persists, bad feature name rejected by argparse), `status` (durability
       section + `last_offline_backup` line) — `test_cli_dispatch`.
-- [ ] **restore** re-rooting with tombstones / paths outside the library root.
-- [ ] **backup**: empty library; the `.sha256`; a corrupted encrypted archive → clean error.
-- [ ] **mirror.py**: version-quarantine / TTL edge cases.
+- [x] **restore** re-rooting with tombstones / paths outside the library root —
+      `_reroot` branches + a mixed-snapshot rebuild (`test_durability_edge_cases`).
+- [x] **backup**: empty (never-filed) library → valid snapshot-only archive that
+      restores; a *corrupted* encrypted archive (tampered tag, header intact) →
+      clean `ValueError` (`test_durability_edge_cases`). The `.sha256` content is
+      already covered by `test_backup`.
+- [x] **mirror.py**: identical re-sync does **not** quarantine; changed content
+      versions the old copy; missing-source / outside-root rejected; TTL purge keeps
+      recent, removes old, cleans empty dirs (`test_durability_edge_cases`).
 
 ## 🟢 P4 — Real-world manual checklist (the v0.8.0 → v1.0.0 gate)
 
