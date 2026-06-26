@@ -177,11 +177,19 @@ def restore_from_archive(
             tar_src = archive
         extract_root = td_path / "extracted"
         extract_root.mkdir()
-        with tarfile.open(tar_src, "r:*") as tar:
-            try:
-                tar.extractall(extract_root, filter="data")  # Python 3.12+: refuse unsafe members
-            except TypeError:
-                tar.extractall(extract_root)  # Python < 3.12
+        # An archive so damaged it is no longer a valid tar/gz (e.g. a corrupted
+        # encrypted backup whose magic header was lost, so it never reached the
+        # decrypt path) raises tarfile.ReadError. Wrap it into a clean ValueError —
+        # like decrypt_bytes does for a tampered ciphertext — so the CLI reports a
+        # friendly message and exits 1 instead of dumping a traceback.
+        try:
+            with tarfile.open(tar_src, "r:*") as tar:
+                try:
+                    tar.extractall(extract_root, filter="data")  # Python 3.12+: refuse unsafe members
+                except TypeError:
+                    tar.extractall(extract_root)  # Python < 3.12
+        except tarfile.ReadError as err:
+            raise ValueError("this backup archive is unreadable or corrupted") from err
         report = restore_from_mirror(paths, extract_root, now_utc=now_utc)
     report.source = str(archive)  # show the archive, not the ephemeral temp dir
     return report

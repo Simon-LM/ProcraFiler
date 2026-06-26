@@ -80,6 +80,15 @@ class TestBackupEdgeCases(_Env):
             restore_from_archive(self.paths, enc, now_utc=_NOW_ISO, passphrase="correct horse")
         self.assertIn("corrupted", str(ctx.exception).lower())
 
+    def test_unreadable_archive_raises_clean_error(self) -> None:
+        # An archive so damaged it is not even a valid tar/gz (e.g. a header-less
+        # corrupted backup) must surface as a clean ValueError, not a raw
+        # tarfile.ReadError / traceback.
+        junk = self.tmp_path / "procrafiler-backup-garbage.tar.gz"
+        junk.write_bytes(b"this is not a tar.gz at all")
+        with self.assertRaises(ValueError):
+            restore_from_archive(self.paths, junk, now_utc=_NOW_ISO)
+
 
 class TestRestoreRerootEdgeCases(_Env):
     def test_reroot_branches(self) -> None:

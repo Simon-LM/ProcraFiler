@@ -16,6 +16,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- **`restore` fails cleanly on an unreadable backup archive.** A backup so corrupted it is no longer a valid `tar.gz` (e.g. a damaged encrypted archive whose header was lost) now reports a clear "unreadable or corrupted" message and exits non-zero, instead of dumping a `tarfile.ReadError` traceback. (Realistic bit rot in an encrypted archive — body tampered, header intact — was already handled.)
 - **The mirror now follows a hand move/rename.** When you reorganise the library by hand and `rescan` repoints the catalog, the document's mirror copy **and its hidden text sidecar now move with it**, instead of being orphaned at the old path with nothing at the new one. The mirror stays a faithful path-for-path replica, so `scrub` and heal find every document where they expect it (no stale orphans, no false "missing" reports). Backed by new offline mirror-consistency tests.
 
 ## [0.7.0] - 2026-06-25 — Encrypted backups

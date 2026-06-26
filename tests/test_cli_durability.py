@@ -140,6 +140,14 @@ class TestBackupRestoreCli(_CliEnv):
         code, _ = self._run(["restore", "--from-archive", str(self.tmp_path / "nope.tar.gz")])
         self.assertEqual(code, 1)
 
+    def test_restore_unreadable_archive_returns_1(self) -> None:
+        # A corrupted/garbage archive must exit 1 with a message, not a traceback.
+        junk = self.tmp_path / "garbage.tar.gz"
+        junk.write_bytes(b"not a tar at all")
+        code, out = self._run(["restore", "--from-archive", str(junk)])
+        self.assertEqual(code, 1)
+        self.assertIn("corrupted", out.lower())
+
 
 class TestDeletedHistoryCli(_CliEnv):
     def test_no_deletions_returns_0(self) -> None:
