@@ -75,10 +75,14 @@ Expand `tests/test_ollama_integration.py` (currently 2).
 
 ## 🟡 P3 — Unit & CLI
 
-- [ ] **CLI dispatch** (arg parsing + exit codes) for the thinly-covered commands:
-      `scrub` / `verify-catalog` / `restore` / `backup`, `language`, `deletion-mode`,
-      `features` / `feature-set`, `policy-effective`, `reindex`, `deleted-history`,
-      `status` (incl. the durability + backup-reminder lines).
+- [x] **CLI dispatch — durability commands** (arg parsing + exit codes), driven
+      end-to-end through `main([...])` (`test_cli_durability`): `scrub` (clean → 0,
+      corruption → 1, `--repair` heals → 0), `verify-catalog` (healthy → 0),
+      `backup --to` (+ `--encrypt`), `restore --from-archive` (roundtrip → 0,
+      missing archive → 1), `deleted-history`. `language` / `deletion-mode` /
+      `policy-effective` / `reindex` already have `main([...])` coverage.
+- [ ] **CLI dispatch — remaining**: `features` / `feature-set`, `status` (incl. the
+      durability + backup-reminder lines).
 - [ ] **restore** re-rooting with tombstones / paths outside the library root.
 - [ ] **backup**: empty library; the `.sha256`; a corrupted encrypted archive → clean error.
 - [ ] **mirror.py**: version-quarantine / TTL edge cases.
