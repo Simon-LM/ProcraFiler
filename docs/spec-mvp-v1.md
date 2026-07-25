@@ -16,7 +16,7 @@ Files pile up with meaningless names (`scan_001.pdf`, `IMG_2024.jpg`, `document(
 This principle governs the whole design:
 
 - **Every file is processed, without exception** — not only unnamed or obviously-misnamed ones. A file that already carries a name is processed too, because the name may be wrong or misleading.
-- **The existing filename is never a trusted input.** It is not used to name or to classify.
+- **The existing filename never DECIDES the outcome** — it is not the basis for the name or the category. It is **not** discarded, though: it is supplied to the analysis as a *hint*, alongside the drop folder and the names of the files dropped with it. Its weight is a function of how the content was read (`read_via`): with text extracted mechanically the content is authoritative and the hints only disambiguate; with text produced by an AI reading an image (`ocr` / `vision`) the content is itself an interpretation, so those filesystem facts are **corroborating evidence** that may outweigh a vague or contradictory reading — and a genuine conflict goes to the decisions queue rather than being guessed. Distrust applies to the name's *authority*, never to its *evidential value*.
 - An AI **reads the file content**, and **from that reading** the system derives the new name, the destination category, **and** a searchable content record.
 - **What the AI reads is remembered, not thrown away.** The summary, keywords, and key data extracted from each document are persisted in the catalog (§4.1), so a file is read once and never re-read for search or reorganization.
 - The extension is a **technical dispatch signal only**: it selects which capability reads the file (see §9). It never determines the name or the category.

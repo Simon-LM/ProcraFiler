@@ -789,10 +789,15 @@ def _read_and_analyze(
     now_utc: datetime | None,
     features: dict[str, bool],
     emit: ProgressFn,
+    sibling_names: list[str] | None = None,
 ) -> _CatalogedDoc:
     """Read the file's content (local / OCR / vision) and run the single AI
     analysis → a fiche. Does NOT decide a final folder or file anything; returns
-    a `_CatalogedDoc` for the caller (per-file or set-aware) to place."""
+    a `_CatalogedDoc` for the caller (per-file or set-aware) to place.
+
+    `sibling_names` are the names of the other files dropped in the same set — a
+    reliable clue the analysis would otherwise throw away, and the one that saves a
+    misread photo sitting among clearly-named documents."""
     extraction = extract_text_content(queued_target, dispatch.media_type or "")
     emit(
         f"   read: {dispatch.media_type}"
@@ -904,6 +909,11 @@ def _read_and_analyze(
             source_folder=source_folder or None,
             user_context=load_user_context(),
             user_language=get_user_language(paths),
+            # How the text was obtained decides how far to trust it against the
+            # filename/folder/sibling hints: an OCR or vision read is itself an
+            # interpretation, so those hints must weigh MORE, not the same.
+            read_via=read_via,
+            sibling_filenames=sibling_names or None,
         )
 
     return _CatalogedDoc(
@@ -1434,6 +1444,7 @@ def _catalog_one_inbox_file(
     features: dict[str, bool],
     emit: ProgressFn,
     extra_known_hashes: frozenset[str] | set[str] = frozenset(),
+    sibling_names: list[str] | None = None,
 ) -> _CatalogedDoc | ProcessResult:
     """Phase 1 (CATALOG) for ONE file: move it to the Queue, dedup, dispatch, and
     read+analyze it into a fiche — WITHOUT filing it into the library. Returns the
@@ -1589,6 +1600,7 @@ def _catalog_one_inbox_file(
         now_utc=now_utc,
         features=features,
         emit=emit,
+        sibling_names=sibling_names,
     )
 
 
@@ -1627,7 +1639,12 @@ def _process_next_inbox_file(
     if dry_run:
         return _dry_run_one(paths, source, now_utc=now_utc, features=features, emit=emit)
 
-    result = _catalog_one_inbox_file(paths, source, now_utc=now_utc, features=features, emit=emit)
+    # `process-once` takes one file, but its set-mates are still sitting in the same
+    # Inbox subfolder — their names are legitimate context for reading this one.
+    siblings = [p.name for p in candidates if p != source and p.parent == source.parent]
+    result = _catalog_one_inbox_file(
+        paths, source, now_utc=now_utc, features=features, emit=emit, sibling_names=siblings
+    )
     if isinstance(result, ProcessResult):
         return result  # duplicate or unreadable — already filed/trashed
     catdoc = result
@@ -3065,8 +3082,14 @@ def process_all_inbox_files(
         catdocs: list[_CatalogedDoc] = []
         for source in sources:
             try:
+                # The set's OTHER members, as context. Taken from the pre-computed
+                # member list, not by re-scanning the Inbox: by now the files
+                # already catalogued have moved to the Queue, so a live scan would
+                # only ever see the tail of the set.
+                siblings = [p.name for p in sources if p != source]
                 outcome = _catalog_one_inbox_file(
-                    paths, source, now_utc=now_utc, features=features, emit=emit, extra_known_hashes=run_seen
+                    paths, source, now_utc=now_utc, features=features, emit=emit,
+                    extra_known_hashes=run_seen, sibling_names=siblings,
                 )
             except Exception as exc:  # noqa: BLE001 — one bad file must never abort the batch
                 _record_error(exc)

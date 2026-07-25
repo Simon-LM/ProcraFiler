@@ -105,6 +105,85 @@ def _summary_and_keyword_instructions(user_language: str) -> tuple[str, str]:
     )
 
 
+# How many sibling filenames to show, and how long the list may get. Files dropped
+# together are a set, but a 200-file folder must not swamp the prompt (or the bill).
+MAX_SIBLING_HINTS = 12
+MAX_SIBLING_CHARS = 400
+
+# Content read by an AI (a vision model describing an image, OCR on a scan) is
+# itself an interpretation and can be wrong or hallucinated. Content extracted
+# mechanically (a PDF text layer, a .txt file) is literal bytes.
+_INTERPRETED_READS = ("vision", "ocr")
+
+
+def _build_hints_block(
+    *,
+    original_filename: str | None,
+    source_folder: str | None,
+    sibling_filenames: list[str] | None = None,
+    read_via: str | None = None,
+) -> str:
+    """The hints block: the original filename, the drop folder, and the names of the
+    files dropped alongside.
+
+    "Never trust the filename" means the name must never *decide* — NOT that it is
+    discarded. It stays a strong indicator, and it must weigh MORE the less reliable
+    the extracted content is. So the framing depends on `read_via`:
+
+    - mechanical read (`text`): the content is literal bytes → authoritative, hints
+      only disambiguate.
+    - AI read (`vision` / `ocr`): the "content" is itself a model's interpretation of
+      an image and can be wrong or hallucinated. Here the filename and the sibling
+      names are CORROBORATING EVIDENCE, and a confident name that clearly contradicts
+      a vague visual description should win — or go to the decisions queue rather
+      than be guessed. Telling the model the content is authoritative in this case
+      would be exactly backwards.
+
+    Sibling names matter most in precisely that case: a photo among clearly-named
+    documents inherits their context. The organize pass cannot substitute for this —
+    it works on fiches already produced, so a misreading has already happened.
+    """
+    interpreted = read_via in _INTERPRETED_READS
+    if not (original_filename or source_folder or sibling_filenames):
+        return ""
+
+    if interpreted:
+        header = (
+            "\nCorroborating evidence — IMPORTANT: the text above was produced by an AI "
+            "reading an image (OCR/vision), so it may be incomplete, misread or invented. "
+            "These facts come from the user's own filesystem and are RELIABLE. Weigh them "
+            "heavily: when the visual description is vague or generic but the evidence below "
+            "is specific, FOLLOW THE EVIDENCE. If the two clearly contradict each other, "
+            "prefer the evidence, or return category_path null with alternatives rather than "
+            "guessing from the image alone:"
+        )
+    else:
+        header = (
+            "\nHints (indicators, NOT ground truth — the content is authoritative; use these "
+            "only to disambiguate):"
+        )
+
+    lines = [header]
+    if original_filename:
+        lines.append(f"- the user's original filename was: {original_filename}")
+    if source_folder:
+        lines.append(f"- it was dropped in a folder named: {source_folder}")
+    if sibling_filenames:
+        shown: list[str] = []
+        budget = MAX_SIBLING_CHARS
+        for name in sibling_filenames[:MAX_SIBLING_HINTS]:
+            if budget - len(name) < 0:
+                break
+            shown.append(name)
+            budget -= len(name)
+        if shown:
+            lines.append(
+                "- it was dropped together with these files (same set — a strong clue about "
+                f"what this document is about): {', '.join(shown)}"
+            )
+    return "\n".join(lines) + "\n"
+
+
 def _build_analysis_prompt(
     text: str,
     base_categories: list[str],
@@ -113,6 +192,8 @@ def _build_analysis_prompt(
     source_folder: str | None = None,
     user_context: str | None = None,
     user_language: str = "en",
+    sibling_filenames: list[str] | None = None,
+    read_via: str | None = None,
 ) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
@@ -139,18 +220,12 @@ def _build_analysis_prompt(
             "work-name belongs under Work even when an existing Personal/Hobbies folder looks related "
             "— never let an existing hobby folder pull a work document into it.\n"
         )
-    # The original filename and the folder the user dropped it in are HINTS, not
-    # ground truth: the content stays authoritative, but these help when the
-    # content is ambiguous (e.g. a file literally named "CV ...", or a photo in a
-    # folder named "Water-Damage"). Generalist — no per-type rules.
-    hints = ""
-    if original_filename or source_folder:
-        lines = ["\nHints (indicators, NOT ground truth — the content is authoritative; use these only to disambiguate):"]
-        if original_filename:
-            lines.append(f"- the user's original filename was: {original_filename}")
-        if source_folder:
-            lines.append(f"- it was dropped in a folder named: {source_folder}")
-        hints = "\n".join(lines) + "\n"
+    hints = _build_hints_block(
+        original_filename=original_filename,
+        source_folder=source_folder,
+        sibling_filenames=sibling_filenames,
+        read_via=read_via,
+    )
     return (
         "Read this document and file it. Return JSON only, with this exact schema:\n"
         "{\"name\": \"...\", \"date\": \"YYYY-MM-DD\"|null, \"category_path\": \"...\"|null, "
@@ -309,6 +384,8 @@ def analyze_content(
     source_folder: str | None = None,
     user_context: str | None = None,
     user_language: str = "en",
+    sibling_filenames: list[str] | None = None,
+    read_via: str | None = None,
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
@@ -321,6 +398,10 @@ def analyze_content(
     file from its stem and routes it to manual review. A valid JSON reply is a
     success even when individual fields (e.g. `category_path`) are null — the
     metadata is still captured, and routing is the caller's decision.
+
+    `read_via` says HOW the text was obtained (`text` / `ocr` / `vision`) and so how
+    far to trust it against the filesystem hints; `sibling_filenames` are the other
+    files dropped in the same set. See `_build_hints_block`.
     """
     chain_entries = chain if chain is not None else task_chain_from_env("ANALYSIS")
     if not chain_entries:
@@ -332,7 +413,7 @@ def analyze_content(
     retry_count = retries if retries is not None else _task_retries_from_env("ANALYSIS", default_value=2)
     prompt = _build_analysis_prompt(
         text, base_categories, existing_paths, original_filename, source_folder, user_context,
-        user_language,
+        user_language, sibling_filenames=sibling_filenames, read_via=read_via,
     )
 
     last_error = "unknown"

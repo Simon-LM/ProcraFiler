@@ -9,6 +9,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **The original filename now counts for more when the content is less reliable.** ProcraFiler still never lets a filename *decide* — the content does — but the name was being weighed the same whether the text came from a PDF's own text layer (literal, trustworthy) or from an AI describing a blurry photo (a guess that can be wrong or invented). That is backwards. The analysis now knows **how** the file was read: for a mechanical read nothing changes, but for an **OCR or vision read** the filename, the folder you dropped it in and the names of the files you dropped with it become **corroborating evidence** — specific evidence outweighs a vague visual description, and a clear contradiction sends the file to the decisions queue instead of being guessed. So a photographed document in a well-named folder is no longer at the mercy of the vision model alone.
+- **Files dropped together now inform each other.** Only the folder *name* used to be passed to the AI; the names of the **other files in the same drop** were discarded. They are a free and often decisive clue — a photo among `facture_plombier.pdf` and `constat_amiable.pdf` is about that affair — so they are now part of the context for each file of the set (capped, so a huge folder cannot inflate the prompt or the cost). Loose files at the Inbox root stay singletons and get no invented context. Note this could not be left to the later grouping pass, which works on records already produced — by then a misreading has already happened.
+
 ### Fixed
 
 - **`restore` can no longer silently overwrite a newer document.** It is a *recovery* command, but pointing it at a stale mirror used to copy straight over your library with no confirmation, no preview, and no copy kept — so "let me just check that restore works" could roll your library back without a word. (The tell: the catalog DB *was* backed up before being replaced; your documents were not.) Now: **`restore --dry-run`** shows exactly what would be created, overwritten or left alone and changes nothing; a restore that would replace differing documents **asks first** (`--yes` to skip, for scripts); and each replaced document is **moved to `Library_Trash_Manual`**, recoverable, instead of destroyed — the same never-delete rule the rest of the app follows. Documents that exist only in your library are reported as untouched, so it is clear that a restore **merges** rather than replaces. Applies to both `--from <mirror>` and `--from-archive`.
@@ -23,6 +28,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - **`docs/pre-prod-hardening.md`** — the gated checklist from the pre-production audit (what blocks the first real-files run, what blocks recommending the tool, and the test-audit gate), with reproduced evidence for each item.
 - **`tests/test_restore_safety.py` and `tests/test_layout_conflicts.py`** — 23 tests covering the restore preview/prompt/trash-rescue path and the overlapping-layout guard (including one asserting the shipped default layout passes its own check).
+- **`tests/test_filename_hint_weighting.py`** — 16 tests asserting the hint framing flips with the read method and that the set's filenames reach the per-file prompt, end to end through the real pipeline (offline: they check the prompt that gets built, never a live call).
 - **`tests/test_crash_recovery.py`** — durability tests for interruption and corruption, built around a **conservation invariant**: for N dropped files, with an interrupt injected at *every* pipeline step in turn, every file stays accounted for exactly once — and every original content hash is still on disk (a count check cannot catch a truncated file). Offline and deterministic like the rest of the suite.
 
 ## [0.8.0] - 2026-06-26 — Stabilisation: local-AI tuning, durability fixes & a hardened test pass
