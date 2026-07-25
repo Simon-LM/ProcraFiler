@@ -82,6 +82,54 @@ def default_runtime_paths() -> RuntimePaths:
     )
 
 
+# The configured roots that must never equal or contain one another.
+LAYOUT_ROOTS: tuple[tuple[str, str], ...] = (
+    ("Inbox workspace", "workspace_root"),
+    ("Library", "library_root"),
+    ("Library trash", "library_trash_manual_dir"),
+    ("Mirror", "mirror_root"),
+    ("App state", "state_root"),
+)
+
+
+def layout_conflicts(paths: RuntimePaths, *, include_mirror: bool = True) -> list[str]:
+    """Human-readable descriptions of configured roots that EQUAL or CONTAIN each
+    other. Empty list = a sane layout.
+
+    Nesting must be refused, not merely warned about, because the code assumes it
+    cannot happen. `rescan.walk_library_files` says so in writing — "the library's
+    trash and the mirror live OUTSIDE library_root already" — which is true of the
+    DEFAULTS only. Put the mirror inside the library and the library walk swallows
+    the mirror: its copies get renamed, phantom duplicate rows enter the catalog,
+    a `Mirror/Mirror/` level appears, and every unknown mirror file costs a paid AI
+    call. `setup` accepted this silently (it only compared paths for exact
+    equality), so the guard belongs here, shared by `setup` and `doctor`.
+
+    Paths are compared RESOLVED, so `~/lib` and `~/./lib/` are the same place, and
+    a symlinked library cannot smuggle a nested root past the check.
+    """
+    entries: list[tuple[str, Path]] = []
+    for label, attr in LAYOUT_ROOTS:
+        if attr == "mirror_root" and not include_mirror:
+            continue
+        raw = getattr(paths, attr)
+        try:
+            entries.append((label, Path(raw).expanduser().resolve()))
+        except OSError:
+            continue
+
+    conflicts: list[str] = []
+    for i, (label_a, path_a) in enumerate(entries):
+        for label_b, path_b in entries[i + 1 :]:
+            if path_a == path_b:
+                conflicts.append(f"{label_a} and {label_b} are the same folder: {path_a}")
+            elif path_b.is_relative_to(path_a):
+                conflicts.append(f"{label_b} is inside {label_a}: {path_b} is under {path_a}")
+            elif path_a.is_relative_to(path_b):
+                conflicts.append(f"{label_a} is inside {label_b}: {path_a} is under {path_b}")
+    return conflicts
+
+
 def default_runtime_policy() -> RuntimePolicy:
     return RuntimePolicy(
         mirror_retention_days=30,
