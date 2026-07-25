@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from shutil import copy2, move
+from uuid import uuid4
 
 from procrafiler.config import RuntimePaths
+
+
+# Prefix of the staging file used while copying into the mirror. Hidden and
+# distinctive; `pipeline._sweep_staging_files` clears leftovers from a hard kill.
+MIRROR_STAGING_PREFIX = ".procrafiler-mirror__"
 
 
 @dataclass(frozen=True)
@@ -77,16 +84,29 @@ def sync_library_file_to_mirror(
             move(str(mirror_target), str(quarantined_path))
 
     try:
-        copy2(str(library_file), str(mirror_target))
-        src_hash = _file_sha256(library_file)
-        dst_hash = _file_sha256(mirror_target)
-        if src_hash != dst_hash:
-            return MirrorSyncResult(
-                success=False,
-                mirror_target=mirror_target,
-                quarantined_path=quarantined_path,
-                error="hash_mismatch",
-            )
+        # Stage then atomically rename: the mirror is on a DIFFERENT disk by design
+        # (setup recommends it), so an interrupted copy straight to `mirror_target`
+        # would leave a truncated file sitting at the real mirror path — which a
+        # later `restore` would then treat as the good copy. Staging in the target
+        # directory keeps the rename atomic (same filesystem), so the mirror path
+        # only ever holds a complete, hash-verified copy.
+        staging = mirror_target.parent / f"{MIRROR_STAGING_PREFIX}{uuid4().hex}.tmp"
+        try:
+            copy2(str(library_file), str(staging))
+            src_hash = _file_sha256(library_file)
+            dst_hash = _file_sha256(staging)
+            if src_hash != dst_hash:
+                staging.unlink(missing_ok=True)
+                return MirrorSyncResult(
+                    success=False,
+                    mirror_target=mirror_target,
+                    quarantined_path=quarantined_path,
+                    error="hash_mismatch",
+                )
+            os.replace(str(staging), str(mirror_target))
+        except BaseException:
+            staging.unlink(missing_ok=True)
+            raise
         return MirrorSyncResult(success=True, mirror_target=mirror_target, quarantined_path=quarantined_path)
     except Exception as exc:  # noqa: BLE001
         return MirrorSyncResult(

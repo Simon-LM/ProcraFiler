@@ -68,6 +68,38 @@ def check_paths(paths: RuntimePaths, *, mirror_enabled: bool = True) -> list[Doc
     return results
 
 
+def check_queue(paths: RuntimePaths) -> list[DoctorCheck]:
+    """FAIL when documents sit in the Queue.
+
+    The Queue is a transient staging area: a file is there only between leaving the
+    Inbox and being filed. Anything still there means a previous run was interrupted
+    (Ctrl-C, SIGKILL, OOM, power loss) — those documents are invisible to the user
+    until the next `process-*` recovers them, so `doctor` must NOT report a clean
+    bill of health while they wait. This is the check that makes the loss visible.
+    """
+    section = "Queue"
+    if not paths.queue_dir.is_dir():
+        return [DoctorCheck(section, "queue_empty", STATUS_SKIP, "no queue directory yet")]
+    try:
+        stranded = sorted(p.name for p in paths.queue_dir.iterdir() if p.is_file())
+    except OSError as exc:
+        return [DoctorCheck(section, "queue_empty", STATUS_WARN, f"cannot read: {exc}")]
+
+    if not stranded:
+        return [DoctorCheck(section, "queue_empty", STATUS_OK, "empty (no interrupted run)")]
+
+    shown = ", ".join(stranded[:5]) + (f", … (+{len(stranded) - 5})" if len(stranded) > 5 else "")
+    return [
+        DoctorCheck(
+            section,
+            "queue_empty",
+            STATUS_FAIL,
+            f"{len(stranded)} file(s) stranded by an interrupted run: {shown} "
+            "— run `procrafiler process-all` to recover them into the Inbox",
+        )
+    ]
+
+
 def check_env(paths: RuntimePaths) -> list[DoctorCheck]:
     section = "Env"
     results: list[DoctorCheck] = []
@@ -231,10 +263,12 @@ def run_doctor(paths: RuntimePaths) -> list[DoctorCheck]:
     return checks
 
 
-# Order matters here: path checks first (cheapest, most likely to fail),
-# then env/AI (config), then catalog (touches disk), then lock (briefly
-# acquires). `check_paths` runs first in `run_doctor` (it needs the mirror flag).
+# Order matters here: path checks first (cheapest, most likely to fail), then the
+# Queue (a stranded-file FAIL the user must see early), then env/AI (config), then
+# catalog (touches disk), then lock (briefly acquires). `check_paths` runs first in
+# `run_doctor` (it needs the mirror flag).
 _CHECK_GROUPS_AFTER_PATHS: tuple[Callable[[RuntimePaths], list[DoctorCheck]], ...] = (
+    check_queue,
     check_env,
     lambda _paths: check_ai_config(),
     check_catalog,

@@ -9,6 +9,17 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **An interrupted run no longer loses your files.** A file leaves the Inbox for the internal `Queue` **before** the (slow) AI read, and nothing ever looked in the `Queue` again — so any hard stop (Ctrl-C, `SIGKILL`, OOM, power loss, a closed SSH session) left those documents **invisible**: gone from the Inbox, absent from the library and the catalog, while `process-all` reported a clean run and `doctor` reported zero failures. Every `process-once` / `process-all` now **recovers the Queue first**, returning each stranded file to the **exact Inbox subfolder it was dropped in** (so files dropped together as a set are not scattered), and reports how many it recovered. Recovery is idempotent — a crash *during* recovery just leaves the rest for the next run. This matters most with local models, where a file can take minutes and interrupting a batch is ordinary.
+- **`doctor` now FAILs while documents sit in the `Queue`** (naming them, exit code 1) instead of reporting a clean bill of health. `doctor` is the command you run to decide whether to trust the app — it must not stay silent about invisible files.
+- **A document can no longer be left truncated in the library or the mirror.** `shutil.move` degrades to copy-then-delete across filesystems, and the recommended layout puts the library and mirror on **different disks** — so an interrupted placement could leave a **half-written file at a real document path**, which the next `rescan` would then ingest as a genuine new document (reading garbage, cataloguing and mirroring it), or which a later `restore` would trust as the good copy. Library placement and mirror sync now stage into a hidden temporary file and **atomically rename** it, so a real path only ever holds a complete, hash-verified document. Interrupted leftovers are swept automatically.
+
+### Added
+
+- **`docs/pre-prod-hardening.md`** — the gated checklist from the pre-production audit (what blocks the first real-files run, what blocks recommending the tool, and the test-audit gate), with reproduced evidence for each item.
+- **`tests/test_crash_recovery.py`** — durability tests for interruption and corruption, built around a **conservation invariant**: for N dropped files, with an interrupt injected at *every* pipeline step in turn, every file stays accounted for exactly once — and every original content hash is still on disk (a count check cannot catch a truncated file). Offline and deterministic like the rest of the suite.
+
 ## [0.8.0] - 2026-06-26 — Stabilisation: local-AI tuning, durability fixes & a hardened test pass
 
 The stabilisation milestone before real-world testing (the last gate before v1.0.0). It tunes local AI for slower machines, fixes two data-durability edge cases, and lands a broad **offline test pass** — install / update scripts, local-AI end-to-end, mirror consistency, and the durability commands (`scrub` / `verify-catalog` / `backup` / `restore`) with their edge cases — so the path to 1.0 rests on a tested foundation.
