@@ -1,7 +1,51 @@
 from datetime import datetime, timezone
 import unittest
 
-from procrafiler.naming import build_timestamped_filename, sanitize_filename_stem
+from procrafiler.naming import MAX_STEM_CHARS, build_timestamped_filename, sanitize_filename_stem
+
+
+class TestStemLengthCap(unittest.TestCase):
+    """The stem can come from an AI. A model that answers the "name" field with a
+    whole descriptive sentence would produce a filename the filesystem REFUSES
+    (ENAMETOOLONG, 255 bytes on ext4 and most others), failing the placement of a
+    document that is otherwise perfectly fine. Truncating beats refusing to file."""
+
+    # A plausible runaway: a vision model describing the picture instead of titling it.
+    VERBOSE = (
+        "Photographie-d-un-document-administratif-relatif-a-un-sinistre-degat-des-eaux-"
+        "survenu-dans-la-cuisine-du-logement-principal-avec-mention-de-l-expert-mandate-"
+        "par-la-compagnie-d-assurance-et-les-references-completes-du-dossier-en-cours"
+    )
+
+    def test_a_runaway_stem_is_truncated(self) -> None:
+        stem = sanitize_filename_stem(self.VERBOSE)
+        self.assertLessEqual(len(stem.encode("utf-8")), MAX_STEM_CHARS)
+
+    def test_a_short_stem_is_untouched(self) -> None:
+        self.assertEqual(sanitize_filename_stem("Facture_EDF"), "Facture_EDF")
+
+    def test_the_final_filename_always_fits_the_filesystem(self) -> None:
+        """Prefix + stem + extension + a dedup suffix must stay under 255 bytes."""
+        for length in (200, 400, 1000, 8000):
+            with self.subTest(length=length):
+                name = build_timestamped_filename("Description-tres-longue-" * length + ".jpg")
+                # Leave room for a `__12`-style deduplication suffix on top.
+                self.assertLess(len(name.encode("utf-8")) + 8, 255)
+
+    def test_truncation_cuts_on_a_separator_when_one_is_near(self) -> None:
+        """A chopped mid-word fragment reads badly; prefer a clean word boundary."""
+        stem = sanitize_filename_stem(self.VERBOSE)
+        self.assertFalse(stem.endswith(("-", "_")))
+        self.assertTrue(stem)
+
+    def test_a_truncated_stem_is_still_written_to_disk(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        target_dir = Path(tempfile.mkdtemp())
+        name = build_timestamped_filename(self.VERBOSE * 20 + ".pdf")
+        (target_dir / name).write_bytes(b"x")  # must not raise ENAMETOOLONG
+        self.assertTrue((target_dir / name).is_file())
 
 
 class TestNaming(unittest.TestCase):

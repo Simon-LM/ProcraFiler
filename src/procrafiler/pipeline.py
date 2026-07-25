@@ -1,6 +1,7 @@
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -415,29 +416,51 @@ _STAGING_PREFIXES = (_STAGING_PREFIX, MIRROR_STAGING_PREFIX)
 
 
 def _move_atomically(source: Path, target: Path) -> None:
-    """Move `source` → `target` so that `target` NEVER exists half-written.
+    """Move `source` → `target` so that `target` NEVER exists half-written, and
+    `source` is never dropped until the document is safely in place.
 
-    `shutil.move` falls back to copy+unlink across filesystems (CPython's own
-    implementation), and the app actively encourages that layout — `setup`
-    recommends the library on a different disk from the mirror, and the Inbox
-    lives under Downloads. A crash mid-copy would therefore leave a TRUNCATED
-    document at its final library path, which the next `rescan` would ingest as a
-    genuine new file (reading garbage, cataloguing and mirroring it) — silent
-    corruption of the user's library.
+    Why not a plain `shutil.move`: it falls back to copy+unlink across
+    filesystems, and the app actively encourages that layout (`setup` recommends
+    the library on a different disk, and the Inbox lives under Downloads). A crash
+    mid-copy would leave a TRUNCATED document at its final library path, which the
+    next `rescan` would ingest as a genuine new file — silent corruption.
 
-    So we stage into a hidden temp file in the DESTINATION directory (same
-    filesystem as the target, by construction) and then `os.replace`, which is
-    atomic. A hard kill can leave a staging file behind, but never a partial
-    document under a real name: staging files are hidden, excluded from the
-    library walk, and cleaned up by `_sweep_staging_files`.
+    Two cases, and the split matters for correctness, not just speed:
+
+    - **Same filesystem** — a single `os.rename`, which is atomic. No staging file
+      exists at all, and a failure (e.g. `ENAMETOOLONG` from an over-long name)
+      leaves `source` exactly where it was.
+    - **Cross filesystem** (`EXDEV`) — copy into a hidden staging file in the
+      DESTINATION directory, `os.replace` it into place (atomic, same filesystem
+      by construction), and only THEN unlink the source.
+
+    The ordering in the cross-filesystem case is the load-bearing part: the source
+    survives until the target exists, so a staging leftover is ALWAYS a redundant
+    copy of a file that still exists elsewhere — which is what makes
+    `_sweep_staging_files` safe to delete them. An earlier version used
+    `shutil.move` into staging, which unlinks the source as soon as it is copied;
+    an `os.replace` failure then left the document ONLY in the staging file, and
+    the next run's sweep deleted it. That destroyed documents.
 
     The staging name is a fixed-length uuid, NOT the target name prefixed: a
     prefixed long filename could exceed the filesystem's 255-byte limit and fail
     the very move it is meant to make safe.
     """
+    try:
+        os.rename(str(source), str(target))
+        return
+    except OSError as err:
+        if err.errno != errno.EXDEV:
+            raise  # not a cross-device move — source is untouched, let it surface
+
     staging = target.parent / f"{_STAGING_PREFIX}{uuid4().hex}.tmp"
-    move(str(source), str(staging))
-    os.replace(str(staging), str(target))
+    try:
+        copy2(str(source), str(staging))
+        os.replace(str(staging), str(target))
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise  # source still intact: nothing lost
+    source.unlink()
 
 
 def _sweep_staging_files(root: Path) -> int:
