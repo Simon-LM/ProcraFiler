@@ -5,6 +5,12 @@
 A running checklist of deferred work and open questions. Not a spec — a place to
 park ideas and observations so nothing is lost between sessions.
 
+> **Before the first real-files run, see
+> [pre-prod-hardening.md](pre-prod-hardening.md)** — the reproduced findings of the
+> 2026-07-25 audit (Queue orphaning on interrupt, `restore` overwriting newer
+> documents, unvalidated nested paths, filename-hint weighting) plus the test-audit
+> gate. That checklist gates production use; this file stays the general idea park.
+
 ## Classification — ambiguous cases to study
 
 The goal: **collect real ambiguous cases before designing a fix.** One example is

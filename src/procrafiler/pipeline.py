@@ -35,7 +35,10 @@ from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMiss
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
-from procrafiler.mirror import sync_library_file_to_mirror  # type: ignore[reportMissingImports]
+from procrafiler.mirror import (  # type: ignore[reportMissingImports]
+    MIRROR_STAGING_PREFIX,
+    sync_library_file_to_mirror,
+)
 from procrafiler.search_index import BodyTextIndex
 from procrafiler.naming import build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
@@ -135,6 +138,115 @@ def _prune_empty_inbox_dirs(inbox_dir: Path) -> int:
         except OSError:
             pass  # not empty (or vanished) — leave it
     return removed
+
+
+def _queue_origins(paths: RuntimePaths) -> dict[str, str]:
+    """Map each queued path → the Inbox path it came from, read from the action log.
+
+    The `move_to_queue` event records `path_before`/`path_after`, which is the only
+    durable trace of the Inbox SUBFOLDER a file was dropped in. Recovering that
+    matters: files dropped together in a folder are a SET, and returning them to
+    the Inbox root instead would silently break the grouping the user intended.
+
+    Only called when the Queue is non-empty (a rare, post-interruption path), so
+    scanning the log costs nothing on a normal run. The most recent event for a
+    given queued path wins. A missing/disabled log yields an empty map and the
+    caller falls back to the Inbox root.
+    """
+    origins: dict[str, str] = {}
+    log_file = paths.actions_log_file
+    if not log_file.is_file():
+        return origins
+    try:
+        with log_file.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or "move_to_queue" not in line:
+                    continue  # cheap prefilter before the JSON parse
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict) or event.get("action") != "move_to_queue":
+                    continue
+                after, before = event.get("path_after"), event.get("path_before")
+                if isinstance(after, str) and isinstance(before, str):
+                    origins[after] = before
+    except OSError:
+        return origins
+    return origins
+
+
+def recover_queue(
+    paths: RuntimePaths,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> int:
+    """Return files stranded in the Queue by an interrupted run back to the Inbox.
+
+    A file leaves the Inbox for the Queue BEFORE the (slow) AI read, so any hard
+    stop — Ctrl-C, SIGKILL, OOM, power loss, closed SSH session — leaves documents
+    in a folder that no other code path revisits: no longer in the Inbox (never
+    re-processed), not in the library (invisible to `rescan`), absent from the
+    catalog. Without this, they are silently lost to the user.
+
+    Returning them to the Inbox (rather than resuming mid-flight) is deliberate:
+    resuming would need the analysis state persisted, which it is not, and a fresh
+    read is always correct. Each file is one independent move, so a crash DURING
+    recovery simply leaves the rest for the next run — the operation is idempotent.
+
+    A queued file can never be a document already filed and catalogued: the
+    library move happens BEFORE the catalog insert (see `_file_cataloged`), so an
+    interruption there leaves the file in the library — a case `rescan` already
+    heals. A queued file whose content genuinely duplicates a filed one is
+    re-detected as a duplicate by the normal flow, which is the correct outcome.
+
+    Returns the number of files recovered.
+    """
+    if not paths.queue_dir.exists():
+        return 0
+    stranded = sorted(
+        p for p in paths.queue_dir.iterdir() if p.is_file() and not p.is_symlink()
+    )
+    if not stranded:
+        return 0
+
+    origins = _queue_origins(paths)
+    recovered = 0
+    for queued in stranded:
+        origin = origins.get(str(queued))
+        target: Path | None = None
+        if origin:
+            candidate = Path(origin)
+            try:  # only trust an origin that is genuinely inside the Inbox
+                candidate.relative_to(paths.inbox_dir)
+                target = candidate
+            except ValueError:
+                target = None
+        if target is None:
+            target = paths.inbox_dir / queued.name
+        target = _ensure_unique_path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        move(str(queued), str(target))
+        recovered += 1
+        _append_action_log(
+            paths,
+            operation_id=str(uuid4()),
+            action="queue_recovered",
+            status="warning",
+            message="File stranded in the Queue by an interrupted run, returned to the Inbox",
+            now_utc=now_utc,
+            path_before=str(queued),
+            path_after=str(target),
+            features=features,
+        )
+    emit(
+        f"   ⚠ recovered {recovered} file(s) stranded in the Queue by an interrupted run "
+        "→ returned to the Inbox for this run"
+    )
+    return recovered
 
 
 def _exif_capture_datetime(path: Path) -> datetime | None:
@@ -292,6 +404,62 @@ def _ensure_unique_path(target: Path) -> Path:
         if not candidate.exists():
             return candidate
         i += 1
+
+
+# Prefixes for the staging files used when placing a document atomically. Hidden
+# (dot) so a half-written copy is invisible to the library walk, and distinctive so
+# a leftover from a hard kill is recognisable. `incoming` is the library placement
+# (`_move_atomically`); `mirror` is the mirror sync (`mirror.sync_library_file_to_mirror`).
+_STAGING_PREFIX = ".procrafiler-incoming__"
+_STAGING_PREFIXES = (_STAGING_PREFIX, MIRROR_STAGING_PREFIX)
+
+
+def _move_atomically(source: Path, target: Path) -> None:
+    """Move `source` → `target` so that `target` NEVER exists half-written.
+
+    `shutil.move` falls back to copy+unlink across filesystems (CPython's own
+    implementation), and the app actively encourages that layout — `setup`
+    recommends the library on a different disk from the mirror, and the Inbox
+    lives under Downloads. A crash mid-copy would therefore leave a TRUNCATED
+    document at its final library path, which the next `rescan` would ingest as a
+    genuine new file (reading garbage, cataloguing and mirroring it) — silent
+    corruption of the user's library.
+
+    So we stage into a hidden temp file in the DESTINATION directory (same
+    filesystem as the target, by construction) and then `os.replace`, which is
+    atomic. A hard kill can leave a staging file behind, but never a partial
+    document under a real name: staging files are hidden, excluded from the
+    library walk, and cleaned up by `_sweep_staging_files`.
+
+    The staging name is a fixed-length uuid, NOT the target name prefixed: a
+    prefixed long filename could exceed the filesystem's 255-byte limit and fail
+    the very move it is meant to make safe.
+    """
+    staging = target.parent / f"{_STAGING_PREFIX}{uuid4().hex}.tmp"
+    move(str(source), str(staging))
+    os.replace(str(staging), str(target))
+
+
+def _sweep_staging_files(root: Path) -> int:
+    """Delete staging leftovers a hard kill may have left under `root`.
+
+    Safe to delete: a staging file is only ever an INCOMPLETE copy whose source
+    still exists (the source is unlinked only after `os.replace` succeeds), so
+    the document itself is never the staging file. Covers both the library
+    placement and the mirror sync. Returns the count removed.
+    """
+    removed = 0
+    if not root.exists():
+        return removed
+    for prefix in _STAGING_PREFIXES:
+        for candidate in root.rglob(f"{prefix}*"):
+            if candidate.is_file() and not candidate.is_symlink():
+                try:
+                    candidate.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
 
 
 def _append_action_log(
@@ -1056,7 +1224,11 @@ def _file_cataloged(
     candidate_name = f"{stem}{queued_target.suffix}"
     final_name = build_timestamped_filename(candidate_name, now_utc=document_dt)
     library_target = _ensure_unique_path(target_dir / final_name)
-    move(str(queued_target), str(library_target))
+    # Atomic: the Queue (under the workspace) and the library are routinely on
+    # DIFFERENT filesystems — `setup` even recommends separate disks — so a plain
+    # move would copy+unlink and could leave a truncated document at its final
+    # path if interrupted. See `_move_atomically`.
+    _move_atomically(queued_target, library_target)
     current_state = validate_transition(catdoc.current_state, "LIBRARY_STORED")
     emit(f"   filed → {'/'.join(route_dir)}/{library_target.name}")
 
@@ -1438,6 +1610,14 @@ def _process_next_inbox_file(
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
     emit: ProgressFn = progress or (lambda _message: None)
+
+    # Recover anything an interrupted run stranded in the Queue BEFORE scanning the
+    # Inbox, so those files are picked up by this very run instead of staying
+    # invisible. No-op (and no cost) when the Queue is empty.
+    if not dry_run:
+        recover_queue(paths, now_utc=now_utc, features=features, emit=emit)
+        _sweep_staging_files(paths.library_root)
+        _sweep_staging_files(paths.mirror_root)
 
     candidates = _iter_inbox_files(paths.inbox_dir)
     if not candidates:
@@ -2746,6 +2926,7 @@ def process_all_inbox_files(
         "collapsed_nestings": 0,
         "rescan_moved": 0,
         "rescan_new": 0,
+        "recovered": 0,
         "total": 0,
     }
 
@@ -2785,6 +2966,16 @@ def process_all_inbox_files(
         return summary
 
     emit: ProgressFn = progress or (lambda _message: None)
+
+    # Recovery FIRST, before the rescan and before the Inbox is listed: files an
+    # interrupted run stranded in the Queue must come back into the Inbox so THIS
+    # run processes them. Never silent — the count lands in the summary.
+    summary["recovered"] = recover_queue(paths, now_utc=now_utc, features=features, emit=emit)
+    # Clean up staging leftovers a hard kill may have left mid-placement, in the
+    # library AND the mirror. They are always incomplete copies whose source
+    # survived, never a real document.
+    _sweep_staging_files(paths.library_root)
+    _sweep_staging_files(paths.mirror_root)
 
     # Pure-secretary sync FIRST: follow any hand reorganization of the library
     # into the catalog before the AI makes new decisions. Never aborts the batch.

@@ -410,6 +410,11 @@ def cmd_process_all(dry_run: bool = False) -> int:
         f"errors: {summary['errors']}, "
         f"mirror_failures: {summary['mirror_failures']}"
     )
+    if summary.get("recovered"):
+        print(
+            f"  {summary['recovered']} file(s) had been stranded in the Queue by an interrupted "
+            "run and were recovered into this one."
+        )
     if summary["pending_decisions"]:
         print(f"  {summary['pending_decisions']} file(s) awaiting your decision — run: procrafiler review")
     return 0
