@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from typing import Callable
 
 from procrafiler.ai_naming import SUPPORTED_AI_TASKS, task_chain_from_env
-from procrafiler.config import RuntimePaths, load_feature_settings
+from procrafiler.config import RuntimePaths, layout_conflicts, load_feature_settings
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
+from procrafiler.user_setup import on_same_disk
 
 
 STATUS_OK = "OK"
@@ -65,6 +66,51 @@ def check_paths(paths: RuntimePaths, *, mirror_enabled: bool = True) -> list[Doc
     else:
         results.append(DoctorCheck(section, "mirror_root", STATUS_SKIP, "mirror disabled (mirror_sync off)"))
     results.append(_check_path_writable(section, "state_root", paths.state_root))
+    return results
+
+
+def check_layout(paths: RuntimePaths, *, mirror_enabled: bool = True) -> list[DoctorCheck]:
+    """FAIL on a layout where one configured root sits inside another, and WARN when
+    the mirror shares a disk with the library.
+
+    `setup` now refuses a nested layout, but it never re-validated an EXISTING
+    configuration — one hand-edited into the env file, or created before the guard
+    existed. This is the command a user runs to decide whether to trust the app, so
+    it must re-check the configuration every time, not just at creation.
+    """
+    section = "Layout"
+    results: list[DoctorCheck] = []
+
+    conflicts = layout_conflicts(paths, include_mirror=mirror_enabled)
+    if conflicts:
+        results.extend(
+            DoctorCheck(section, "roots_not_nested", STATUS_FAIL, conflict) for conflict in conflicts
+        )
+    else:
+        results.append(DoctorCheck(section, "roots_not_nested", STATUS_OK, "no overlapping roots"))
+
+    if not mirror_enabled:
+        results.append(
+            DoctorCheck(section, "mirror_separate_disk", STATUS_SKIP, "mirror disabled (mirror_sync off)")
+        )
+        return results
+
+    # A mirror on the same device does not survive that device failing — the whole
+    # point of having one. `setup` says this once at creation and never again.
+    if on_same_disk(paths.mirror_root, paths.library_root):
+        results.append(
+            DoctorCheck(
+                section,
+                "mirror_separate_disk",
+                STATUS_WARN,
+                "the mirror is on the SAME disk as the library — it will not protect "
+                "against that disk failing",
+            )
+        )
+    else:
+        results.append(
+            DoctorCheck(section, "mirror_separate_disk", STATUS_OK, "mirror is on a different disk")
+        )
     return results
 
 
@@ -258,6 +304,7 @@ def run_doctor(paths: RuntimePaths) -> list[DoctorCheck]:
     except Exception:
         mirror_enabled = True
     checks: list[DoctorCheck] = list(check_paths(paths, mirror_enabled=mirror_enabled))
+    checks.extend(check_layout(paths, mirror_enabled=mirror_enabled))
     for fn in _CHECK_GROUPS_AFTER_PATHS:
         checks.extend(fn(paths))
     return checks

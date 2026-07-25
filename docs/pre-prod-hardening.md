@@ -122,7 +122,25 @@ interrupts; a real kill is listed under **G**).
 
 ## P1 — before recommending the tool to anyone else
 
-### [ ] B. `restore` silently overwrites newer library documents
+### [x] B. `restore` silently overwrites newer library documents — **DONE**
+
+> **Shipped.** `restore` now computes a **plan** before touching anything:
+> `--dry-run` prints what would be created / overwritten / left alone and changes
+> nothing; a destructive restore **prompts** (`--yes` to skip, for scripts); and each
+> overwritten document is **moved to `Library_Trash_Manual`** (relative path kept, a
+> second restore does not clobber the first rescue) instead of being destroyed —
+> consistent with the app's own never-delete rule. Documents present only in the
+> library are reported as untouched, so the user knows a restore **merges** rather
+> than replaces. Covers `--from` and `--from-archive` (the archive path delegates to
+> the same function). Tests: [`tests/test_restore_safety.py`](../tests/test_restore_safety.py)
+> (7 tests); mutation-verified.
+>
+> **Deviation from the original fix note:** the prompt triggers on *"would overwrite
+> a differing document"*, not on *"library is non-empty"* as first written. A
+> non-empty library that the source does not touch is not at risk, and blocking it
+> would train the user to type `y` reflexively — the prompt must mean something.
+
+<details><summary>Original finding (kept for the record)</summary>
 
 **Symptom.** `restore` is a *recovery* command that is itself destructive when
 misused. It copies over existing files
@@ -153,7 +171,22 @@ it — consistent with the app's own never-delete rule.
 **Done when.** No `restore` invocation can destroy a document without either an
 explicit confirmation or a recoverable copy in a trash folder.
 
-### [ ] C. No validation that the configured paths are not nested
+</details>
+
+### [x] C. No validation that the configured paths are not nested — **DONE**
+
+> **Shipped.** `config.layout_conflicts` is the single shared validator (resolved
+> paths, so `~/./lib/` cannot smuggle a nested root past it), covering the roots the
+> user never types — the library trash and the app state — which is exactly where an
+> innocent choice bites. `setup` now **refuses** a nested layout and re-asks (up to
+> 3 attempts) instead of printing a warning nobody reads; `doctor` **FAILs** on an
+> existing broken layout, because `setup` only ever validated at creation time and a
+> config can be hand-edited into the env file. Tests:
+> [`tests/test_layout_conflicts.py`](../tests/test_layout_conflicts.py) (16 tests),
+> including one asserting the shipped defaults pass their own guard;
+> mutation-verified (9 failures).
+
+<details><summary>Original finding (kept for the record)</summary>
 
 **Symptom.** `setup` invites free-form paths and only checks **exact distinctness**
 ([`user_setup.py:289-294`](../src/procrafiler/user_setup.py#L289-L294)) — a `set()`
@@ -188,6 +221,8 @@ configuration; include the "mirror on the same disk as the library" check there 
 
 **Done when.** A nested configuration is impossible to create through `setup`, and
 `doctor` FAILs on one that already exists on disk.
+
+</details>
 
 ### F. Weight the original filename as a **strong** hint, per read path
 
@@ -276,12 +311,16 @@ works, `/dev/null` does not.
 `PROCRAFILER_NO_ENV=1`. Log the effective source at startup (`status` already shows
 `env_loaded_from` — make it impossible to miss when a *fallback* occurred).
 
-### [ ] E. `doctor` is too optimistic
+### [x] E. `doctor` is too optimistic — **DONE**
 
-It verifies that folders exist and are writable, but none of the states that
-actually matter before trusting the app: **non-empty Queue** (A), **nested paths**
-(C), **mirror on the same disk** as the library. This is the command a user runs to
-decide whether to trust the tool — it should carry those checks.
+It verified that folders exist and are writable, but none of the states that
+actually matter before trusting the app. All three are now checks, so `doctor`
+earns its role as the go/no-go command:
+
+- **non-empty Queue** → FAIL, naming the stranded files (shipped with **A**);
+- **nested roots** → FAIL, one line per conflict (shipped with **C**);
+- **mirror on the same disk** as the library → WARN (shipped with **C**) — `setup`
+  said this once at creation and never again.
 
 ---
 

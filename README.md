@@ -178,6 +178,7 @@ procrafiler scrub                   # integrity check + self-heal (re-hash vs ca
 procrafiler verify-catalog          # check the catalog DB integrity; --rebuild reconstructs it from catalog_snapshot.json if corrupt/lost
 procrafiler backup --to <dir>       # write a dated, self-contained backup archive (.tar.gz + .sha256); --encrypt for a passphrase-protected (AES-256-GCM) bundle
 procrafiler restore --from <mirror> # disaster recovery: rebuild the library + catalog from a mirror (or --from-archive <file>)
+procrafiler restore --from <mirror> --dry-run   # preview only: what would be created/overwritten, changes nothing
 procrafiler deleted-history         # list library files you deleted by hand (from the action log)
 procrafiler deletion-mode [MODE]    # show, or set how a hand-deleted doc is recorded (tombstone|purge)
 procrafiler language [CODE]         # show, or set your primary language (search works in it + English)
@@ -199,6 +200,10 @@ procrafiler policy-effective        # show effective runtime policy (see "Runtim
 ```
 
 Mutating commands (`process-*`, `rescan`, `scrub`, `backup`, `restore`, `library-trash`, `purge-mirror-trash`, `enrich-keywords`) take a runtime lock, so two runs never race on the same Inbox. That is the complete command surface (run `procrafiler --help` for the live list).
+
+**`restore` never destroys a document.** It shows what it would change and **asks** before replacing anything that differs; each replaced document is moved to `Library_Trash_Manual` (recoverable), never overwritten in place. Use `--dry-run` to preview and `--yes` to skip the prompt in a script. A restore **merges** into your library: documents that exist only there are left untouched.
+
+**Your Inbox, Library and Mirror must be separate folders — none inside another.** `setup` refuses an overlapping layout (a mirror inside the library would get swept up by the library scan and corrupt the catalog), and `doctor` fails if it finds one, so a hand-edited env file cannot slip one past.
 
 ## Feature Controls (Terminal)
 

@@ -158,11 +158,17 @@ def _snapshot_document_count(snapshot_file: Path) -> int:
 
 
 def restore_from_archive(
-    paths: RuntimePaths, archive: Path, *, now_utc: str | None = None, passphrase: str | None = None
+    paths: RuntimePaths,
+    archive: Path,
+    *,
+    now_utc: str | None = None,
+    passphrase: str | None = None,
+    dry_run: bool = False,
 ) -> RestoreReport:
     """Extract a backup archive and rebuild the library + catalog from it (reuses
     the mirror-restore path, since the archive is mirror-shaped). An encrypted
-    archive requires the `passphrase`."""
+    archive requires the `passphrase`. With `dry_run` the archive is still extracted
+    (the only way to compare its contents) but the library is left untouched."""
     archive = Path(archive).expanduser()
     if not archive.is_file():
         raise FileNotFoundError(f"Backup archive not found: {archive}")
@@ -190,7 +196,7 @@ def restore_from_archive(
                     tar.extractall(extract_root)  # Python < 3.12
         except tarfile.ReadError as err:
             raise ValueError("this backup archive is unreadable or corrupted") from err
-        report = restore_from_mirror(paths, extract_root, now_utc=now_utc)
+        report = restore_from_mirror(paths, extract_root, now_utc=now_utc, dry_run=dry_run)
     report.source = str(archive)  # show the archive, not the ephemeral temp dir
     return report
 

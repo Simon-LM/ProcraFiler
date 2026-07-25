@@ -67,6 +67,7 @@ from procrafiler.catalog import CatalogRepository
 from procrafiler.catalog_verify import format_report as format_catalog_report
 from procrafiler.catalog_verify import verify_catalog
 from procrafiler.restore import format_report as format_restore_report
+from procrafiler.restore import format_plan as format_restore_plan
 from procrafiler.restore import replicate_catalog_to_mirror, restore_from_mirror
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
@@ -141,6 +142,16 @@ def build_parser() -> argparse.ArgumentParser:
     restore_src = restore_p.add_mutually_exclusive_group(required=True)
     restore_src.add_argument("--from", dest="from_dir", help="A mirror directory to restore from")
     restore_src.add_argument("--from-archive", dest="from_archive", help="A backup archive (.tar.gz) to restore from")
+    restore_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be created/overwritten and change nothing",
+    )
+    restore_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Do not prompt before replacing existing documents (for scripts)",
+    )
 
     subparsers.add_parser(
         "review",
@@ -713,7 +724,13 @@ def cmd_backup(to_dir: str, encrypt: bool) -> int:
     return 0
 
 
-def cmd_restore(from_dir: str | None, from_archive: str | None) -> int:
+def cmd_restore(
+    from_dir: str | None,
+    from_archive: str | None,
+    *,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     now = _resolve_now_utc().isoformat()
@@ -723,19 +740,56 @@ def cmd_restore(from_dir: str | None, from_archive: str | None) -> int:
         if passphrase is None:
             print("This backup is encrypted — a passphrase is required.")
             return 1
+
+    def _run(*, plan_only: bool):
+        if from_archive is not None:
+            return restore_from_archive(
+                paths,
+                Path(from_archive).expanduser(),
+                now_utc=now,
+                passphrase=passphrase,
+                dry_run=plan_only,
+            )
+        return restore_from_mirror(
+            paths, Path(str(from_dir)).expanduser(), now_utc=now, dry_run=plan_only
+        )
+
     try:
         with runtime_lock(paths):
-            if from_archive is not None:
-                report = restore_from_archive(
-                    paths, Path(from_archive).expanduser(), now_utc=now, passphrase=passphrase
+            # Always compute the plan first: a restore that would replace existing
+            # documents must be shown and confirmed, never applied silently.
+            preview = _run(plan_only=True)
+            if dry_run:
+                print(format_restore_report(preview))
+                return 0
+
+            plan = preview.plan
+            if plan is not None and plan.destructive and not assume_yes:
+                # Print the PLAN, not the dry-run report: the user did not ask for a
+                # dry run, they are being asked to confirm a real change.
+                print(
+                    format_restore_plan(
+                        plan, source=Path(preview.source), library_root=Path(preview.library_root)
+                    )
                 )
-            else:
-                report = restore_from_mirror(paths, Path(str(from_dir)).expanduser(), now_utc=now)
+                print()
+                answer = input(
+                    f"Replace {len(plan.overwrites)} existing document(s)? "
+                    "The current versions go to the library trash. [y/N] "
+                ).strip().lower()
+                if not answer.startswith(("y", "o")):
+                    print("Cancelled — nothing was changed.")
+                    return 1
+
+            report = _run(plan_only=False)
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
     except (FileNotFoundError, ValueError) as err:
         print(str(err))
+        return 1
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled — nothing was changed.")
         return 1
     print(format_restore_report(report))
     return 0
@@ -836,7 +890,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "backup":
         return cmd_backup(args.to_dir, args.encrypt)
     if args.command == "restore":
-        return cmd_restore(args.from_dir, args.from_archive)
+        return cmd_restore(
+            args.from_dir, args.from_archive, dry_run=args.dry_run, assume_yes=args.yes
+        )
     if args.command == "deleted-history":
         return cmd_deleted_history(args.limit)
 

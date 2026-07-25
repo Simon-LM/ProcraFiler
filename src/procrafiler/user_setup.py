@@ -22,6 +22,7 @@ from typing import Callable
 from procrafiler.config import (
     default_runtime_paths,
     ensure_runtime_layout,
+    layout_conflicts,
     set_feature_flag,
 )
 from procrafiler.user_context_setup import setup_context
@@ -186,6 +187,61 @@ def collect_paths(ask: AskFn, out: OutFn) -> dict[str, Path | None]:
     return {"inbox": inbox, "library": library, "mirror": mirror}
 
 
+def conflicts_for_choices(choices: dict[str, Path | None]) -> list[str]:
+    """Layout conflicts (equal or nested roots) for a set of chosen paths.
+
+    Built by asking `config` about the paths these choices WOULD produce, rather
+    than re-implementing the comparison here — so `setup` and `doctor` can never
+    disagree about what counts as a broken layout. Also covers the derived roots
+    the user never types (the library trash, the app state), which is exactly
+    where an innocent-looking choice bites: a library at `~/.local/share` would
+    swallow the state directory.
+    """
+    inbox, library, mirror = choices["inbox"], choices["library"], choices["mirror"]
+    assert inbox is not None and library is not None
+    saved = {k: os.environ.get(k) for k in (_INBOX_ENV, _LIBRARY_ENV, _MIRROR_ENV)}
+    try:
+        os.environ[_INBOX_ENV] = str(inbox)
+        os.environ[_LIBRARY_ENV] = str(library)
+        if mirror is not None:
+            os.environ[_MIRROR_ENV] = str(mirror)
+        else:
+            os.environ.pop(_MIRROR_ENV, None)
+        return layout_conflicts(default_runtime_paths(), include_mirror=mirror is not None)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _collect_valid_paths(
+    ask: AskFn, out: OutFn, *, max_attempts: int = 3
+) -> dict[str, Path | None] | None:
+    """Ask for the paths, REFUSING a layout where one root sits inside another.
+
+    Refusing rather than warning is deliberate: a nested layout silently corrupts
+    the catalog and wastes paid AI calls (see `config.layout_conflicts`), and the
+    old code only compared paths for exact equality — so the most damaging case,
+    nesting, sailed straight through. Returns None when the user cannot produce a
+    valid layout within `max_attempts`.
+    """
+    for attempt in range(1, max_attempts + 1):
+        choices = collect_paths(ask, out)
+        conflicts = conflicts_for_choices(choices)
+        if not conflicts:
+            return choices
+        out("\n✗ These locations overlap, which would corrupt your library:")
+        for conflict in conflicts:
+            out(f"  • {conflict}")
+        out("  Each location must be a separate folder — none inside another.")
+        if attempt < max_attempts:
+            out("  Let's try again.")
+    out("\n✗ Still overlapping after several attempts.")
+    return None
+
+
 def apply_setup(choices: dict[str, Path | None], *, out: OutFn) -> Path:
     """Persist the chosen paths to the env file, make them effective in THIS
     process, record the mirror choice, and create ONLY the chosen folders.
@@ -279,19 +335,15 @@ def setup(*, ask: AskFn = input, out: OutFn = print, ask_secret: SecretFn = getp
 
     paths_saved = False
     try:
-        choices = collect_paths(ask, out)
+        choices = _collect_valid_paths(ask, out)
+        if choices is None:
+            out("Cancelled — nothing was created or changed.")
+            return 1
 
         out("\nSummary:")
         out(f"  • Inbox    : {choices['inbox']}")
         out(f"  • Library  : {choices['library']}")
         out(f"  • Mirror   : {choices['mirror'] if choices['mirror'] is not None else 'disabled'}")
-
-        distinct = {choices["inbox"], choices["library"]} | (
-            {choices["mirror"]} if choices["mirror"] is not None else set()
-        )
-        expected = 3 if choices["mirror"] is not None else 2
-        if len(distinct) < expected:
-            out("\n⚠ Warning: these paths are not all distinct — not recommended.")
 
         mirror = choices["mirror"]
         library = choices["library"]
