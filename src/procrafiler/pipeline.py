@@ -31,6 +31,7 @@ from procrafiler.config import (
 from procrafiler.ai_analysis import analyze_content, translate_keywords  # type: ignore[reportMissingImports]
 from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
+from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
@@ -3089,6 +3090,7 @@ def process_all_inbox_files(
         )
 
     organize_chain = task_chain_from_env("ORGANIZE")
+    naming_chain = task_chain_from_env("NAMING")
     max_depth = load_runtime_policy(paths).taxonomy_max_depth
     base_categories = [category_label(c) for c in classifiable_categories()]
     user_context = load_user_context()
@@ -3122,6 +3124,47 @@ def process_all_inbox_files(
                 continue
             run_seen.add(outcome.sha256)
             catdocs.append(outcome)
+
+        # Phase 1b — NAME the whole set at once, BEFORE any placement. Each file was
+        # named from its own content, blind to the others; now that the set exists,
+        # its names are re-judged together. This is where a misread photo is caught:
+        # the nine files dropped alongside it say what the set is about. Folder-sets
+        # only — loose Inbox-root files are not a set and keep their per-file name.
+        set_names: dict[int, Any] = {}
+        if naming_chain and set_top:
+            namable = [(i, c) for i, c in enumerate(catdocs) if c.analysis is not None]
+            if namable:
+                naming_docs = [
+                    {
+                        "read_via": c.read_via,
+                        "original_filename": c.source.name,
+                        "proposed_name": c.analysis.name,
+                        "summary": c.analysis.summary,
+                    }
+                    for _, c in namable
+                ]
+                naming = name_set(
+                    naming_docs,
+                    source_folder=set_top,
+                    user_context=user_context,
+                    chain=naming_chain,
+                )
+                if not naming.used_fallback:
+                    for position, (catdoc_index, _c) in enumerate(namable):
+                        verdict = naming.names.get(position)
+                        if verdict is not None:
+                            set_names[catdoc_index] = verdict
+                    renamed = sum(
+                        1
+                        for position, (idx, c) in enumerate(namable)
+                        if (v := set_names.get(idx)) is not None
+                        and v.name
+                        and sanitize_filename_stem(v.name) != (c.analysis.name or "")
+                    )
+                    if renamed:
+                        emit(f"   set naming: {renamed} name(s) revised from the folder context")
+                else:
+                    emit(f"   set naming skipped ({naming.reason})")
 
         # Phase 2 — ORGANIZE the whole set at once (real folder-sets only, and only
         # when an ORGANIZE chain is configured). The set's coherence decides each
@@ -3172,6 +3215,30 @@ def process_all_inbox_files(
                 # 3a — set when grouping aligns this new file's name to the
                 # populated series it joins (so siblings match); None otherwise.
                 regroup_name: str | None = None
+
+                # The set-naming verdict (phase 1b) wins over the per-file name: it
+                # saw the whole folder, the per-file analysis did not. A file the
+                # pass could not settle goes to the decisions queue instead of being
+                # named on a guess — but only when it is not already parked there.
+                verdict = set_names.get(index)
+                if verdict is not None:
+                    if verdict.name:
+                        regroup_name = verdict.name
+                    if verdict.needs_review and pending_options is None:
+                        # Offer the destinations this file's own analysis considered
+                        # (its chosen path first, then its alternatives), so `review`
+                        # still presents a real choice rather than the whole taxonomy.
+                        candidates = [route_dir_label] if (route_dir_label := "/".join(route_dir)) else []
+                        for alt in catdoc.analysis.alternatives if catdoc.analysis else []:
+                            normalized = normalize_category_path(alt, max_depth)
+                            if normalized is not None and (label := "/".join(normalized)) not in candidates:
+                                candidates.append(label)
+                        route_dir = INTERIM_LIBRARY_DIR
+                        pending_options = candidates
+                        pending_reason = (
+                            f"name_uncertain: {verdict.reason or 'set naming could not settle this file'}"
+                        )
+                        emit("   → decision pending (name uncertain in this set)")
 
                 # M2+M3 — singleton-only grouping: show the AI the existing files
                 # along the candidate branches; it may confirm, or propose a DEEPER
