@@ -328,7 +328,17 @@ whose weight rises as content reliability falls.*
 
 ## P2 — polish
 
-### [ ] D. `PROCRAFILER_ENV_FILE=/dev/null` does not force offline
+### [x] D. `PROCRAFILER_ENV_FILE=/dev/null` does not force offline — **DONE**
+
+> **Shipped**, and fixed at the root rather than at the symptom. The bug was not
+> `/dev/null` specifically: it was that an EXPLICIT `PROCRAFILER_ENV_FILE` could be
+> silently ignored in favour of another source. Naming a file is a deliberate
+> instruction, so it is now **authoritative** — the only candidate, no fall-through.
+> Readability is decided by actually reading, not by `is_file()`, so `/dev/null`
+> (a character device) loads as empty and stops the search. A typo'd path now loads
+> nothing instead of quietly adopting the developer's `./.env`, and `doctor` **FAILs**
+> on it. Tests: 5 in `tests/test_runtime_env.py`; mutation-verified (restoring
+> `is_file()` fails the `/dev/null` test, restoring the fall-through fails 3).
 
 `/dev/null` fails the `is_file()` test
 ([`runtime_env.py:78`](../src/procrafiler/runtime_env.py#L78)), so it is skipped and
