@@ -43,14 +43,27 @@ def _parse_env_line(line: str) -> tuple[str, str] | None:
 
 
 def default_env_candidates() -> list[Path]:
+    """The env files to try, in order.
+
+    An explicit ``PROCRAFILER_ENV_FILE`` is AUTHORITATIVE: it is the only
+    candidate, and the search never falls through to anything else. Naming a file
+    is a deliberate instruction — silently loading a different one instead is
+    worse than loading none.
+
+    That fall-through used to bite in the exact case people reach for: pointing
+    the variable at ``/dev/null`` to force an offline run. ``/dev/null`` is a
+    character device, so the old ``is_file()`` test rejected it, the search moved
+    on, and the developer's real ``./.env`` — live API key and provider chains —
+    was loaded instead of nothing. The same trap swallowed any typo in the path.
+    """
     home = Path.home()
     config_home = Path(os.environ.get("PROCRAFILER_CONFIG_HOME", str(home / ".config" / "procrafiler")))
     explicit = os.environ.get("PROCRAFILER_ENV_FILE")
 
-    candidates: list[Path] = []
     if explicit:
-        candidates.append(Path(explicit))
+        return [Path(explicit)]
 
+    candidates: list[Path] = []
     # The cwd `./.env` is a developer convenience — never load it under a test
     # runner, so a test can't pick up the real key/chains and reach the live API.
     if not _running_under_test_runner():
@@ -74,11 +87,23 @@ def default_env_candidates() -> list[Path]:
 
 
 def load_runtime_env(candidates: list[Path] | None = None) -> Path | None:
-    for env_file in candidates or default_env_candidates():
-        if not env_file.exists() or not env_file.is_file():
-            continue
+    """Load the first readable env file and return it, or None if none loaded.
 
-        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+    Readability is decided by ACTUALLY READING, not by `is_file()`: an empty but
+    valid source like `/dev/null` is a legitimate way to say "load nothing", and
+    rejecting it used to send the search on to the developer's real `./.env`.
+    Anything unreadable (missing, a directory, no permission) is skipped — and
+    when the candidate came from an explicit `PROCRAFILER_ENV_FILE` there is
+    nothing else to try, so the run continues with built-in defaults rather than
+    quietly adopting a different file. `doctor` reports that case.
+    """
+    for env_file in candidates or default_env_candidates():
+        try:
+            content = env_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # missing, a directory, unreadable, or not text
+
+        for raw_line in content.splitlines():
             parsed = _parse_env_line(raw_line)
             if parsed is None:
                 continue

@@ -47,6 +47,20 @@ making a file-count assertion fail, depending on whether the network call
 succeeded). Layer 2 now prevents that regardless of how you launch the tests, but
 `make test` remains the canonical, documented command.
 
+## Forcing an offline run by hand
+
+`PROCRAFILER_ENV_FILE` is **authoritative**: the file it names is the only one
+tried, and the search never falls through to `./.env` or the config-home files.
+So the simplest way to run the real CLI with no key and no chains is:
+
+```bash
+PROCRAFILER_ENV_FILE=/dev/null procrafiler process-all --dry-run
+```
+
+`/dev/null` reads as empty, so nothing is configured. Any unreadable path (a typo)
+loads nothing either, and `doctor` then **FAILs** rather than letting the run use
+built-in defaults silently.
+
 ## Running a subset
 
 ```bash

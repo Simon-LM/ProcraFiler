@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from procrafiler.cli import main
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
@@ -72,9 +73,25 @@ class TestDoctor(unittest.TestCase):
 
     def test_env_warns_when_no_env_file_loaded(self) -> None:
         os.environ.pop("PROCRAFILER_ENV_LOADED_FROM", None)
-        results = check_env(self.paths)
+        with mock.patch.dict(os.environ):
+            # No explicit file was asked for — nothing was configured, which is a
+            # WARN. (The suite bootstrap sets PROCRAFILER_ENV_FILE for the whole
+            # run, so it has to be cleared to reach this branch.)
+            os.environ.pop("PROCRAFILER_ENV_FILE", None)
+            results = check_env(self.paths)
         self.assertEqual(results[0].status, STATUS_WARN)
         self.assertIn("no env file loaded", results[0].message)
+
+    def test_env_fails_when_an_explicit_env_file_could_not_be_read(self) -> None:
+        """Naming a file the app then cannot read is a FAIL, not a shrug: the run
+        is silently using built-in defaults instead of the configuration asked
+        for — a typo'd path, or a permission problem."""
+        os.environ.pop("PROCRAFILER_ENV_LOADED_FROM", None)
+        with mock.patch.dict(os.environ):
+            os.environ["PROCRAFILER_ENV_FILE"] = "/nonexistent/typo/procrafiler.env"
+            results = check_env(self.paths)
+        self.assertEqual(results[0].status, STATUS_FAIL)
+        self.assertIn("/nonexistent/typo/procrafiler.env", results[0].message)
 
     def test_env_ok_with_loaded_file_and_strict_permissions(self) -> None:
         env_file = self.paths.state_root / "procrafiler.env"
@@ -173,6 +190,10 @@ class TestDoctor(unittest.TestCase):
             os.close(external_fd)
 
     def test_overall_exit_code_zero_when_no_fail(self) -> None:
+        # A healthy run has actually loaded its env file; the suite bootstrap names
+        # one (tests/empty.env) but nothing in this test called load_runtime_env,
+        # so record the successful load the way the CLI would.
+        os.environ["PROCRAFILER_ENV_LOADED_FROM"] = os.environ["PROCRAFILER_ENV_FILE"]
         checks = run_doctor(self.paths)
         self.assertNotIn(STATUS_FAIL, [c.status for c in checks])
         self.assertEqual(overall_exit_code(checks), 0)

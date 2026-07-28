@@ -175,6 +175,19 @@ def check_env(paths: RuntimePaths) -> list[DoctorCheck]:
                 results.append(
                     DoctorCheck(section, "env_file_permissions", STATUS_OK, f"0o{mode:03o}")
                 )
+    elif (explicit := os.environ.get("PROCRAFILER_ENV_FILE", "").strip()):
+        # An explicit file was named and could not be read. That is a FAIL, not a
+        # shrug: the run is silently using built-in defaults instead of the
+        # configuration the user pointed at (a typo'd path, a bad permission).
+        results.append(
+            DoctorCheck(
+                section,
+                "env_file_loaded",
+                STATUS_FAIL,
+                f"PROCRAFILER_ENV_FILE points at {explicit}, which could not be read — "
+                "no configuration was loaded (built-in defaults in use)",
+            )
+        )
     else:
         results.append(
             DoctorCheck(
