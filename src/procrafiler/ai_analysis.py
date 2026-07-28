@@ -110,10 +110,14 @@ def _summary_and_keyword_instructions(user_language: str) -> tuple[str, str]:
 MAX_SIBLING_HINTS = 12
 MAX_SIBLING_CHARS = 400
 
-# Content read by an AI (a vision model describing an image, OCR on a scan) is
-# itself an interpretation and can be wrong or hallucinated. Content extracted
-# mechanically (a PDF text layer, a .txt file) is literal bytes.
-_INTERPRETED_READS = ("vision", "ocr")
+# The weak source is IMAGE DESCRIPTION, not AI reading in general. A dedicated OCR
+# model transcribing a page is reliable in practice — text read off a document is
+# still text — so `ocr` is treated like a mechanical read. A vision model
+# INTERPRETING a photo is the fallible one, most of all a photo with no text to
+# anchor it, where a confident description can be entirely wrong.
+# (Caveat worth watching on local setups: `read_via="ocr"` also covers OCR done by
+# a local vision model, which is weaker than a dedicated OCR model.)
+_INTERPRETED_READS = ("vision",)
 
 
 def _build_hints_block(
@@ -149,13 +153,14 @@ def _build_hints_block(
 
     if interpreted:
         header = (
-            "\nCorroborating evidence — IMPORTANT: the text above was produced by an AI "
-            "reading an image (OCR/vision), so it may be incomplete, misread or invented. "
-            "These facts come from the user's own filesystem and are RELIABLE. Weigh them "
-            "heavily: when the visual description is vague or generic but the evidence below "
-            "is specific, FOLLOW THE EVIDENCE. If the two clearly contradict each other, "
-            "prefer the evidence, or return category_path null with alternatives rather than "
-            "guessing from the image alone:"
+            "\nCorroborating evidence — IMPORTANT: the text above is a vision model's "
+            "DESCRIPTION of an image, not a transcription, so it may be incomplete, misread "
+            "or invented — most of all for a photo with no legible text to anchor it. These "
+            "facts come from the user's own filesystem and are RELIABLE. Weigh them heavily: "
+            "when the description is vague or generic but the evidence below is specific, "
+            "FOLLOW THE EVIDENCE. If the two clearly contradict each other, prefer the "
+            "evidence, or return category_path null with alternatives rather than guessing "
+            "from the image alone:"
         )
     else:
         header = (
@@ -254,6 +259,10 @@ def _build_analysis_prompt(
         "already implied by the entity; do NOT name it by its file type or format; avoid empty words like "
         "\"document\", \"fichier\", \"texte\". When the user context gives the person's identity, use it "
         "(e.g. a CV -> that exact Nom-Prenom).\n"
+        "  The ORIGINAL filename is a strong clue to WHAT the document is — but not proof, and rarely a "
+        "good name: it may be hurried, partial, or plainly wrong (a copy, a template, a stale scan_001). "
+        "If the content confirms it, use its information and improve the name; if reliable content "
+        "contradicts it, ignore it. Leave an already-correct name alone.\n"
         "- \"date\": the document's own date (letter/invoice/statement date) as YYYY-MM-DD if clearly "
         "stated in the content; otherwise null.\n"
         "- \"category_path\": MUST start with one of these existing base categories "

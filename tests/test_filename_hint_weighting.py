@@ -41,14 +41,21 @@ class TestHintFraming(unittest.TestCase):
         self.assertIn("the content is authoritative", block)
         self.assertNotIn("may be incomplete, misread or invented", block)
 
-    def test_an_ai_read_marks_the_content_unreliable_and_the_hints_reliable(self) -> None:
-        for read_via in ("vision", "ocr"):
-            with self.subTest(read_via=read_via):
-                block = _build_hints_block(read_via=read_via, sibling_filenames=None, **self.COMMON)
-                self.assertIn("may be incomplete, misread or invented", block)
-                self.assertIn("RELIABLE", block)
-                # It must NOT still claim the content is authoritative.
-                self.assertNotIn("the content is authoritative", block)
+    def test_an_image_description_marks_the_content_unreliable(self) -> None:
+        block = _build_hints_block(read_via="vision", sibling_filenames=None, **self.COMMON)
+        self.assertIn("may be incomplete, misread or invented", block)
+        self.assertIn("RELIABLE", block)
+        # It must NOT still claim the content is authoritative.
+        self.assertNotIn("the content is authoritative", block)
+
+    def test_ocr_is_treated_as_a_reliable_read(self) -> None:
+        """A dedicated OCR model transcribing a page is reliable in practice — text
+        read off a document is still text. Only IMAGE DESCRIPTION is the weak source.
+        Grouping OCR with vision would wrongly demote a trustworthy read and let a
+        filename hint override a correctly transcribed scan."""
+        block = _build_hints_block(read_via="ocr", sibling_filenames=None, **self.COMMON)
+        self.assertIn("the content is authoritative", block)
+        self.assertNotIn("may be incomplete, misread or invented", block)
 
     def test_an_ai_read_tells_the_model_what_to_do_on_a_contradiction(self) -> None:
         """The point of the whole item: a confident name beating a vague image."""
