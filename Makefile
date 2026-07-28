@@ -7,10 +7,13 @@
 
 PYTHON ?= .venv/bin/python
 
-.PHONY: test test-ollama
+.PHONY: test test-ollama test-mistral
 
 test:  ## Routine suite: offline, mocked, deterministic, free (no API)
 	$(PYTHON) -m unittest discover -t . -s tests
 
 test-ollama:  ## Opt-in: real LOCAL Ollama integration (needs Ollama running)
 	PROCRAFILER_OLLAMA_IT=1 $(PYTHON) -m unittest tests.test_ollama_integration
+
+test-mistral:  ## Opt-in: real MISTRAL API integration — COSTS MONEY (needs MISTRAL_API_KEY)
+	PROCRAFILER_MISTRAL_IT=1 $(PYTHON) -m unittest tests.test_mistral_integration

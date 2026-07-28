@@ -10,6 +10,7 @@
 ```bash
 make test          # routine suite: offline, deterministic, no API calls, free
 make test-ollama   # opt-in: real LOCAL model integration (needs Ollama running)
+make test-mistral  # opt-in: real MISTRAL API — COSTS MONEY (needs MISTRAL_API_KEY)
 ```
 
 Always run from the **repo root**. `make test` is the canonical command — use it.
@@ -46,6 +47,25 @@ which showed up as a **flaky 5–6 failures** (e.g. an unexpected `.txt` sidecar
 making a file-count assertion fail, depending on whether the network call
 succeeded). Layer 2 now prevents that regardless of how you launch the tests, but
 `make test` remains the canonical, documented command.
+
+## The one thing offline tests cannot measure
+
+Everything in the routine suite mocks the AI, so it proves a prompt is built and a
+verdict is applied — never that the model **judges well**. The set-aware naming pass
+exists to catch a photo whose vision reading went wrong; that judgement is only
+measurable against a real model.
+
+`make test-mistral` (opt-in, `PROCRAFILER_MISTRAL_IT=1`, costs money) is where it is
+measured. No photos are needed: the naming pass never sees an image — a misread photo
+is an *input* to it, so supplying what a vision model would have produced reproduces
+the case exactly.
+
+The assertions are on the **discrimination**, never on exact strings or the review
+flag. Across real runs the same outlier came back as `Degats-eaux_pelouse-jardin` and
+`Degats-eaux_tapis-salon`, separators drifted, and the review flag was set on one run
+and not the next. What must hold is that a plausibly-misread photo joins its set while
+a genuinely unrelated one does not. A test demanding an exact name would be red one
+run in three and end up ignored — worse than no test.
 
 ## Forcing an offline run by hand
 
