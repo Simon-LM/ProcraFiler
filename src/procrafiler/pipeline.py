@@ -1,6 +1,7 @@
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -415,29 +416,51 @@ _STAGING_PREFIXES = (_STAGING_PREFIX, MIRROR_STAGING_PREFIX)
 
 
 def _move_atomically(source: Path, target: Path) -> None:
-    """Move `source` → `target` so that `target` NEVER exists half-written.
+    """Move `source` → `target` so that `target` NEVER exists half-written, and
+    `source` is never dropped until the document is safely in place.
 
-    `shutil.move` falls back to copy+unlink across filesystems (CPython's own
-    implementation), and the app actively encourages that layout — `setup`
-    recommends the library on a different disk from the mirror, and the Inbox
-    lives under Downloads. A crash mid-copy would therefore leave a TRUNCATED
-    document at its final library path, which the next `rescan` would ingest as a
-    genuine new file (reading garbage, cataloguing and mirroring it) — silent
-    corruption of the user's library.
+    Why not a plain `shutil.move`: it falls back to copy+unlink across
+    filesystems, and the app actively encourages that layout (`setup` recommends
+    the library on a different disk, and the Inbox lives under Downloads). A crash
+    mid-copy would leave a TRUNCATED document at its final library path, which the
+    next `rescan` would ingest as a genuine new file — silent corruption.
 
-    So we stage into a hidden temp file in the DESTINATION directory (same
-    filesystem as the target, by construction) and then `os.replace`, which is
-    atomic. A hard kill can leave a staging file behind, but never a partial
-    document under a real name: staging files are hidden, excluded from the
-    library walk, and cleaned up by `_sweep_staging_files`.
+    Two cases, and the split matters for correctness, not just speed:
+
+    - **Same filesystem** — a single `os.rename`, which is atomic. No staging file
+      exists at all, and a failure (e.g. `ENAMETOOLONG` from an over-long name)
+      leaves `source` exactly where it was.
+    - **Cross filesystem** (`EXDEV`) — copy into a hidden staging file in the
+      DESTINATION directory, `os.replace` it into place (atomic, same filesystem
+      by construction), and only THEN unlink the source.
+
+    The ordering in the cross-filesystem case is the load-bearing part: the source
+    survives until the target exists, so a staging leftover is ALWAYS a redundant
+    copy of a file that still exists elsewhere — which is what makes
+    `_sweep_staging_files` safe to delete them. An earlier version used
+    `shutil.move` into staging, which unlinks the source as soon as it is copied;
+    an `os.replace` failure then left the document ONLY in the staging file, and
+    the next run's sweep deleted it. That destroyed documents.
 
     The staging name is a fixed-length uuid, NOT the target name prefixed: a
     prefixed long filename could exceed the filesystem's 255-byte limit and fail
     the very move it is meant to make safe.
     """
+    try:
+        os.rename(str(source), str(target))
+        return
+    except OSError as err:
+        if err.errno != errno.EXDEV:
+            raise  # not a cross-device move — source is untouched, let it surface
+
     staging = target.parent / f"{_STAGING_PREFIX}{uuid4().hex}.tmp"
-    move(str(source), str(staging))
-    os.replace(str(staging), str(target))
+    try:
+        copy2(str(source), str(staging))
+        os.replace(str(staging), str(target))
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise  # source still intact: nothing lost
+    source.unlink()
 
 
 def _sweep_staging_files(root: Path) -> int:
@@ -789,10 +812,15 @@ def _read_and_analyze(
     now_utc: datetime | None,
     features: dict[str, bool],
     emit: ProgressFn,
+    sibling_names: list[str] | None = None,
 ) -> _CatalogedDoc:
     """Read the file's content (local / OCR / vision) and run the single AI
     analysis → a fiche. Does NOT decide a final folder or file anything; returns
-    a `_CatalogedDoc` for the caller (per-file or set-aware) to place."""
+    a `_CatalogedDoc` for the caller (per-file or set-aware) to place.
+
+    `sibling_names` are the names of the other files dropped in the same set — a
+    reliable clue the analysis would otherwise throw away, and the one that saves a
+    misread photo sitting among clearly-named documents."""
     extraction = extract_text_content(queued_target, dispatch.media_type or "")
     emit(
         f"   read: {dispatch.media_type}"
@@ -904,6 +932,11 @@ def _read_and_analyze(
             source_folder=source_folder or None,
             user_context=load_user_context(),
             user_language=get_user_language(paths),
+            # How the text was obtained decides how far to trust it against the
+            # filename/folder/sibling hints: an OCR or vision read is itself an
+            # interpretation, so those hints must weigh MORE, not the same.
+            read_via=read_via,
+            sibling_filenames=sibling_names or None,
         )
 
     return _CatalogedDoc(
@@ -1434,6 +1467,7 @@ def _catalog_one_inbox_file(
     features: dict[str, bool],
     emit: ProgressFn,
     extra_known_hashes: frozenset[str] | set[str] = frozenset(),
+    sibling_names: list[str] | None = None,
 ) -> _CatalogedDoc | ProcessResult:
     """Phase 1 (CATALOG) for ONE file: move it to the Queue, dedup, dispatch, and
     read+analyze it into a fiche — WITHOUT filing it into the library. Returns the
@@ -1589,6 +1623,7 @@ def _catalog_one_inbox_file(
         now_utc=now_utc,
         features=features,
         emit=emit,
+        sibling_names=sibling_names,
     )
 
 
@@ -1627,7 +1662,12 @@ def _process_next_inbox_file(
     if dry_run:
         return _dry_run_one(paths, source, now_utc=now_utc, features=features, emit=emit)
 
-    result = _catalog_one_inbox_file(paths, source, now_utc=now_utc, features=features, emit=emit)
+    # `process-once` takes one file, but its set-mates are still sitting in the same
+    # Inbox subfolder — their names are legitimate context for reading this one.
+    siblings = [p.name for p in candidates if p != source and p.parent == source.parent]
+    result = _catalog_one_inbox_file(
+        paths, source, now_utc=now_utc, features=features, emit=emit, sibling_names=siblings
+    )
     if isinstance(result, ProcessResult):
         return result  # duplicate or unreadable — already filed/trashed
     catdoc = result
@@ -3065,8 +3105,14 @@ def process_all_inbox_files(
         catdocs: list[_CatalogedDoc] = []
         for source in sources:
             try:
+                # The set's OTHER members, as context. Taken from the pre-computed
+                # member list, not by re-scanning the Inbox: by now the files
+                # already catalogued have moved to the Queue, so a live scan would
+                # only ever see the tail of the set.
+                siblings = [p.name for p in sources if p != source]
                 outcome = _catalog_one_inbox_file(
-                    paths, source, now_utc=now_utc, features=features, emit=emit, extra_known_hashes=run_seen
+                    paths, source, now_utc=now_utc, features=features, emit=emit,
+                    extra_known_hashes=run_seen, sibling_names=siblings,
                 )
             except Exception as exc:  # noqa: BLE001 — one bad file must never abort the batch
                 _record_error(exc)

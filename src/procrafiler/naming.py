@@ -34,9 +34,36 @@ def _strip_leading_date(stem: str) -> str:
     return stripped or stem
 
 
+# Longest stem we keep. A filesystem name maxes out at 255 BYTES (ext4, most
+# others), and the stem is only part of the final name: the app's own
+# `YYYY-MM-DD_HH-MM-SS__` prefix costs 21, the extension a few more, and a
+# `__1`-style deduplication suffix may be appended after that. 180 leaves generous
+# room for all of it while keeping names readable.
+#
+# This cap exists because the stem can come from an AI: a model that answers the
+# "name" field with a whole descriptive sentence instead of a title would otherwise
+# produce a filename the filesystem REFUSES (ENAMETOOLONG), failing the placement
+# of a document that is otherwise perfectly fine. Truncating is always better than
+# refusing to file the user's document.
+MAX_STEM_CHARS = 180
+
+
+def _truncate_stem(stem: str) -> str:
+    """Cap the stem at MAX_STEM_CHARS, cutting on a separator when one is close by
+    so the result still reads as words rather than a chopped fragment."""
+    if len(stem.encode("utf-8")) <= MAX_STEM_CHARS:
+        return stem
+    clipped = stem[:MAX_STEM_CHARS]
+    # Prefer the last separator in the final quarter, to avoid cutting mid-word.
+    cut = max(clipped.rfind("-"), clipped.rfind("_"))
+    if cut >= MAX_STEM_CHARS * 3 // 4:
+        clipped = clipped[:cut]
+    return clipped.strip("-_") or "file"
+
+
 def sanitize_filename_stem(stem: str) -> str:
     stem = _TIMESTAMP_PREFIX_RE.sub("", stem)
-    return _strip_leading_date(_slugify_stem(stem))
+    return _truncate_stem(_strip_leading_date(_slugify_stem(stem)))
 
 
 def has_timestamp_prefix(name: str) -> bool:

@@ -14,6 +14,7 @@ byte-identical to what was dropped.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import tempfile
@@ -294,23 +295,50 @@ class TestAtomicPlacement(_WorkspaceCase):
     could leave a TRUNCATED document at its final library path — which `rescan`
     would then ingest as a genuine new file. Placement must be atomic."""
 
+    def _force_cross_device(self, source: Path):
+        """Make the first rename of `source` report EXDEV, so the staging branch runs.
+
+        Same-filesystem placement is a single atomic `os.rename` and can never leave
+        a partial file; the branch worth testing is the cross-filesystem one, which
+        the app's recommended layout (library and mirror on separate disks) makes the
+        normal case."""
+        real_rename = os.rename
+        state: dict[str, bool] = {}
+
+        def force_exdev(a, b, *args, **kwargs):
+            if not state.get("done") and str(a) == str(source):
+                state["done"] = True
+                raise OSError(errno.EXDEV, "Invalid cross-device link")
+            return real_rename(a, b, *args, **kwargs)
+
+        return patch("procrafiler.pipeline.os.rename", side_effect=force_exdev), state
+
     def test_interrupted_placement_leaves_no_partial_document(self) -> None:
         target_dir = self.paths.library_root / "Personal"
         target_dir.mkdir(parents=True, exist_ok=True)
         source = self.paths.queue_dir / "doc.txt"
-        source.write_bytes(b"the full and complete document body")
+        body = b"the full and complete document body"
+        source.write_bytes(body)
         target = target_dir / "2026-07-25_12-00-00__Doc.txt"
 
-        # Simulate a kill during the copy phase of the staged move.
-        with patch.object(pipeline, "move", side_effect=KeyboardInterrupt()):
-            with self.assertRaises(KeyboardInterrupt):
-                _move_atomically(source, target)
+        def half_copy_then_die(src, dst, *args, **kwargs):
+            Path(dst).write_bytes(Path(src).read_bytes()[: len(body) // 2])
+            raise KeyboardInterrupt()
 
-        # The real path must NOT exist half-written.
+        exdev, state = self._force_cross_device(source)
+        with exdev:
+            with patch("procrafiler.pipeline.copy2", side_effect=half_copy_then_die):
+                with self.assertRaises(KeyboardInterrupt):
+                    _move_atomically(source, target)
+
+        self.assertTrue(state.get("done"), "the cross-device branch was never exercised")
+        # The real path must NOT exist half-written…
         self.assertFalse(target.exists(), "a partial document appeared at its final library path")
-        # The source is untouched, so nothing was lost.
+        # …and the source must be untouched, so nothing was lost.
         self.assertTrue(source.is_file())
-        self.assertEqual(source.read_bytes(), b"the full and complete document body")
+        self.assertEqual(source.read_bytes(), body)
+        # The partial staging copy is cleaned up on the way out.
+        self.assertEqual(list(target_dir.glob(".procrafiler-incoming__*")), [])
 
     def test_successful_placement_is_byte_exact_and_leaves_no_staging(self) -> None:
         target_dir = self.paths.library_root / "Personal"
@@ -348,22 +376,26 @@ class TestAtomicPlacement(_WorkspaceCase):
         body = b"the complete document body, all of it" * 100
         self._drop("doc.txt", body)
 
-        real_move = pipeline.move
+        real_rename = os.rename
         library_bound: list[str] = []
 
-        def half_copy_on_library_move(src, dst):
-            # Only sabotage the move INTO the library — sabotaging the earlier
-            # Inbox→Queue move would abort before placement and make this test
-            # pass vacuously (it did, on the first attempt).
-            if Path(dst).is_relative_to(self.paths.library_root):
-                library_bound.append(str(dst))
-                Path(dst).write_bytes(Path(src).read_bytes()[: len(body) // 2])
-                raise KeyboardInterrupt()
-            return real_move(src, dst)
+        def exdev_on_library_move(a, b, *args, **kwargs):
+            # Force the cross-device branch only for the move INTO the library.
+            # Sabotaging the earlier Inbox→Queue move would abort before placement
+            # and make this test pass vacuously (it did, on the first attempt).
+            if Path(b).is_relative_to(self.paths.library_root) and not library_bound:
+                library_bound.append(str(b))
+                raise OSError(errno.EXDEV, "Invalid cross-device link")
+            return real_rename(a, b, *args, **kwargs)
 
-        with patch.object(pipeline, "move", half_copy_on_library_move):
-            with self.assertRaises(KeyboardInterrupt):
-                process_all_inbox_files(self.paths, now_utc=self.now)
+        def half_copy_then_die(src, dst, *args, **kwargs):
+            Path(dst).write_bytes(Path(src).read_bytes()[: len(body) // 2])
+            raise KeyboardInterrupt()
+
+        with patch("procrafiler.pipeline.os.rename", side_effect=exdev_on_library_move):
+            with patch("procrafiler.pipeline.copy2", side_effect=half_copy_then_die):
+                with self.assertRaises(KeyboardInterrupt):
+                    process_all_inbox_files(self.paths, now_utc=self.now)
 
         # Anti-vacuity guard: prove the library placement was really exercised.
         self.assertEqual(len(library_bound), 1, "the library placement was never reached")
@@ -376,12 +408,12 @@ class TestAtomicPlacement(_WorkspaceCase):
         self.assertEqual(
             visible, [], f"a truncated document is exposed in the library: {[p.name for p in visible]}"
         )
-        self.assertTrue(
-            Path(library_bound[0]).name.startswith(".procrafiler-incoming__"),
-            "the placement wrote straight to the final path instead of staging",
-        )
+        # The source is still in the Queue, so the document is not lost and the
+        # next run recovers it.
+        self.assertEqual(len(self._all_files(self.paths.queue_dir)), 1)
         _sweep_staging_files(self.paths.library_root)
         self.assertEqual(list(self.paths.library_root.rglob(".procrafiler-incoming__*")), [])
+        self.assertEqual(len(self._all_files(self.paths.queue_dir)), 1, "the sweep took the only copy")
 
     def test_mirror_staging_leftovers_are_swept_too(self) -> None:
         """A hard kill during the mirror sync leaves a mirror staging file. It is
@@ -398,6 +430,61 @@ class TestAtomicPlacement(_WorkspaceCase):
         self.assertEqual(removed, 1)
         self.assertFalse(leftover.exists())
         self.assertTrue(real_copy.is_file(), "the sweep must never touch a real mirror copy")
+
+    def test_a_failed_placement_never_leaves_the_document_only_in_staging(self) -> None:
+        """REGRESSION. The first version of `_move_atomically` used `shutil.move`
+        into the staging file, which unlinks the source as soon as it is copied. An
+        `os.replace` failure then left the document ONLY in staging — and the next
+        run's sweep deleted it. That destroyed documents.
+
+        A reachable trigger: an AI answering the "name" field with a whole sentence
+        produces a name the filesystem refuses (ENAMETOOLONG). So the invariant is
+        that the source survives until the target is really in place.
+        """
+        target_dir = self.paths.library_root / "Personal"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        source = self.paths.queue_dir / "doc.jpg"
+        source.write_bytes(b"the irreplaceable document")
+        # A name the filesystem cannot hold (bypassing the stem cap on purpose).
+        target = target_dir / ("2026-07-25_12-00-00__" + "A" * 250 + ".jpg")
+
+        with self.assertRaises(OSError):
+            _move_atomically(source, target)
+
+        self.assertTrue(source.is_file(), "the source was dropped on a failed placement")
+        self.assertEqual(source.read_bytes(), b"the irreplaceable document")
+        # No staging leftover holds the only copy, so the sweep cannot destroy it.
+        _sweep_staging_files(self.paths.library_root)
+        self.assertTrue(source.is_file(), "the sweep destroyed the only copy")
+
+    def test_placement_across_filesystems_keeps_the_source_until_the_target_lands(self) -> None:
+        """The cross-device branch is the one that needs staging. Simulate EXDEV and
+        assert the ordering: target complete first, source removed only after."""
+        target_dir = self.paths.library_root / "Personal"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        source = self.paths.queue_dir / "doc.txt"
+        body = b"payload" * 1000
+        source.write_bytes(body)
+        target = target_dir / "filed.txt"
+
+        real_rename = os.rename
+        seen: dict[str, bool] = {}
+
+        def force_exdev(a, b, *args, **kwargs):
+            # Only the first (source → target) rename is cross-device; the staging
+            # → target replace must still work.
+            if not seen.get("done") and str(a) == str(source):
+                seen["done"] = True
+                raise OSError(errno.EXDEV, "Invalid cross-device link")
+            return real_rename(a, b, *args, **kwargs)
+
+        with patch("procrafiler.pipeline.os.rename", side_effect=force_exdev):
+            _move_atomically(source, target)
+
+        self.assertTrue(seen.get("done"), "the cross-device branch was never exercised")
+        self.assertEqual(target.read_bytes(), body)
+        self.assertFalse(source.exists(), "the source should be gone once the target landed")
+        self.assertEqual(list(target_dir.glob(".procrafiler-incoming__*")), [])
 
     def test_a_long_filename_still_places_atomically(self) -> None:
         """The staging name must be fixed-length: prefixing a long target name could

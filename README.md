@@ -16,7 +16,7 @@ This is the core idea; everything else follows from it.
 
 - You drop files into a single **drop folder** (the `Inbox`, your "vrac"). **The app only ever processes what is in there** — it never touches anything else on your disk, except the folders it created itself.
 - An **AI reads each file's content** and, from that reading, **renames it** (timestamped) and **files it into a category**. The new name and the category are *outputs* of reading the content.
-- The **existing filename is never trusted** — distrusting it is the whole point. Every file is processed, even already-named ones, because the name may be wrong.
+- The **existing filename never decides** — that is the whole point. Every file is processed, even already-named ones, because the name may be wrong. But the name is not thrown away either: it is a **strong hint** passed to the AI alongside the folder it was dropped in and the names of the files dropped with it. Its weight rises as the content gets less reliable — for a photo read by a vision model (which can misread or hallucinate), those filesystem facts are treated as **corroborating evidence** and can outweigh a vague visual description; for a text layer read mechanically, the content stays authoritative.
 - The **extension** only selects *which* AI reads the file (PDF extraction, OCR, image analysis, …). It never decides the name or the category.
 - **Safe by design:** the app never deletes anything (files only move to a trash folder you empty yourself), the mirror is hash-verified, and any AI doubt goes to manual review.
 
@@ -111,7 +111,9 @@ There are **no format buckets**: a photographed receipt saved as `.jpg` is class
 
 ## AI Analysis (MVP)
 
-A **single analysis call** reads the file **content** (never the original filename, which is never trusted) and returns the whole document fiche at once: the descriptive name, the document's date, the destination category (+ alternatives), a summary, keywords, and entities. Naming and classification are not separate passes — one read, one call, one record persisted in the catalog (so files become searchable at no extra AI cost). The descriptive name goes under a UTC timestamp prefix; the original filename survives only as a deterministic last-resort fallback when no content can be read and the AI is unavailable.
+A **single analysis call** reads the file **content** and returns the whole document fiche at once: the descriptive name, the document's date, the destination category (+ alternatives), a summary, keywords, and entities. Naming and classification are not separate passes — one read, one call, one record persisted in the catalog (so files become searchable at no extra AI cost). The descriptive name goes under a UTC timestamp prefix.
+
+The content decides; the original filename never does. But it is **given to the AI as a hint** — together with the drop folder and the names of the files dropped alongside — because it is often accurate and it costs nothing. How much that hint weighs depends on **how the content was read**: text extracted mechanically (a `.txt` file, a PDF text layer) is literal and authoritative, so the hints only break ties; text produced by an AI reading an image (OCR, vision) is itself an interpretation that can be incomplete or invented, so the filename, folder and set-mates become **corroborating evidence** — and a specific name that clearly contradicts a vague visual description wins, or the file goes to the decisions queue rather than being guessed. If no content can be read at all and the AI is unavailable, the original stem is the deterministic fallback.
 
 Expected AI output format:
 

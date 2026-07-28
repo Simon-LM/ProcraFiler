@@ -224,7 +224,12 @@ configuration; include the "mirror on the same disk as the library" check there 
 
 </details>
 
-### F. Weight the original filename as a **strong** hint, per read path
+### F. Weight the original filename as a **strong** hint, per read path — **F1/F2/F4 DONE**
+
+> **Verified offline, NOT verified in production.** The tests assert on the built
+> prompt — that the framing flips with `read_via` and that the sibling names arrive.
+> They cannot prove the *model obeys*. Whether a misread photo now lands correctly
+> needs a real run on real files; that is the one part of F no offline test can close.
 
 **The principle (clarified 2026-07-25).** "Never trust the filename" means the name
 must never *decide* — it does **not** mean discarding it. A proposed name stays a
@@ -237,7 +242,16 @@ with sound framing (*"HINTS, NOT ground truth — the content is authoritative"*
 alongside `source_folder`. The gaps below are about **weighting** and **missing
 signals**, not about introducing the hint.
 
-#### [ ] F1. Pass `read_via` into the analysis prompt and vary the hint weight
+#### [x] F1. Pass `read_via` into the analysis prompt and vary the hint weight — **DONE**
+
+> **Shipped.** `read_via` is threaded from `_read_and_analyze` through
+> `analyze_content` into `_build_hints_block`, which now emits two different
+> framings. Mechanical read (`text`): unchanged — *"the content is authoritative;
+> use these only to disambiguate"*. AI read (`vision` / `ocr`): the block states the
+> text **may be incomplete, misread or invented**, that the filesystem facts are
+> **RELIABLE**, that specific evidence beats a vague description, and that a clear
+> contradiction should return `category_path: null` with alternatives (→ decisions
+> queue) rather than guess from the image.
 
 `grep read_via src/procrafiler/ai_analysis.py` returns **nothing**. The prompt
 therefore asserts *"the content is authoritative"* identically whether the text came
@@ -257,7 +271,15 @@ to fix:** when the "content" is itself an interpretation, the filename must carr
 **Done when.** The hint's authority is an explicit function of `read_via`, covered by
 a test asserting the vision prompt and the text prompt differ in that wording.
 
-#### [ ] F2. Pass the sibling filenames of the dropped set into the per-file prompt
+#### [x] F2. Pass the sibling filenames of the dropped set into the per-file prompt — **DONE**
+
+> **Shipped.** Both entry points pass them, and the difference matters: `process-all`
+> uses the **pre-computed** set member list, because by the time file N is analysed
+> files 1..N-1 have already MOVED to the Queue — a live Inbox scan would only ever
+> see the tail of the set. `process-once` scans the file's own Inbox subfolder, where
+> its set-mates are still sitting. Capped by count (12) **and** total length (400
+> chars), so a 200-file folder cannot swamp the prompt or the bill. Loose Inbox-root
+> files are singletons and get no sibling line — no invented context.
 
 Only the *folder name* is passed today. The names of the **other files dropped
 alongside** are a real, free signal that is currently thrown away — the strongest case
@@ -276,18 +298,25 @@ fixed at the analysis step or not at all.
 with a test proving a photo in a folder of clearly-named documents is classified using
 that context.
 
-#### [ ] F3. (Optional — decide on real files) Hint the vision reader itself
+#### [ ] F3. (Optional — DEFERRED by decision) Hint the vision reader itself
 
 `read_with_vision` receives only the path and a generic French prompt, so the vision
 model gets no hint at all. Passing the filename could steer transcription — but
 **risks leading the model into confirming a wrong name**, contaminating the very
 signal we wanted independent of the content.
 
-**Do not adopt by default.** The safer stance is to keep the read blind and weight the
-hint afterwards (F1). Revisit only if real runs show vision misreads that F1 fails to
-catch.
+**Decision (2026-07-25): not adopted.** F1 now handles the same problem *after* the
+read, where a wrong name cannot contaminate the transcription. Leaving the read blind
+also keeps the two signals independent, which is what makes weighing them against
+each other meaningful in the first place. Revisit only if real runs show vision
+misreads that F1 fails to catch — this checkbox stays open as that trigger.
 
-#### [ ] F4. Correct the README and spec wording
+#### [x] F4. Correct the README and spec wording — **DONE**
+
+> Both restated: the name **never decides**, but it is always a hint whose weight
+> rises as content reliability falls. README §"How it works" and §"AI Analysis", and
+> spec §1.1. This wording is what made the audit itself misread the design, so it was
+> not a cosmetic fix.
 
 The README (*"the original filename survives only as a deterministic last-resort
 fallback"*) and the spec §1.1 (*"never a trusted input"*) **overstate** the distrust
