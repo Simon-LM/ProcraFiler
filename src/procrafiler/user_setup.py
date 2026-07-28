@@ -39,12 +39,14 @@ _MIRROR_ENV = "PROCRAFILER_LIBRARY_MIRROR_DIR"
 # Tested provider presets written to the env file (see docs/ai-providers.md).
 _MISTRAL_PRESET = {
     "PROCRAFILER_AI_ANALYSIS_PRIMARY": "mistral:mistral-small-latest",
+    "PROCRAFILER_AI_NAMING_PRIMARY": "mistral:mistral-medium-latest",
     "PROCRAFILER_AI_ORGANIZE_PRIMARY": "mistral:mistral-medium-latest",
     "PROCRAFILER_AI_OCR_PRIMARY": "mistral:mistral-ocr-latest",
     "PROCRAFILER_AI_IMAGE_PRIMARY": "mistral:mistral-medium-latest",
 }
 _OLLAMA_PRESET = {
     "PROCRAFILER_AI_ANALYSIS_PRIMARY": "ollama:qwen3.5:9b",
+    "PROCRAFILER_AI_NAMING_PRIMARY": "ollama:gemma4:12b",
     "PROCRAFILER_AI_ORGANIZE_PRIMARY": "ollama:gemma4:12b",
     "PROCRAFILER_AI_OCR_PRIMARY": "ollama:minicpm-v",
     "PROCRAFILER_AI_IMAGE_PRIMARY": "ollama:qwen2.5vl:7b",
