@@ -158,7 +158,7 @@ class TestSidecarCoupling(_Workspace):
         OCR reader itself needs mocking — the suite stays offline.
         """
         (self.paths.inbox_dir / "scan.pdf").write_bytes(b"%PDF-1.4 fake scan")
-        ocr = type("R", (), {"text": "OCR TEXT", "provider": "p", "model": "m", "reason": None})()
+        ocr = type("R", (), {"text": "OCR TEXT", "provider": "p", "model": "m", "reason": None, "is_document": False})()
         with patch.object(pipeline, "read_with_ocr", return_value=ocr) as reader:
             process_all_inbox_files(self.paths, now_utc=self.now)
         self.assertTrue(reader.called, "the OCR path was never taken — the test proves nothing")

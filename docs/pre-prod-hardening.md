@@ -15,8 +15,10 @@
 ## Status — all gates closed (2026-07-29)
 
 Every item is done: **A** (#110), **B**/**C**/**E** (#111), **F1/F2/F4** (#112, #113),
-**D** (#114), **G** (this branch). Only **F3** stays open, deliberately deferred —
-it is a trigger to revisit, not outstanding work.
+**D** (#114), **G** (#115), **F3** (#116). F3 had been deferred on the grounds that
+naming the file to the vision model would contaminate the read; measuring it showed
+the contamination does not occur and that some images are undecidable without the
+hint, so the deferral was reversed.
 
 **What this does NOT close:** none of it proves the AI *judges well*. The tests
 assert on prompts and on file operations; whether a misread photo now lands
@@ -309,7 +311,19 @@ fixed at the analysis step or not at all.
 with a test proving a photo in a folder of clearly-named documents is classified using
 that context.
 
-#### [ ] F3. (Optional — DEFERRED by decision) Hint the vision reader itself
+#### [x] F3. Hint the vision reader itself — **DONE**
+
+> **Shipped 2026-07-29**, after the deferral below was overturned by measurement.
+> `read_with_vision` now receives the original filename and the drop folder, and
+> `build_vision_prompt` renders them as *"indices de provenance"* granted exactly one
+> power — **breaking a tie on an ambiguous image** — and explicitly denied the power
+> to add content: declared fallible, possibly meaningless or plainly wrong, with an
+> instruction to contradict them when the image does. The block is inserted **before**
+> the `DOCUMENT: oui|non` question, which must stay the last instruction.
+> Tests: 12 in `tests/test_vision_name_hints.py` + 2 real-API in
+> `tests/test_mistral_integration.py`; mutation-verified (sending the Queue's name
+> instead of the user's fails 1, moving the block after the DOCUMENT question fails 3,
+> dropping the caveat fails 1, removing the arguments fails 5).
 
 `read_with_vision` receives only the path and a generic French prompt, so the vision
 model gets no hint at all. Passing the filename could steer transcription — but
@@ -321,6 +335,54 @@ read, where a wrong name cannot contaminate the transcription. Leaving the read 
 also keeps the two signals independent, which is what makes weighing them against
 each other meaningful in the first place. Revisit only if real runs show vision
 misreads that F1 fails to catch — this checkbox stays open as that trigger.
+
+**Reversal (2026-07-29).** The deferral rested on two assumptions, and measuring both
+on the real API (`mistral-medium-latest`) settled them:
+
+1. *"F1 handles the same problem after the read."* It does not, for a class of images
+   where the read itself is undecidable. The same green-texture JPEG, unhinted, came
+   back as *"un fond ou un motif abstrait"* on one run and *"de l'herbe ou un tissu"*
+   on the next. There is no misreading for a later pass to correct — there is no
+   reading at all. Hinted, the model commits: *"un tapis ou une moquette"* under
+   `Degats-eaux-salon`, *"une pelouse bien tondue ou un gazon dense"* under
+   `Jardin-printemps`. Identical pixels; the difference is the hint.
+2. *"The name will contaminate the transcription."* The stated risk, tested head-on: a
+   textless garden scene named `facture-EDF-mars-2026.jpg` in a folder `Factures-2026`.
+   The model answered *"un cercle orange sur un fond vert"*, `DOCUMENT: non`, and used
+   none of "facture", "EDF", "montant", "euro". The caveat holds; the contamination did
+   not occur. Stable across three consecutive runs.
+
+**Confirmed on real photographs (2026-07-29).** The measurements above use synthetic
+images, so they were re-run on 15 real photos of a water-damage claim (kept outside
+the repository), each read twice — blind, then with its filename and drop folder.
+The effect is larger than on generated images, because a real photo is genuinely
+harder to read:
+
+| Blind reading | With the two names |
+| --- | --- |
+| "the inside of an open washing machine, the drum" | "under a kitchen unit, electrical cables, **water-damage marks**" |
+| invented a text string that is not in the image, "renovation in progress" | "no visible text […] **signs of water damage**, mould" |
+| "plumbing or **irrigation**" | "under a unit, kitchen […] damp, mould, **water damage**" |
+| "a piece of white material" | "**plasterboard**, debris from works or damage" |
+
+Two failure modes disappeared with the hint: an object identified as something it is
+not, and **invented text**.
+
+**The contamination control held.** A photo showing a plank on grass — nothing to do
+with the claim — read identically with and without the hint. The model did not
+project the folder's subject onto it.
+
+**A stronger negative result on the contamination question.** The drop folder name
+contained a place name that genuinely appears on one of the documents. Under the hint
+the model also returned that document's **postcode**, which was *not* in the hint and
+could only have come from the page. So the hint had made it read *more* of the
+document — the handwritten party block, which the blind reading skipped entirely —
+rather than echo the folder name. The one field it got wrong was a handwritten street
+name, which is a vision-model weakness on cursive, not a hint effect.
+
+Incidentally this also validated the OCR-confirm feature above on real material: all
+four photographed claim forms came back `DOCUMENT: oui`, so in a real run their text
+would come from the OCR model rather than from this description.
 
 #### [x] F4. Correct the README and spec wording — **DONE**
 

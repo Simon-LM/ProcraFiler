@@ -56,9 +56,16 @@ exists to catch a photo whose vision reading went wrong; that judgement is only
 measurable against a real model.
 
 `make test-mistral` (opt-in, `PROCRAFILER_MISTRAL_IT=1`, costs money) is where it is
-measured. No photos are needed: the naming pass never sees an image — a misread photo
-is an *input* to it, so supplying what a vision model would have produced reproduces
-the case exactly.
+measured. Three judgements are checked there:
+
+- **The naming pass.** No photos are needed: it never sees an image — a misread photo
+  is an *input* to it, so supplying what a vision model would have produced reproduces
+  the case exactly.
+- **The `DOCUMENT: oui|non` marker**, which decides whether a photographed document is
+  re-read with OCR. Two generated images, one of each kind.
+- **The vision name hints.** One deliberately ambiguous image read under two different
+  drop folders (the benefit), and one unambiguous image under a deliberately wrong
+  filename (the contamination risk).
 
 The assertions are on the **discrimination**, never on exact strings or the review
 flag. Across real runs the same outlier came back as `Degats-eaux_pelouse-jardin` and
@@ -66,6 +73,14 @@ flag. Across real runs the same outlier came back as `Degats-eaux_pelouse-jardin
 and not the next. What must hold is that a plausibly-misread photo joins its set while
 a genuinely unrelated one does not. A test demanding an exact name would be red one
 run in three and end up ignored — worse than no test.
+
+The same rule decided how the name-hint test asserts. The tempting control — read the
+ambiguous image with *no* hint and check the reading is neutral — is not stable: the
+same JPEG came back "un motif abstrait" on one run and "de l'herbe ou un tissu" on the
+next. Unhinted the model abstains *or* hedges, unpredictably. So the test asserts on
+**exclusivity** instead: each hinted reading must name its subject and not mention the
+rival one. Identical pixels cannot explain that, so it isolates the hint — and it costs
+one fewer API call than the control would.
 
 ## Forcing an offline run by hand
 
