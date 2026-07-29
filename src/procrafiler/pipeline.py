@@ -886,7 +886,16 @@ def _read_and_analyze(
             )
             emit(f"   OCR unavailable ({ocr_result.reason})")
     elif (content_text is None or not content_text.strip()) and extraction.reader_hint == "vision":
-        vision_result = read_with_vision(queued_target)
+        # Give the reader the names the file ARRIVED with — not `queued_target`,
+        # which is already renamed and says nothing. A photo is the one case where
+        # the image alone can be genuinely undecidable (a green close-up: lawn or
+        # soaked carpet?), and these two names are the only context available at
+        # read time. The prompt caps what they may do: break a tie, never add.
+        vision_result = read_with_vision(
+            queued_target,
+            original_filename=source.name,
+            source_folder=source_folder or None,
+        )
         if vision_result.text and vision_result.text.strip():
             content_text = vision_result.text
             read_via = "vision"

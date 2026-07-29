@@ -46,16 +46,61 @@ _DEFAULT_VISION_TIMEOUT = 90
 
 # Ask the vision model for usable text, not chit-chat: transcription first so
 # scanned/photographed documents become classifiable, plus a short description.
-_DEFAULT_VISION_PROMPT = (
+_VISION_TASK = (
     "Transcris fidèlement tout le texte visible dans cette image, puis décris "
     "brièvement ce qu'elle représente. Réponds en français, en texte brut. "
     "Si c'est un document, restitue les informations clés (émetteur, type, "
-    "date, montants).\n"
+    "date, montants)."
+)
+
+# Kept as the LAST instruction of every prompt: "termine par une dernière ligne"
+# only works if nothing follows it. Any block added below goes BEFORE this one.
+_VISION_DOCUMENT_QUESTION = (
     "Termine ta réponse par une dernière ligne, seule, exactement au format "
     "`DOCUMENT: oui` ou `DOCUMENT: non` : réponds `oui` si ce visuel est avant "
     "tout un document écrit (courrier, facture, formulaire, attestation, page "
     "de texte), `non` s'il s'agit d'une scène, d'un objet ou d'un lieu."
 )
+
+# The whole risk of naming the file to the vision model is CONTAMINATION: a photo
+# called `facture-EDF.jpg` that shows a garden must not come back as an invoice.
+# So the hint is granted exactly one power — breaking a tie on an image that is
+# genuinely ambiguous — and is explicitly denied the power to add content.
+_VISION_HINT_CAVEAT = (
+    "Ces noms viennent de l'utilisateur ou de son appareil : ils ne font pas foi. "
+    "Ils peuvent être parlants, vides de sens (IMG_2024, scan_001) ou franchement "
+    "faux. Décris uniquement ce que l'image montre — n'affirme jamais un élément "
+    "parce qu'un nom l'annonce, et contredis-les sans hésiter si l'image les "
+    "dément. Ils servent seulement à départager une image ambiguë ou peu lisible."
+)
+
+_DEFAULT_VISION_PROMPT = f"{_VISION_TASK}\n{_VISION_DOCUMENT_QUESTION}"
+
+
+def build_vision_prompt(
+    *, original_filename: str | None = None, source_folder: str | None = None
+) -> str:
+    """The vision prompt, optionally carrying the file's own name and the folder
+    it was dropped in.
+
+    A vision model reads pixels with no idea what it is looking at. The same green
+    fibrous close-up is a lawn in a holiday folder and a soaked carpet in a
+    water-damage one, and nothing IN the image settles it. These two names are the
+    cheapest context available — but they are also the least trustworthy, so the
+    caveat above is what makes them usable at all.
+
+    Both names are optional and independently omitted when blank: a file at the
+    Inbox root has no folder, and an empty hint block would be worse than none.
+    """
+    hints: list[str] = []
+    if original_filename and original_filename.strip():
+        hints.append(f"- nom du fichier : « {original_filename.strip()} »")
+    if source_folder and source_folder.strip():
+        hints.append(f"- dossier d'origine : « {source_folder.strip()} »")
+    if not hints:
+        return _DEFAULT_VISION_PROMPT
+    block = "Indices de provenance :\n" + "\n".join(hints) + "\n" + _VISION_HINT_CAVEAT
+    return f"{_VISION_TASK}\n\n{block}\n\n{_VISION_DOCUMENT_QUESTION}"
 
 # The marker line the vision model appends, answering "is this a written
 # document?". A photographed document is dispatched to VISION (it is a .jpg), so
@@ -356,8 +401,15 @@ def read_with_vision(
     timeout_seconds: int | None = None,
     retries: int | None = None,
     sleep_fn: Any = time.sleep,
+    original_filename: str | None = None,
+    source_folder: str | None = None,
 ) -> AIReadResult:
     """Read an image via the configured vision chain (`PROCRAFILER_AI_IMAGE_*`).
+
+    `original_filename` and `source_folder` are the names the file arrived with —
+    passed to the model as fallible context, see `build_vision_prompt`. `path`
+    itself is deliberately NOT used for this: by the time the read happens the file
+    sits in the Queue under a generated name, which carries nothing.
 
     Returns an AIReadResult whose `text` is None when no chain is configured,
     when every provider fails, or when the model returns nothing — in which
@@ -369,15 +421,18 @@ def read_with_vision(
 
     timeout = timeout_seconds if timeout_seconds is not None else _task_timeout_from_env("IMAGE", default_value=_DEFAULT_VISION_TIMEOUT, provider=chain_entries[0].provider)
     retry_count = retries if retries is not None else _task_retries_from_env("IMAGE", default_value=2)
+    prompt = build_vision_prompt(
+        original_filename=original_filename, source_folder=source_folder
+    )
 
     last_error = "unknown"
     for entry in chain_entries:
         for attempt in range(retry_count + 1):
             try:
                 if entry.provider == "mistral":
-                    text = call_mistral_vision(path, entry.model, timeout=timeout)
+                    text = call_mistral_vision(path, entry.model, prompt=prompt, timeout=timeout)
                 elif entry.provider == "ollama":
-                    text = call_ollama_vision(path, entry.model, timeout=timeout)
+                    text = call_ollama_vision(path, entry.model, prompt=prompt, timeout=timeout)
                 else:
                     raise ProviderCallError(f"unsupported_vision_provider:{entry.provider}")
 

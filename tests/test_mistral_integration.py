@@ -238,5 +238,143 @@ class TestPhotographedDocumentIsRecognised(unittest.TestCase):
         self.assertFalse(result.is_document, "a textless scene was taken for a document")
 
 
+@unittest.skipUnless(_ENABLED, "set PROCRAFILER_MISTRAL_IT=1 to run real Mistral API tests (costs money)")
+class TestVisionNameHints(unittest.TestCase):
+    """Does naming the file to the vision model help — or does it just contaminate?
+
+    That question is the entire reason this was deferred for so long, and it is not
+    answerable offline: offline tests prove the names are SENT, never what the model
+    does with them. Both halves are measured here, on one deliberately ambiguous
+    image plus one that is not ambiguous at all.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        _load_real_env()
+        if not os.environ.get("MISTRAL_API_KEY", "").strip():
+            raise unittest.SkipTest("MISTRAL_API_KEY is not set")
+        os.environ["PROCRAFILER_AI_IMAGE_PRIMARY"] = "mistral:mistral-medium-latest"
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._dir = Path(cls._tmp.name)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def _green_texture(self) -> Path:
+        """A close-up of green fibres at no discernible scale — the user's own case.
+
+        Lawn, or a soaked carpet? The image genuinely cannot say, which is what
+        makes it the right probe: any difference in the reading comes from the
+        hint, because there is nothing else to come from.
+        """
+        import random
+
+        from PIL import Image
+
+        rng = random.Random(20260729)
+        img = Image.new("RGB", (600, 600))
+        img.putdata([
+            (rng.randint(30, 90), rng.randint(90, 170), rng.randint(30, 80))
+            for _ in range(600 * 600)
+        ])
+        path = self._dir / "texture.jpg"
+        img.save(path)
+        return path
+
+    def _scene_image(self) -> Path:
+        """Unambiguous on purpose: an orange disc on green. Nothing about it can
+        honestly be read as a written document."""
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (900, 420), (90, 140, 80))
+        ImageDraw.Draw(img).ellipse((300, 150, 600, 350), fill=(200, 120, 60))
+        path = self._dir / "scene.jpg"
+        img.save(path)
+        return path
+
+    def _read(self, path: Path, filename: str | None, folder: str | None) -> str:
+        from procrafiler.ai_reader import read_with_vision
+
+        result = read_with_vision(path, original_filename=filename, source_folder=folder)
+        self.assertIsNotNone(result.text, f"the vision read failed: {result.reason}")
+        return _normalize(result.text or "")
+
+    def assertMentionsOne(self, text: str, tokens: tuple[str, ...], label: str) -> None:
+        self.assertTrue(
+            any(token in text for token in tokens),
+            f"{label}: none of {tokens} in the reading — the hint did not land.\n{text[:400]}",
+        )
+
+    def assertMentionsNone(self, text: str, tokens: tuple[str, ...], label: str) -> None:
+        found = [token for token in tokens if token in text]
+        self.assertFalse(
+            found,
+            f"{label}: the reading did not commit — it still mentions {found}.\n{text[:400]}",
+        )
+
+    # Words that COMMIT the reading to one subject. Kept tight, so each set can also
+    # serve as the other's exclusion list.
+    CARPET = ("tapis", "moquette", "interieur", "salon")
+    LAWN = ("pelouse", "gazon", "herbe", "jardin", "exterieur")
+    # Accepted as evidence of the water-damage context, but never as exclusion:
+    # a garden reading may legitimately call wet grass "humide".
+    SOAKED = ("humid", "detremp", "inond")
+
+    def test_the_same_ambiguous_image_reads_differently_under_each_context(self) -> None:
+        """The benefit half. Identical pixels, two drop folders, two readings.
+
+        Asserted on French stems only, and on a SET of acceptable ones: the claim is
+        that the context reached the model, not that it chose a particular word.
+
+        **Why the assertion is exclusive.** Measured 2026-07-29, mistral-medium-latest,
+        this same JPEG read with NO hint came back "un fond ou un motif abstrait" on
+        one run and "de l'herbe ou un tissu" on the next — unhinted the model either
+        abstains or offers both, and which one is not stable enough to assert on. What
+        IS stable is that a hint makes it commit: naming one subject *and dropping the
+        other*. Measured, same image:
+            Degats-eaux → "ressemblant à un tapis ou une moquette"
+            Jardin      → "ressemblant à une pelouse bien tondue ou à un gazon dense"
+        Neither reading mentions the rival subject. That exclusivity cannot come from
+        the pixels — they are identical — so it is the hint, and no third call is
+        needed to establish it.
+        """
+        image = self._green_texture()
+
+        indoors = self._read(image, "tapis-detrempe.jpg", "Degats-eaux-salon")
+        self.assertMentionsOne(indoors, self.CARPET + self.SOAKED, "water-damage context")
+        self.assertMentionsNone(indoors, self.LAWN, "water-damage context")
+
+        outdoors = self._read(image, "pelouse-tondue.jpg", "Jardin-printemps")
+        self.assertMentionsOne(outdoors, self.LAWN, "garden context")
+        self.assertMentionsNone(outdoors, self.CARPET, "garden context")
+
+    def test_a_wrong_name_does_not_turn_a_scene_into_a_document(self) -> None:
+        """The risk half — the objection that kept this feature shelved.
+
+        A photo of a garden misnamed `facture-EDF-mars-2026.jpg`, sitting in a folder
+        of invoices. If the model agrees with the name, it reports an invoice that
+        does not exist, the marker fires, and a pointless OCR call follows. Every
+        later pass would then be reasoning about a document nobody photographed.
+        """
+        from procrafiler.ai_reader import read_with_vision
+
+        result = read_with_vision(
+            self._scene_image(),
+            original_filename="facture-EDF-mars-2026.jpg",
+            source_folder="Factures-2026",
+        )
+        self.assertIsNotNone(result.text, f"the vision read failed: {result.reason}")
+        self.assertFalse(
+            result.is_document,
+            f"a misleading name turned a textless scene into a document: {result.text!r}",
+        )
+        text = _normalize(result.text or "")
+        for invented in ("facture", "edf", "montant", "euro"):
+            self.assertNotIn(
+                invented, text, f"the reading invented {invented!r} from the filename"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
