@@ -38,3 +38,6 @@ history/
 # Dev sandbox: the RUNNER + synthetic samples are versioned (a test feature);
 # only the generated runtime workspace (library/mirror/state) is ignored.
 sandbox/workspace/
+
+# Private working data — never committed (test photos, sandbox runs, real documents)
+private/
