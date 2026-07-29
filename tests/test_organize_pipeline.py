@@ -323,6 +323,115 @@ class TestSingletonGrouping(unittest.TestCase):
             "catalog should reflect the new Releves-eau path",
         )
 
+    # --- symlink durability -------------------------------------------------
+    # The regroup symlink is the ONE place the app creates a link. Three of its
+    # behaviours had no test: that the link is RELATIVE (an absolute one breaks
+    # the moment the library is moved or restored elsewhere), that a file moved
+    # twice in one run has its link RETARGETED instead of left dangling, and that
+    # a filesystem refusing symlinks degrades without losing the document.
+
+    def _file_one_prerun_document(self, housing: str) -> Path:
+        """File one document so the NEXT run sees it as a pre-run reference."""
+        analysis = json.dumps({"name": "Releve-eau", "category_path": housing, "summary": "compteur"})
+        (self.paths.inbox_dir / "releve_jan.txt").write_bytes(b"Releve compteur eau janvier 2026")
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            process_all_inbox_files(self.paths, now_utc=self.now)
+        stored = self._files_under("Personal", "Administrative", "Housing")
+        self.assertEqual(len(stored), 1, "setup failed: the first document was not filed")
+        return stored[0]
+
+    def test_the_regroup_symlink_is_relative_and_survives_a_moved_library(self) -> None:
+        """An absolute link would break as soon as the library is moved, renamed or
+        restored to another path — exactly what `restore` does after a disk loss."""
+        housing = "Personal/Administrative/Housing"
+        first = self._file_one_prerun_document(housing)
+
+        (self.paths.inbox_dir / "releve_fev.txt").write_bytes(b"Releve compteur eau fevrier 2026")
+        analysis = json.dumps({"name": "Releve-eau", "category_path": housing, "summary": "compteur"})
+        grouping = json.dumps({"path": f"{housing}/Releves-eau", "group_with": [first.name]})
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping):
+                process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertTrue(first.is_symlink(), "no symlink was left at the pre-run location")
+        target = os.readlink(first)
+        self.assertFalse(os.path.isabs(target), f"the symlink is absolute: {target}")
+
+        # Move the whole library elsewhere; the link must still resolve.
+        moved_root = self.paths.library_root.parent / "Library_Moved"
+        os.rename(self.paths.library_root, moved_root)
+        relinked = moved_root / first.relative_to(self.paths.library_root)
+        self.assertTrue(relinked.is_symlink())
+        self.assertTrue(relinked.resolve().is_file(), "the link broke when the library moved")
+
+    def test_a_file_regrouped_twice_in_one_run_has_its_symlink_retargeted(self) -> None:
+        """Spec §1.2: a symlink marks a PRE-RUN location. If the file it points at
+        moves again during the same run, the link must follow — never dangle."""
+        housing = "Personal/Administrative/Housing"
+        first = self._file_one_prerun_document(housing)
+        series = f"{housing}/Releves-eau"
+        deeper = f"{series}/2026"
+
+        # Two new singletons in ONE run: the first grouping pulls the pre-run file
+        # into the series, the second pulls it one level deeper again.
+        (self.paths.inbox_dir / "a_releve.txt").write_bytes(b"Releve compteur eau fevrier 2026")
+        (self.paths.inbox_dir / "b_releve.txt").write_bytes(b"Releve compteur eau mars 2026")
+        analyses = iter([
+            json.dumps({"name": "Releve-eau", "category_path": series, "summary": "fevrier"}),
+            json.dumps({"name": "Releve-eau", "category_path": deeper, "summary": "mars"}),
+        ])
+        groupings = iter([
+            json.dumps({"path": series, "group_with": [first.name]}),
+            json.dumps({"path": deeper, "group_with": [first.name]}),
+        ])
+        with patch("procrafiler.ai_analysis.call_mistral_chat", side_effect=lambda *a, **k: next(analyses)):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", side_effect=lambda *a, **k: next(groupings)):
+                summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        # Anti-vacuity guard: the file must really have hopped TWICE, otherwise
+        # there was never a link to retarget and the assertions below prove nothing.
+        self.assertEqual(summary["regrouped"], 2, "the second regroup never happened")
+
+        links = self._symlinks_in_library()
+        for link in links:
+            self.assertTrue(
+                link.resolve().is_file(), f"dangling symlink left behind: {link} -> {os.readlink(link)}"
+            )
+        # Exactly one marker for the one pre-run location, not one per hop.
+        self.assertLessEqual(len(links), 1, f"a hop left an extra marker: {links}")
+
+    def test_a_filesystem_refusing_symlinks_does_not_lose_the_document(self) -> None:
+        """On a filesystem without symlink support the link cannot be created. The
+        document has ALREADY moved at that point, so the failure must be reported
+        and the file must exist at its new location — never vanish."""
+        housing = "Personal/Administrative/Housing"
+        first = self._file_one_prerun_document(housing)
+        body = first.read_bytes()
+
+        (self.paths.inbox_dir / "releve_fev.txt").write_bytes(b"Releve compteur eau fevrier 2026")
+        analysis = json.dumps({"name": "Releve-eau", "category_path": housing, "summary": "compteur"})
+        grouping = json.dumps({"path": f"{housing}/Releves-eau", "group_with": [first.name]})
+        with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=analysis):
+            with patch("procrafiler.ai_grouping.call_mistral_chat", return_value=grouping):
+                with patch.object(Path, "symlink_to", side_effect=OSError("symlinks unsupported")):
+                    summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["errors"], 0, "a symlink failure must not fail the run")
+        series_dir = self.paths.library_root / "Personal" / "Administrative" / "Housing" / "Releves-eau"
+        moved = [p for p in series_dir.rglob("*") if p.is_file() and not p.is_symlink()]
+        self.assertTrue(
+            any(p.read_bytes() == body for p in moved), "the regrouped document was lost"
+        )
+        events = [
+            json.loads(line)
+            for line in self.paths.actions_log_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertTrue(
+            any(e.get("action") == "symlink_failed" for e in events),
+            "the symlink failure was not recorded in the action log",
+        )
+
     def test_unknown_filename_in_group_with_warns_without_crash(self) -> None:
         # If group_with names a file that doesn't exist on disk, the pipeline
         # warns but doesn't crash, and still files the new document normally.
