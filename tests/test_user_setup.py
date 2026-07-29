@@ -259,7 +259,15 @@ class TestConfigureAI(_EnvIsolated):
 
 class TestDoctorMirrorOptional(_EnvIsolated):
     def test_missing_mirror_skipped_when_disabled_but_failed_when_enabled(self) -> None:
-        paths = default_runtime_paths()  # mirror dir does not exist
+        paths = default_runtime_paths()
+        # The layout must EXIST for the per-root checks to run: a layout where
+        # nothing at all exists is now reported as "not created yet", one line
+        # instead of nine. The case under test is an installed layout with no
+        # mirror — which is exactly what `mirror_sync: off` produces.
+        for root in (paths.workspace_root, paths.library_root, paths.state_root):
+            root.mkdir(parents=True, exist_ok=True)
+        self.assertFalse(paths.mirror_root.exists(), "the mirror must be the missing one")
+
         disabled = {c.name: c for c in check_paths(paths, mirror_enabled=False)}
         self.assertEqual(disabled["mirror_root"].status, STATUS_SKIP)
         enabled = {c.name: c for c in check_paths(paths, mirror_enabled=True)}

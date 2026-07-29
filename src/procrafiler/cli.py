@@ -33,6 +33,7 @@ from procrafiler import __version__
 from procrafiler.config import (
     DELETION_MODES,
     FEATURE_NAMES,
+    RuntimePaths,
     default_runtime_paths,
     get_deletion_mode,
     get_user_language,
@@ -240,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_status() -> int:
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    # Read-only: shows configuration and state — it must not create the layout.
     settings = load_feature_settings(paths)
     policy = load_runtime_policy(paths)
 
@@ -339,7 +340,7 @@ def cmd_setup() -> int:
 
 def cmd_features() -> int:
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    # Read-only: shows configuration and state — it must not create the layout.
     settings = load_feature_settings(paths)
 
     print("ProcraFiler features")
@@ -351,7 +352,7 @@ def cmd_features() -> int:
 
 def cmd_policy_effective() -> int:
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    # Read-only: shows configuration and state — it must not create the layout.
     policy = load_runtime_policy(paths)
 
     print("ProcraFiler policy effective")
@@ -467,7 +468,7 @@ def cmd_purge_mirror_trash(days: int | None) -> int:
 
 def cmd_doctor() -> int:
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    # Read-only: reports what IS, and must be able to report a missing path — it must not create the layout.
     checks = run_doctor(paths)
     print(format_report(checks))
     return overall_exit_code(checks)
@@ -570,11 +571,27 @@ def _print_hits(hits: list, paths: "object", *, header: str) -> None:
         print(f"  {location}")
 
 
+def _no_catalog_yet(paths: RuntimePaths) -> bool:
+    """Nothing has ever been filed here.
+
+    Searching must not build a layout to then search it and find nothing: the
+    honest answer is that the app has not been used yet. It also protects the
+    search index, which is created next to the catalog — with no state directory,
+    opening it raises `unable to open database file`.
+    """
+    catalog = paths.catalog_db_file
+    return not catalog.is_file() or catalog.stat().st_size == 0
+
+
 def cmd_search(terms: list[str], limit: int) -> int:
     from procrafiler.search import search_catalog
 
+    # Read-only: searching reports what is filed. It does create its own body-text
+    # index next to the catalog (that cache is the point), but never the layout.
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    if _no_catalog_yet(paths):
+        print("No catalog yet — nothing has been filed. Run `procrafiler process-all` first.")
+        return 0
     query = " ".join(terms)
     hits = search_catalog(
         paths.catalog_db_file, query, limit=limit, index_path=paths.search_index_file,
@@ -591,8 +608,12 @@ def cmd_search_ai(terms: list[str], limit: int) -> int:
     from procrafiler.ai_analysis import expand_query
     from procrafiler.search import search_catalog_any
 
+    # Read-only, same as `search` — and it must decide there is nothing to search
+    # BEFORE paying for an AI query expansion.
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    if _no_catalog_yet(paths):
+        print("No catalog yet — nothing has been filed. Run `procrafiler process-all` first.")
+        return 0
     query = " ".join(terms)
     language = get_user_language(paths)
     expansion = expand_query(query, language=language)
@@ -810,7 +831,7 @@ def cmd_verify_catalog(rebuild: bool) -> int:
 
 def cmd_deleted_history(limit: int) -> int:
     paths = default_runtime_paths()
-    ensure_runtime_layout(paths)
+    # Read-only: reads the action log — it must not create the layout.
     log_file = paths.actions_log_file
     if not log_file.exists():
         print("No action log yet.")
