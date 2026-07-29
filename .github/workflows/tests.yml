@@ -32,3 +32,9 @@ jobs:
 
       - name: Run the offline test suite
         run: make test PYTHON=python
+
+      # The suite passing says nothing about WHERE it wrote. This re-runs it with
+      # HOME redirected to an empty directory and fails if anything lands there —
+      # anything appearing in the fake home would have landed in a real user's.
+      - name: Prove the suite writes nothing into the home directory
+        run: make test-isolation PYTHON=python
