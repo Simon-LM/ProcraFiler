@@ -29,6 +29,7 @@ ignored — worse than no test.
 from __future__ import annotations
 
 import os
+import tempfile
 import unicodedata
 import unittest
 from pathlib import Path
@@ -168,6 +169,73 @@ class TestSetNamingJudgement(unittest.TestCase):
 
         self.assertJoinedTheSet(names[1], theme, "sculpture/bodywork confusion")
         self.assertStayedOut(names[2], theme, "restaurant meal (control)")
+
+
+@unittest.skipUnless(_ENABLED, "set PROCRAFILER_MISTRAL_IT=1 to run real Mistral API tests (costs money)")
+class TestPhotographedDocumentIsRecognised(unittest.TestCase):
+    """Does the vision model actually answer the `DOCUMENT: oui|non` question?
+
+    Offline tests can only prove the marker is parsed and the OCR re-read is wired.
+    Whether the model classifies a photo correctly is measurable only for real.
+    Two images, two calls.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        _load_real_env()
+        if not os.environ.get("MISTRAL_API_KEY", "").strip():
+            raise unittest.SkipTest("MISTRAL_API_KEY is not set")
+        os.environ["PROCRAFILER_AI_IMAGE_PRIMARY"] = "mistral:mistral-medium-latest"
+        os.environ["PROCRAFILER_AI_OCR_PRIMARY"] = "mistral:mistral-ocr-latest"
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._dir = Path(cls._tmp.name)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def _document_image(self) -> Path:
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (900, 420), "white")
+        draw = ImageDraw.Draw(img)
+        for i, line in enumerate([
+            "FACTURE  N 2026-0412", "EDF - Electricite", "Client : Simon L.",
+            "Periode : mars 2026", "Montant TTC : 87,40 EUR",
+        ]):
+            draw.text((40, 40 + i * 60), line, fill="black")
+        path = self._dir / "photo_facture.jpg"
+        img.save(path)
+        return path
+
+    def _scene_image(self) -> Path:
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (900, 420), (90, 140, 80))
+        ImageDraw.Draw(img).ellipse((300, 150, 600, 350), fill=(200, 120, 60))
+        path = self._dir / "photo_scene.jpg"
+        img.save(path)
+        return path
+
+    def test_a_photographed_document_is_flagged_and_transcribed_by_ocr(self) -> None:
+        from procrafiler.ai_reader import read_with_ocr, read_with_vision
+
+        result = read_with_vision(self._document_image())
+        self.assertTrue(result.is_document, "the vision model did not recognise a written document")
+        self.assertNotIn("DOCUMENT", result.text or "", "the marker leaked into the cached text")
+
+        ocr = read_with_ocr(self._document_image())
+        self.assertIsNotNone(ocr.text)
+        # The point of the re-read: the figures come back, not a description.
+        self.assertIn("2026-0412", ocr.text or "")
+        self.assertIn("87,40", ocr.text or "")
+
+    def test_a_plain_scene_is_not_flagged_as_a_document(self) -> None:
+        """The control: a photo with no text must not cost a second, useless call."""
+        from procrafiler.ai_reader import read_with_vision
+
+        result = read_with_vision(self._scene_image())
+        self.assertFalse(result.is_document, "a textless scene was taken for a document")
 
 
 if __name__ == "__main__":

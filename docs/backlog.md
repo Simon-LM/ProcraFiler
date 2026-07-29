@@ -44,6 +44,32 @@ binary in the taxonomy) is not in the document — it depends on the user's
 
 ## Deferred features (planned, not built yet)
 
+- [x] **OCR-confirm a photographed DOCUMENT** — **SHIPPED** 2026-07-29, before the
+      first real run. A photo dispatches to the vision model because it is a
+      `.jpg`, even when it *is* a document: a photographed invoice comes back as a
+      description ("an administrative document with a logo") instead of its amount,
+      reference and date. That weak text is then cached in the sidecar and the search
+      index, so the loss is permanent, not just a bad filing decision.
+      **Feasibility verified against the live API:** `/v1/ocr` accepts an image, not
+      only a PDF — send `{"type": "image_url", "image_url": "data:image/png;base64,…"}`
+      instead of `document_url`. Tested on a rendered invoice: full, faithful
+      transcription.
+      **Trigger:** the vision prompt ends with a line to answer — `DOCUMENT: oui|non`
+      ("is this primarily a written document?") — parsed off the reply. Deliberately
+      not a JSON envelope, which would risk degrading the description itself.
+      **Combination (user's call): keep BOTH, weighted toward the OCR.** The assembled
+      content, as it goes to analysis and into the sidecar:
+      `[Transcription OCR — fiable] …` then `[Description visuelle — contexte, moins
+      fiable] …`. The order and the labels carry the weighting — no extra mechanism.
+      **Consequence that falls out for free:** such a file then becomes
+      `read_via="ocr"` instead of `"vision"`, so it moves into the reliable-content
+      regime established in #112 — which is now correct, since its primary content IS
+      an OCR transcription. The filename drops back to a tie-breaker rather than
+      corroborating evidence. This incidentally fixes the "photographed invoice" case,
+      which was wrongly treated as an unreliable read.
+      **Cost:** two AI calls instead of one, but only for photos of documents — a
+      photo of water damage triggers none. The user judged reliability worth it.
+
 - [ ] **Selectable interface language (i18n)** — the guided first run is English-only
       today. Offer the interface in **French** first (the prompts were French before
       and the translation map exists in git history), then make it extensible to other

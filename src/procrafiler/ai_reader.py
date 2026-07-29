@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,8 +50,37 @@ _DEFAULT_VISION_PROMPT = (
     "Transcris fidèlement tout le texte visible dans cette image, puis décris "
     "brièvement ce qu'elle représente. Réponds en français, en texte brut. "
     "Si c'est un document, restitue les informations clés (émetteur, type, "
-    "date, montants)."
+    "date, montants).\n"
+    "Termine ta réponse par une dernière ligne, seule, exactement au format "
+    "`DOCUMENT: oui` ou `DOCUMENT: non` : réponds `oui` si ce visuel est avant "
+    "tout un document écrit (courrier, facture, formulaire, attestation, page "
+    "de texte), `non` s'il s'agit d'une scène, d'un objet ou d'un lieu."
 )
+
+# The marker line the vision model appends, answering "is this a written
+# document?". A photographed document is dispatched to VISION (it is a .jpg), so
+# a real OCR pass never sees it — and the description that lands in the search
+# sidecar says "an administrative document with a logo" instead of the amount and
+# the reference. This flag is what lets the caller re-read it with the OCR model.
+_DOCUMENT_MARKER_RE = re.compile(r"^\s*DOCUMENT\s*:\s*(oui|yes|non|no)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def split_document_marker(text: str) -> tuple[str, bool | None]:
+    """Strip the `DOCUMENT: oui|non` line and return (clean_text, is_document).
+
+    `is_document` is None when the model did not answer the question — a local
+    model may simply ignore it, and that must degrade to "don't re-read", never
+    to a crash or a stray line polluting the cached text.
+    """
+    match = None
+    for match in _DOCUMENT_MARKER_RE.finditer(text):
+        pass  # keep the LAST occurrence: the instruction asks for a final line
+    if match is None:
+        return text.strip(), None
+    answer = match.group(1).lower()
+    cleaned = (text[: match.start()] + text[match.end() :]).strip()
+    return cleaned, answer in ("oui", "yes")
+
 
 # OCR via a local vision model wants pure transcription, not a description.
 _DEFAULT_OCR_PROMPT = (
@@ -84,6 +114,9 @@ class AIReadResult:
     model: str
     used_fallback: bool
     reason: str | None
+    # Vision only: the model's answer to "is this primarily a written document?".
+    # None when it did not answer (a local model may ignore the question).
+    is_document: bool | None = None
 
 
 def _extract_ocr_text(body: dict[str, Any]) -> str:
@@ -100,22 +133,30 @@ def _extract_ocr_text(body: dict[str, Any]) -> str:
 
 
 def call_mistral_ocr(path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT) -> str:
-    """Run Mistral OCR on a local PDF and return the extracted text.
+    """Run Mistral OCR on a local PDF **or image** and return the extracted text.
 
-    The file is sent inline as a base64 data URI (no separate Files upload).
+    The file is sent inline as a base64 data URI (no separate Files upload). The
+    endpoint takes a different member per kind — `document_url` for a PDF,
+    `image_url` for an image — so a photographed document can be transcribed
+    properly instead of merely described by a vision model (verified against the
+    live API: a rendered invoice came back fully transcribed).
     """
     api_key = os.getenv("MISTRAL_API_KEY")
     if not api_key:
         raise ProviderCallError("MISTRAL_API_KEY is not set")
 
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    payload: dict[str, Any] = {
-        "model": model,
-        "document": {
+    if path.suffix.lower().lstrip(".") in _IMAGE_SUFFIX_TO_MIME:
+        document: dict[str, Any] = {
+            "type": "image_url",
+            "image_url": f"data:{_image_mime(path)};base64,{encoded}",
+        }
+    else:
+        document = {
             "type": "document_url",
             "document_url": f"data:application/pdf;base64,{encoded}",
-        },
-    }
+        }
+    payload: dict[str, Any] = {"model": model, "document": document}
 
     status_code, raw_content = _post_json(
         MISTRAL_OCR_URL,
@@ -342,8 +383,18 @@ def read_with_vision(
 
                 if not text.strip():
                     raise ProviderCallError("VISION_EMPTY_RESULT")
+                # Peel off the `DOCUMENT: oui|non` line before the text is used
+                # anywhere: it must never reach the fiche or the search sidecar.
+                cleaned, is_document = split_document_marker(text)
+                if not cleaned:
+                    raise ProviderCallError("VISION_EMPTY_RESULT")
                 return AIReadResult(
-                    text=text, provider=entry.provider, model=entry.model, used_fallback=False, reason=None
+                    text=cleaned,
+                    provider=entry.provider,
+                    model=entry.model,
+                    used_fallback=False,
+                    reason=None,
+                    is_document=is_document,
                 )
             except (RateLimitedError, ProviderCallError) as exc:
                 last_error = str(exc)
