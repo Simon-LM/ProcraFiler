@@ -40,6 +40,19 @@ export PROCRAFILER_LIBRARY_MIRROR_DIR="$WORK/ProcraFiler_Library_Mirror"
 export PROCRAFILER_HOME="$WORK/state"
 export PROCRAFILER_CONFIG_HOME="$WORK/config"
 
+# Claim this workspace as a sandbox, so the dev guard lets it through once it
+# fills up with test documents (see src/procrafiler/dev_guard.py). The app also
+# stamps this itself on a layout it creates, but a workspace that predates the
+# guard — or one restored from a backup — has no marker and would be refused as
+# "a library that already holds documents".
+mkdir -p "$PROCRAFILER_HOME"
+if [[ ! -f "$PROCRAFILER_HOME/.procrafiler-sandbox" ]]; then
+  cat > "$PROCRAFILER_HOME/.procrafiler-sandbox" <<'MARKER'
+This layout is the ProcraFiler development sandbox and holds test data.
+Delete this file if it ever becomes a real library.
+MARKER
+fi
+
 WS="$PROCRAFILER_WORKSPACE_DIR"
 LIB="$PROCRAFILER_LIBRARY_DIR"
 

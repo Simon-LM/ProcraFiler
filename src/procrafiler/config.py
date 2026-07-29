@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from procrafiler.dev_guard import (  # type: ignore[reportMissingImports]
+    guard_mutation,
+    mark_sandbox,
+    source_checkout_root,
+)
 from procrafiler.taxonomy import ensure_base_library_directories  # type: ignore[reportMissingImports]
 
 
@@ -320,6 +325,16 @@ def set_feature_flag(paths: RuntimePaths, feature: str, enabled: bool) -> dict[s
 
 
 def ensure_runtime_layout(paths: RuntimePaths, *, include_mirror: bool = True) -> None:
+    """Create the layout, after refusing to do so outside a development sandbox.
+
+    The guard sits here rather than in the CLI because this is where the damage
+    happens: ~30 entry points call this function, and so does any ad-hoc script
+    that drives the pipeline directly — which is exactly how a development run
+    once materialised a full layout in the developer's real home directory. One
+    choke point, no entry point to forget. See `dev_guard`.
+    """
+    guard_mutation(paths)
+
     directories = [
         paths.workspace_root,
         paths.inbox_dir,
@@ -348,3 +363,9 @@ def ensure_runtime_layout(paths: RuntimePaths, *, include_mirror: bool = True) -
         save_feature_settings(paths, default_feature_settings())
     if not paths.policy_file.exists():
         save_runtime_policy(paths, default_runtime_policy())
+
+    # Claim this layout as a development sandbox now that its state root exists.
+    # A sandbox fills up with test documents like any library, so without this the
+    # "already holds real work" guard would start refusing it on the second run.
+    if source_checkout_root() is not None:
+        mark_sandbox(paths)
