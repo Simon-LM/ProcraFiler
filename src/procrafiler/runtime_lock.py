@@ -32,6 +32,33 @@ class RuntimeLockedError(RuntimeError):
         self.lock_path = lock_path
 
 
+def probe_runtime_lock(paths: RuntimePaths) -> str | None:
+    """Is another process holding the lock? Answer without creating anything.
+
+    `runtime_lock` creates the state directory and the lock file, which is right
+    for a command that is about to work and wrong for one that is only looking:
+    `doctor` used to materialise both just to report that the lock was free.
+
+    A missing state directory or a missing lock file both mean "nobody is
+    holding it" — the file only exists once a mutating command has run. Returns
+    the lock path when it IS held, None otherwise.
+    """
+    lock_path = paths.state_root / LOCK_FILENAME
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR)  # no O_CREAT: never materialise it
+    except OSError:
+        return None  # absent, or unreadable — either way we are not blocking on it
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return str(lock_path)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(fd)
+
+
 @contextlib.contextmanager
 def runtime_lock(paths: RuntimePaths) -> Iterator[None]:
     """Acquire the runtime lock or raise RuntimeLockedError immediately.

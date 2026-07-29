@@ -26,10 +26,15 @@
 
 ## Status (2026-07-29)
 
-**Gate 1 closed** (guards A, B, C), plus **E** and **F**. **D** — making diagnostics
-read-only — is deliberately left for its own branch. **G** (measuring the vision name
-hints on real photographs) was completed before the guards, and is the reason this
-document exists at all: running the app on real material is what exposed the gap.
+**Every item is done.** Gate 1 (guards A, B, C), gate 2 (D, E, F), gate 3 (G).
+**G** — measuring the vision name hints on real photographs — was completed before
+the guards, and is the reason this document exists at all: running the app on real
+material is what exposed the gap.
+
+**What this does NOT close:** these guards live *inside the application*. They stop
+a source checkout, and any script that drives the pipeline, from writing where it
+should not. They cannot stop `rm -rf` typed into a shell — nothing in the code can.
+That boundary belongs to whatever runs the commands.
 
 Measured defaults, with `$HOME` substituted — this is what an unconfigured run targets:
 
@@ -179,23 +184,57 @@ from a source checkout.
 
 ---
 
-## Gate 2 — supporting work
+## Gate 2 — supporting work — **CLOSED**
 
-### [ ] D. A diagnostic must not create anything — **STILL OPEN**
+### [x] D. A diagnostic must not create anything — **DONE**
 
-Split `ensure_runtime_layout()` (mutating) from a read-only `resolve_runtime_layout()`.
-`doctor`, `search`, `list` and every `--dry-run` use the latter. Measured today,
-`doctor` creates 48 directories; a command you run to *decide whether to trust the
-app* must not modify the machine.
+> **Shipped.** Seven read-only commands (`status`, `features`, `policy-effective`,
+> `doctor`, `search`, `search-ai`, `deleted-history`) create **0 entries** against a
+> layout that does not exist. 9 tests in
+> [`tests/test_diagnostics_readonly.py`](../tests/test_diagnostics_readonly.py);
+> five mutations verified.
 
-Deliberately left for its own branch: it touches ~30 CLI entry points and needs a
-judgement call on each about whether it may create anything. Bundling that with the
-guards would have made both harder to review. The guards already stop the *harm*
-(`doctor` from a source checkout now refuses instead of creating); this item is
-about a production `doctor` not modifying the machine either.
+**The split was not needed.** The spec called for a read-only
+`resolve_runtime_layout()` beside the mutating one. In practice a read-only command
+needs no layout function at all — `default_runtime_paths()` already gives it the
+paths. The fix was to stop calling the mutating one, plus make two collaborators
+stop creating:
 
-**Done when.** `procrafiler doctor` against a virgin home creates 0 entries, with a
-test asserting it.
+- **the runtime lock.** `check_runtime_lock` *acquired the real lock* to report
+  whether it was free, which creates the state directory and the lock file — and
+  briefly blocks any run starting at that moment. New `probe_runtime_lock()` opens
+  the existing file without `O_CREAT`; a missing file means nobody holds it.
+- **the search index.** It is created next to the catalog, so under a missing state
+  directory `search` died with `unable to open database file`. It now answers
+  "no catalog yet — nothing has been filed", and `search-ai` decides that *before*
+  paying for an AI query expansion.
+
+**What this recovers.** `_check_path_writable`'s `FAIL "missing: {path}"` branch was
+**unreachable by construction**: the caller created every path a line earlier. So
+`doctor` could not tell you a library had disappeared — an unmounted disk, a deleted
+folder, a mistyped path. Now:
+
+```text
+$ procrafiler doctor          # library configured to a typo'd path
+[FAIL] library_root: missing: /home/…/typo-in-my-path
+$ ls /home/…/typo-in-my-path
+No such file or directory     # …and it was not created
+```
+
+**One refinement found while testing.** "Never set up" and "something disappeared"
+are different problems. A first run reported nine identical failures, which is noise
+rather than an answer. When *every* root is missing, `check_paths` now returns a
+single actionable line:
+
+```text
+[FAIL] layout: not created yet — run `procrafiler setup` (or `init-layout`).
+       Expected the inbox at … and the library at …
+```
+
+A **partially** missing layout is the alarming case and is still reported root by
+root. One existing test in `tests/test_user_setup.py` asserted the old shape and was
+updated: it builds the roots it needs so that the case it actually tests — an
+installed layout with the mirror disabled — is the one it exercises.
 
 ### [x] E. Freeze the leak detector as a permanent test — **DONE**
 
@@ -229,7 +268,7 @@ are ever dropped from `.gitignore`.
 
 ---
 
-## Gate 3 — what is still owed on the AI side
+## Gate 3 — what was owed on the AI side — **CLOSED**
 
 ### [x] G. Measure F3 on the real photos — **DONE 2026-07-29**
 

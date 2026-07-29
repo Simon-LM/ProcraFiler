@@ -20,7 +20,7 @@ from typing import Callable
 
 from procrafiler.ai_naming import SUPPORTED_AI_TASKS, task_chain_from_env
 from procrafiler.config import RuntimePaths, layout_conflicts, load_feature_settings
-from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
+from procrafiler.runtime_lock import probe_runtime_lock
 from procrafiler.user_setup import on_same_disk
 
 
@@ -50,6 +50,24 @@ def _check_path_writable(section: str, name: str, path) -> DoctorCheck:
 
 def check_paths(paths: RuntimePaths, *, mirror_enabled: bool = True) -> list[DoctorCheck]:
     section = "Paths"
+
+    # "Never set up" and "something disappeared" are different problems and deserve
+    # different answers. Every root missing means the app has simply not been run
+    # yet — one actionable line beats nine identical failures. A *partially*
+    # missing layout is the alarming case (a mistyped path, a deleted library, an
+    # unmounted disk) and is reported root by root below.
+    roots = (paths.workspace_root, paths.library_root, paths.state_root)
+    if not any(root.exists() for root in roots):
+        return [
+            DoctorCheck(
+                section,
+                "layout",
+                STATUS_FAIL,
+                "not created yet — run `procrafiler setup` (or `init-layout`). "
+                f"Expected the inbox at {paths.workspace_root} and the library at {paths.library_root}",
+            )
+        ]
+
     results = [
         _check_path_writable(section, "workspace_root", paths.workspace_root),
         _check_path_writable(section, "inbox_dir", paths.inbox_dir),
@@ -296,19 +314,24 @@ def check_catalog(paths: RuntimePaths) -> list[DoctorCheck]:
 
 
 def check_runtime_lock(paths: RuntimePaths) -> list[DoctorCheck]:
+    """Report whether the lock is held, without taking it and without creating it.
+
+    Acquiring the real lock — which is what this used to do — made a diagnostic
+    create the state directory and the lock file, and briefly blocked any run
+    starting at that moment.
+    """
     section = "Concurrency"
-    try:
-        with runtime_lock(paths):
-            return [DoctorCheck(section, "runtime_lock", STATUS_OK, "available")]
-    except RuntimeLockedError as err:
-        return [
-            DoctorCheck(
-                section,
-                "runtime_lock",
-                STATUS_WARN,
-                f"held by another process: {err.lock_path}",
-            )
-        ]
+    holder = probe_runtime_lock(paths)
+    if holder is None:
+        return [DoctorCheck(section, "runtime_lock", STATUS_OK, "available")]
+    return [
+        DoctorCheck(
+            section,
+            "runtime_lock",
+            STATUS_WARN,
+            f"held by another process: {holder}",
+        )
+    ]
 
 
 def run_doctor(paths: RuntimePaths) -> list[DoctorCheck]:
