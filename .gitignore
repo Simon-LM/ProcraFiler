@@ -41,3 +41,6 @@ sandbox/workspace/
 
 # Private working data — never committed (test photos, sandbox runs, real documents)
 private/
+
+# Claude Code local settings — contain absolute paths of this machine
+.claude/settings.local.json
