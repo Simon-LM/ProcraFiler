@@ -56,10 +56,16 @@ class TestSetNamingPrompt(unittest.TestCase):
         self.assertIn("MISREAD photo", prompt)
         self.assertIn("Do not force one subject onto the folder", prompt)
 
-    def test_review_is_the_exception_not_the_reflex(self) -> None:
+    def test_review_is_asked_for_mixed_signals_and_not_for_mere_doubt(self) -> None:
+        """Review has ONE trigger: a reading that mixes a setting excluding the file
+        with a sign of the set's own subject, and nothing settling which is real.
+        Measured against the live API: a generic "ask when uncertain" wording never
+        fired once in nine cases, while naming this precise combination does."""
         prompt = _build_set_naming_prompt(DOCS, "Degats-eaux", None)
+        self.assertIn("MIXES both", prompt)
+        self.assertIn("set review to true", prompt)
+        # …and everywhere else it must decide by itself rather than escalate.
         self.assertIn("JUDGE FREELY", prompt)
-        self.assertIn("not merely because something is uncertain", prompt)
 
     def test_the_user_context_is_included_when_present(self) -> None:
         prompt = _build_set_naming_prompt(DOCS, "Degats-eaux", "Simon, plombier de metier")

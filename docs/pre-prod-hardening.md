@@ -12,6 +12,17 @@
 > The stake is not code elegance: the product's entire value rests on trust. One
 > document silently lost and the user never puts their files back in.
 
+## Status — all gates closed (2026-07-29)
+
+Every item is done: **A** (#110), **B**/**C**/**E** (#111), **F1/F2/F4** (#112, #113),
+**D** (#114), **G** (this branch). Only **F3** stays open, deliberately deferred —
+it is a trigger to revisit, not outstanding work.
+
+**What this does NOT close:** none of it proves the AI *judges well*. The tests
+assert on prompts and on file operations; whether a misread photo now lands
+correctly needs a real run on real files. That is the remaining unknown, and no
+offline test can retire it.
+
 ## How to use this list
 
 - Items are grouped by **gate**, not by area: `P0` blocks the first real run, `P1`
@@ -365,7 +376,7 @@ earns its role as the go/no-go command:
 
 ## Final gate
 
-### [ ] G. Full test audit — guarantee no file is ever lost or corrupted
+### [x] G. Full test audit — guarantee no file is ever lost or corrupted
 
 **Do this last**, once A–F have settled. Two parts: (1) re-read the existing suite
 for gaps, (2) add the missing tests. The bar is not coverage percentage — it is:
@@ -389,36 +400,60 @@ Audit findings that seed the work (measured 2026-07-25, 518 tests):
 
 Tests to add:
 
-- [ ] **Conservation invariant (the key test).** For N input files and an interrupt
+- [x] **Conservation invariant (the key test).** For N input files and an interrupt
       injected at *every* pipeline step in turn: after the interrupt **and** after the
       next run, every input is accounted for exactly once across
       {Inbox, Queue, Library, Inbox_Trash, Manual_Review} — never zero, never twice.
       Parameterise over the interruption point rather than hand-picking one.
-- [ ] **Crash-during-recovery.** Interrupt the Queue recovery of A itself; assert the
+- [x] **Crash-during-recovery.** Interrupt the Queue recovery of A itself; assert the
       following run still converges (idempotence).
-- [ ] **`SIGKILL` end-to-end**, not just a raised exception — an in-process exception
+- [x] **`SIGKILL` end-to-end**, not just a raised exception — an in-process exception
       does not prove durability against a real kill.
-- [ ] **Content integrity, not just presence.** Assert the sha256 of every filed
+- [x] **Content integrity, not just presence.** Assert the sha256 of every filed
       document equals the input's — the current suite largely checks paths and counts,
       which cannot detect a truncated or half-copied file.
-- [ ] **Failure injection** on `move`/`copy2` (`ENOSPC`, `EACCES`, `EIO`) at each
+- [x] **Failure injection** on `move`/`copy2` (`ENOSPC`, `EACCES`, `EIO`) at each
       write site: library placement, mirror sync, trash move, sidecar write. Assert
       no partial file is ever left presented as complete.
-- [ ] **Interrupted mirror sync** leaves a truncated mirror copy → `scrub` detects it
+- [x] **Interrupted mirror sync** leaves a truncated mirror copy → `scrub` detects it
       and `--repair` heals it from the library.
-- [ ] **Nested-path rejection** (C), for every pair, via `setup` and via `doctor`.
-- [ ] **`restore` safety** (B): refuses/prompts on a non-empty library; `--dry-run`
+- [x] **Nested-path rejection** (C), for every pair, via `setup` and via `doctor`.
+- [x] **`restore` safety** (B): refuses/prompts on a non-empty library; `--dry-run`
       mutates nothing; overwritten documents are recoverable.
-- [ ] **Adversarial filenames** survive a full round trip, including the action log
+- [x] **Adversarial filenames** survive a full round trip, including the action log
       staying valid JSONL.
-- [ ] **Two concurrent `process-all` processes** on one Inbox: one proceeds, the other
+- [x] **Two concurrent `process-all` processes** on one Inbox: one proceeds, the other
       is refused, and no file is processed twice or lost.
-- [ ] **Hint weighting** (F1/F2): the `vision`/`ocr` prompt differs from the `text`
+- [x] **Hint weighting** (F1/F2): the `vision`/`ocr` prompt differs from the `text`
       prompt in the authority it grants the content; sibling names reach the per-file
       prompt. Offline — assert on the built prompt string, never a live call.
-- [ ] **Sidecar/document coupling**: no state leaves a `.txt` sidecar orphaned or
+- [x] **Sidecar/document coupling**: no state leaves a `.txt` sidecar orphaned or
       pointing at the wrong document after a move, rename or interrupt.
 
 **Done when.** Every item above is covered, `make test` stays offline and
 deterministic, and the conservation invariant is enforced by a test that fails if
 anyone later reintroduces a path where a file can go missing.
+
+> **DONE.** 614 tests, offline and deterministic. Six items were already closed by
+> the fixes above (conservation invariant, crash-during-recovery, content integrity,
+> nested paths, restore safety, hint weighting); the remaining six landed in
+> [`tests/test_durability_audit.py`](../tests/test_durability_audit.py) and
+> [`tests/test_durability_processes.py`](../tests/test_durability_processes.py).
+>
+> **Findings:** no new defect. 13 adversarial filenames (embedded newline, CR, tab,
+> quotes, unicode, RTL override, trailing dot/space, 200 chars, shell
+> metacharacters) all survive a full round trip with the action log staying valid
+> JSONL — the JSON encoder and the stem sanitiser already covered it. Injected
+> ENOSPC / EACCES / EIO at the library write leave the document intact in the Queue
+> and report an error rather than a clean run; a failing mirror copy does not cost
+> the primary. `scrub` detects and heals a truncated, missing or bit-rotted copy in
+> both directions, and refuses to "repair" when both copies are bad.
+>
+> **Two test defects of my own were found and fixed while writing this**, which is
+> the argument for the exercise: a sidecar test patched a symbol the pipeline does
+> not use (so it proved nothing), and the sidecar-follows-a-move test moved the
+> sidecar by hand — testing the test, not `rescan`. Both now assert the real thing.
+>
+> `SIGKILL` and concurrency use real subprocesses: an in-process `KeyboardInterrupt`
+> still unwinds the stack and runs `finally` blocks, so it cannot stand in for a
+> power cut. Mutation-verified: disabling Queue recovery fails the `SIGKILL` test.
