@@ -314,5 +314,141 @@ class TestInterruptedMirrorIsHealed(_Workspace):
         self.assertEqual(document.read_bytes(), b"rot A", "a bad copy was overwritten by another")
 
 
+class TestFailureDuringTheRepairItself(_Workspace):
+    """A repair is the last line of defence. A failure *inside* it must not make
+    things worse than they already were.
+
+    Found by mutation: the failure injection above targets the pipeline's library
+    write, and nothing had ever injected a fault into `scrub --repair`. Removing
+    scrub's post-copy verification, or its `OSError` handler, left the whole suite
+    green — the code was right, but nothing proved it.
+    """
+
+    def _corrupted_library_copy_with_a_good_mirror(self) -> Path:
+        (self.paths.inbox_dir / "doc.txt").write_bytes(b"the authoritative content")
+        process_all_inbox_files(self.paths, now_utc=self.now)
+        document = self._library_files()[0]
+        document.write_bytes(b"bit rot")  # only the primary is bad
+        return document
+
+    def _heal_leftovers(self) -> list[Path]:
+        return [p for p in self.paths.library_root.rglob("*.heal-tmp")]
+
+    def test_a_repair_that_writes_garbage_is_not_swapped_in(self) -> None:
+        """The copy is hashed again *after* being written, before replacing the
+        document. Without that check a corrupted heal would overwrite a merely
+        damaged file — and be reported as repaired."""
+        document = self._corrupted_library_copy_with_a_good_mirror()
+
+        def corrupting_copy(src, dst, *args, **kwargs):  # noqa: ANN001, ANN202
+            Path(dst).write_bytes(b"corrupted in transit")
+
+        catalog = CatalogRepository(self.paths.catalog_db_file)
+        with patch("procrafiler.scrub.shutil.copy2", side_effect=corrupting_copy):
+            report = scrub(self.paths, catalog, repair=True)
+
+        self.assertEqual(report.repaired, [], "a corrupted heal was reported as a repair")
+        self.assertEqual(
+            document.read_bytes(), b"bit rot",
+            "the corrupted heal was swapped in over the damaged document",
+        )
+        self.assertEqual(self._heal_leftovers(), [], "a .heal-tmp file was left behind")
+        self.assertFalse(report.healthy, "the document was reported healthy")
+
+    def test_a_disk_filling_during_a_repair_reports_instead_of_crashing(self) -> None:
+        """`scrub --repair` on a full disk must come back with a failed repair, not
+        an OSError traceback — and must not leave a partial file next to the
+        document, where the next scrub would read it."""
+        document = self._corrupted_library_copy_with_a_good_mirror()
+
+        catalog = CatalogRepository(self.paths.catalog_db_file)
+        with patch(
+            "procrafiler.scrub.shutil.copy2",
+            side_effect=OSError(errno.ENOSPC, "No space left on device"),
+        ):
+            report = scrub(self.paths, catalog, repair=True)  # must not raise
+
+        self.assertEqual(report.repaired, [])
+        self.assertEqual(document.read_bytes(), b"bit rot", "the document changed anyway")
+        self.assertEqual(self._heal_leftovers(), [], "a .heal-tmp file was left behind")
+        self.assertEqual(report.corrupt, 1, "the still-corrupt document was not reported")
+
+    def test_the_repair_still_works_when_nothing_fails(self) -> None:
+        """Anti-vacuity: the two tests above must fail because of the INJECTED
+        fault, not because this scenario never repairs anything."""
+        document = self._corrupted_library_copy_with_a_good_mirror()
+        catalog = CatalogRepository(self.paths.catalog_db_file)
+
+        report = scrub(self.paths, catalog, repair=True)
+
+        self.assertEqual(len(report.repaired), 1, "the scenario does not repair at all")
+        self.assertEqual(document.read_bytes(), b"the authoritative content")
+
+
+class TestMirrorFailurePathsCleanUpAfterThemselves(_Workspace):
+    """Two mirror paths that only run when something goes wrong, and that no test
+    had ever entered."""
+
+    def _file_one(self) -> Path:
+        (self.paths.inbox_dir / "doc.txt").write_bytes(b"first version")
+        process_all_inbox_files(self.paths, now_utc=self.now)
+        return self._library_files()[0]
+
+    def test_a_failed_mirror_copy_leaves_no_staging_file_behind(self) -> None:
+        """The mirror stages into a hidden temp file and renames it. If the copy
+        fails, that temp file must go — otherwise every failed sync leaves one more
+        `.procrafiler-mirror__*.tmp` in the mirror, forever.
+
+        The injected failure writes a **partial file and then raises**, which is
+        what a disk filling mid-copy actually does. Raising before writing anything
+        leaves nothing to clean up, so it cannot exercise the cleanup at all — the
+        first version of this test made exactly that mistake and passed even with
+        the cleanup removed.
+        """
+        (self.paths.inbox_dir / "doc.txt").write_bytes(b"the document")
+
+        def fills_the_disk(src, dst, *args, **kwargs):  # noqa: ANN001, ANN202
+            Path(dst).write_bytes(b"the doc")  # partial write…
+            raise OSError(errno.ENOSPC, "No space left on device")  # …then no room left
+
+        with patch("procrafiler.mirror.copy2", side_effect=fills_the_disk):
+            summary = process_all_inbox_files(self.paths, now_utc=self.now)
+
+        self.assertEqual(summary["mirror_failures"], 1, "setup failed: the mirror did not fail")
+        leftovers = [
+            p for p in self.paths.mirror_root.rglob("*") if p.name.startswith(".procrafiler-mirror__")
+        ]
+        self.assertEqual(leftovers, [], f"staging files left in the mirror: {leftovers}")
+        # And the truncated bytes never reached a real mirror path.
+        real = [
+            p for p in self.paths.mirror_root.rglob("*")
+            if p.is_file() and not p.name.startswith(".") and "Trash" not in p.parts
+        ]
+        self.assertEqual(real, [], f"a truncated file landed at a real mirror path: {real}")
+
+    def test_a_second_quarantine_in_the_same_second_does_not_overwrite_the_first(self) -> None:
+        """When the mirror holds a copy that differs from the library, it is moved
+        to the mirror trash under a timestamped name. Two quarantines of the same
+        document within the same second collide on that name — and the first
+        rescued version would be silently replaced by the second."""
+        from procrafiler.mirror import sync_library_file_to_mirror
+
+        document = self._file_one()
+        mirror_copy = self.paths.mirror_root / document.relative_to(self.paths.library_root)
+        self.assertTrue(mirror_copy.is_file(), "setup failed: nothing was mirrored")
+
+        # Two syncs, one fixed timestamp: both quarantine names are identical.
+        for stale in (b"stale version A", b"stale version B"):
+            mirror_copy.write_bytes(stale)
+            result = sync_library_file_to_mirror(self.paths, document, now_utc=self.now)
+            self.assertTrue(result.success, f"mirror sync failed: {result.error}")
+
+        rescued = sorted(p for p in self.paths.mirror_trash_dir.rglob("*") if p.is_file())
+        self.assertEqual(len(rescued), 2, f"a quarantined copy was overwritten: {rescued}")
+        self.assertEqual(
+            sorted(p.read_bytes() for p in rescued), [b"stale version A", b"stale version B"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
