@@ -9,6 +9,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **`scrub --repair` is now tested for failures happening *during* the repair.** A post-v0.9.0 audit — line coverage plus sixteen deliberate mutations of safety-critical code — found that the failure injection shipped in v0.9.0 only ever targeted the pipeline's library write. Nothing had injected a fault into the repair path itself, which is the last line of defence: four mutations of it left the whole suite green. Now covered: a heal whose copy is corrupted in transit is **not** swapped in over the damaged document (and is not reported as repaired), a disk filling mid-repair **reports a failed repair instead of crashing**, and neither leaves a `.heal-tmp` file next to your document. Same for the mirror: a copy that fails partway leaves no staging file behind and no truncated file at a real mirror path, and two quarantined copies of the same document within the same second no longer overwrite each other. **No defect was found in the application** — the code already did all of this; nothing proved it.
+
 ## [0.9.0] - 2026-07-29 — Trust before the first real run: durability, context-aware reading, dev/prod isolation
 
 The release that makes the app safe to point at real documents for the first time. Everything here came from two exercises: a **pre-production audit** that reproduced each defect rather than inferring it, and actually **running the app on real material** — which immediately exposed a gap no offline test could have found.

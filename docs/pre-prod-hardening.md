@@ -440,6 +440,25 @@ earns its role as the go/no-go command:
 
 ### [x] G. Full test audit — guarantee no file is ever lost or corrupted
 
+> **Re-audited 2026-07-29, after v0.9.0**, with line coverage plus **16 deliberate
+> mutations** of safety-critical code. Twelve were killed by the existing suite;
+> **four survived**, and they shared one blind spot: the failure injection added
+> here targets the *pipeline's* library write, and nothing had ever injected a
+> fault into `scrub --repair` or into the mirror's staging cleanup — the paths that
+> only run when something is already going wrong. Closed by
+> `TestFailureDuringTheRepairItself` and `TestMirrorFailurePathsCleanUpAfterThemselves`
+> (5 tests; `scrub` 93 % → 97 %, `mirror` 85 % → 94 %). All four mutations now die.
+>
+> Two things the re-audit cleared rather than fixed: all 24 `patch()` targets in the
+> suite were checked for the inert-patch trap (a symbol patched at its defining
+> module while the caller imported it by name) — **none are inert**; and
+> `scrub._restore`'s internal hash guard is unreachable from its only callers, which
+> pass an already-verified source. That is defensive code, not a hole.
+>
+> Still uncovered, judged low risk and deliberately left: `restore.format_plan`'s
+> rendered **text** (the plan *data* it renders is covered by four killed mutations),
+> `collapse_nesting`'s directory-merge branch, and naive-datetime normalisation.
+
 **Do this last**, once A–F have settled. Two parts: (1) re-read the existing suite
 for gaps, (2) add the missing tests. The bar is not coverage percentage — it is:
 **can any sequence of failures make a document disappear or change silently?**
