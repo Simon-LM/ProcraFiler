@@ -44,6 +44,29 @@ binary in the taxonomy) is not in the document — it depends on the user's
 
 ## Deferred features (planned, not built yet)
 
+- [ ] **Cache the per-file analysis by content hash** — so a document is never paid
+      for twice. `docs/pre-prod-hardening.md` item A states the current trade-off in
+      writing: *"a recovered file is re-read from scratch, so it costs its AI call
+      again. Deliberate — resuming mid-flight would require persisting the analysis
+      state, and a fresh read is always correct."* That is right about correctness
+      and expensive in practice: an interrupted 200-file run pays for everything
+      twice, and re-dropping a file after a manual review pays again.
+      **The material already exists:** the catalog stores `content_json` per
+      document, keyed alongside its `sha256`. A lookup by hash before calling
+      `analyze_content` would close it.
+      **The constraint that makes it non-trivial, and must not be lost:** only the
+      **per-file** analysis may be reused. The naming and organize passes depend on
+      the *set* the file arrives in — the same photo dropped in a different folder
+      must be re-judged, or the whole point of the set passes is defeated. A naive
+      "cache the whole fiche" would silently reintroduce the misreading those passes
+      exist to catch.
+      **Also to decide:** whether a cached analysis should expire when the prompt
+      changes (a prompt revision makes old fiches stale), and whether the user can
+      force a re-read.
+      Deferred as comfort-of-cost, not safety: nothing is lost today, only money and
+      time. Raised as an improvement 2026-07-29 alongside `--limit` and the cost
+      preview, which shipped first because they serve the first real run.
+
 - [x] **OCR-confirm a photographed DOCUMENT** — **SHIPPED** 2026-07-29, before the
       first real run. A photo dispatches to the vision model because it is a
       `.jpg`, even when it *is* a document: a photographed invoice comes back as a
