@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "checked_utc": "2026-07-30T00:00:00Z",
+  "updated": "2026-07-30",
+  "source": "https://mistral.ai/pricing/api",
+  "currency": "USD",
+  "currency_symbol": "$",
+  "note": "Read by hand from the public pricing page on the date above. Mistral publishes no machine-readable pricing, so these figures carry no guarantee and WILL go stale. Every display must show the date. To correct them yourself, copy this file to <config>/pricing.json and edit it: the user copy always wins.",
+  "models": {
+    "mistral-medium-latest": {
+      "in_per_mtok": 1.5,
+      "out_per_mtok": 7.5,
+      "display_name": "Mistral Medium 3.5"
+    },
+    "mistral-small-latest": {
+      "in_per_mtok": 0.15,
+      "out_per_mtok": 0.6,
+      "display_name": "Mistral Small 4"
+    },
+    "mistral-ocr-latest": {
+      "per_1k_pages": 4.0,
+      "display_name": "OCR 4"
+    }
+  }
+}

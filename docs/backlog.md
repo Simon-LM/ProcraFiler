@@ -53,18 +53,21 @@ from a call count. Four steps, of which the first is done.
       written to the action log (`run_ai_usage`). The estimator became
       provider-aware in the same move, so a local run is no longer quoted as if it
       were billed.
-- [ ] **2. A price table** — a dated, user-editable file, seeded from the companion
-      repository specified in [ai-pricing-source.md](ai-pricing-source.md). Ships
-      inside the package as an offline fallback; refreshed at most weekly; never
-      blocking a run; disableable. **Blocked on that repository existing** — nothing
-      to consume until then.
-- [ ] **3. Convert, and warn before spending** — the real point of the exercise:
-      *"this run will exceed €5 — continue?"*, with a configurable ceiling. Useful
-      even when imprecise, because the failure mode is asking needlessly, never
-      spending silently. Calibrated on the history from step 1 rather than on a
-      published formula — the token weight of an image depends on its resolution, so
-      measuring the user's own photos beats any general rule. Coarse on the very
-      first run, accurate afterwards.
+- [x] **2. A price table** — **SHIPPED**. `pricing.py` + `data/pricing.json`, dated,
+      packaged for offline use, overridable by `<config>/pricing.json`. An unknown
+      model yields no price rather than zero.
+- [x] **3. Convert, and warn before spending** — **SHIPPED**. `cost_forecast.py`
+      prices a run before it starts; `PROCRAFILER_MAX_RUN_COST` asks past a ceiling,
+      on the upper bound. Text-task token profiles were **measured** from the real
+      prompts (bounded by `MAX_CONTENT_CHARS` / `MAX_LISTING_CHARS`); image and scan
+      profiles are frank guesses, declared as such in the output, and replaced by the
+      user's own measured history from the first run onwards.
+- [ ] **2b. Automatic refresh of the table** — the remaining piece: fetch the
+      companion repository's `pricing.json` at most weekly, cached, never blocking a
+      run, disableable. **Blocked on that repository existing**
+      ([ai-pricing-source.md](ai-pricing-source.md)). Until then the packaged table
+      is edited by hand at release time, and its age is visible to the user — past
+      `STALE_AFTER_DAYS` the app says so itself.
 - [ ] **4. Cross-check against the invoice** (optional, low value) — `/v1/admin/usage`
       returns real spend, but needs an **admin** API key. Rejected as a dependency
       for steps 1–3 precisely because ordinary users have no such key; keep only as

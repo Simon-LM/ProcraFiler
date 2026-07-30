@@ -109,6 +109,19 @@ class AICallEstimate:
             + self._billed("OCR", confirms)
         )
 
+    def calls_by_task(self) -> dict[str, tuple[int, int]]:
+        """Per task, the (fewest, most) calls this run can make. The single place
+        that knows which uncertainty belongs to which task — a PDF's OCR call and a
+        photo's OCR confirmation are both "maybe", and both land on OCR."""
+        confirms = self.vision_reads if self.ocr_available else 0
+        return {
+            "IMAGE": (self.vision_reads, self.vision_reads),
+            "OCR": (0, self.maybe_ocr_reads + confirms),
+            "ANALYSIS": (self.analyses, self.analyses),
+            "NAMING": (self.naming_passes, self.naming_passes),
+            "ORGANIZE": (self.organize_passes, self.organize_passes),
+        }
+
     @property
     def is_free(self) -> bool:
         """True when nothing in this run can be billed — every configured task is

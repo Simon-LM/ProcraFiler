@@ -349,7 +349,7 @@ class PersistenceTests(unittest.TestCase):
         which is exactly when the user most wants the number."""
         from procrafiler import pipeline
 
-        def _explode(paths, now_utc, dry_run, progress, limit):  # noqa: ANN001
+        def _explode(paths, now_utc, dry_run, progress, limit, confirm=None):  # noqa: ANN001
             record_response("mistral", "medium", "ANALYSIS", {"usage": {"prompt_tokens": 700, "completion_tokens": 30}})
             raise KeyboardInterrupt("user pressed ctrl-c")
 
