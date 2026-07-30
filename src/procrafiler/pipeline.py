@@ -33,6 +33,11 @@ from procrafiler.config import (
 from procrafiler.ai_analysis import analyze_content, translate_keywords  # type: ignore[reportMissingImports]
 from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
 from procrafiler.ai_estimate import estimate_ai_calls, format_estimate  # type: ignore[reportMissingImports]
+from procrafiler.usage_meter import (  # type: ignore[reportMissingImports]
+    RunUsage,
+    format_usage_report,
+    usage_scope,
+)
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
 from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
@@ -3077,8 +3082,65 @@ def process_all_inbox_files(
 ) -> dict[str, int]:
     """Process the whole Inbox. Every event this writes carries one `run_id`, so
     the batch can be identified — and reversed with `undo-run` — as a whole."""
-    with _run_scope(str(uuid4())):
-        return _process_all_inbox_files(paths, now_utc, dry_run, progress, limit)
+    with _run_scope(str(uuid4())), usage_scope() as usage:
+        # `finally`, so an interrupted run still reports what it consumed: the AI
+        # calls already made are billed whether or not the batch finished, and
+        # that is precisely the moment the user wants the number.
+        try:
+            return _process_all_inbox_files(paths, now_utc, dry_run, progress, limit)
+        finally:
+            _report_run_usage(paths, usage, progress=progress, now_utc=now_utc)
+
+
+def _report_run_usage(
+    paths: RuntimePaths,
+    usage: RunUsage,
+    *,
+    progress: ProgressFn | None,
+    now_utc: datetime | None,
+) -> None:
+    """Show what the run consumed, and persist it.
+
+    Persisting matters as much as showing: the printed lines vanish with the
+    terminal, but the recorded totals are what a later run can calibrate a forecast
+    against. Measuring a hundred of the user's own photos and then forgetting the
+    result would leave us estimating from guesswork forever.
+    """
+    if usage.is_empty:
+        return
+    if progress is not None:
+        progress(format_usage_report(usage))
+    try:
+        _append_action_log(
+            paths,
+            operation_id=str(uuid4()),
+            action="run_ai_usage",
+            status="success",
+            message=(
+                f"AI usage: {usage.billed_calls} billable call(s), "
+                f"{usage.total_tokens} token(s), {usage.total_pages} OCR page(s), "
+                f"{usage.local_calls} local call(s)"
+            ),
+            now_utc=now_utc,
+            extra_fields={
+                "ai_usage": [
+                    {
+                        "provider": entry.provider,
+                        "model": entry.model,
+                        "task": entry.task,
+                        "calls": entry.calls,
+                        "tokens_in": entry.tokens_in,
+                        "tokens_out": entry.tokens_out,
+                        "pages": entry.pages,
+                        "billed": entry.is_billed,
+                        "unmeasured_calls": entry.unmeasured_calls,
+                    }
+                    for entry in usage.entries()
+                ]
+            },
+        )
+    except OSError:  # pragma: no cover - accounting never fails a completed run
+        pass
 
 
 def _process_all_inbox_files(

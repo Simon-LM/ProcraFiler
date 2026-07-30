@@ -21,6 +21,8 @@ from typing import Any, cast
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from procrafiler.usage_meter import record_response  # type: ignore[reportMissingImports]
+
 MISTRAL_CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 
@@ -226,21 +228,29 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         raise ProviderCallError(f"NETWORK_ERROR: {err}") from err
 
 
-def _post_ollama_chat_stream(url: str, payload: dict[str, Any], idle_timeout: int) -> tuple[int, str]:
+def _post_ollama_chat_stream(
+    url: str, payload: dict[str, Any], idle_timeout: int
+) -> tuple[int, str, dict[str, Any]]:
     """POST to Ollama with `stream=true` and accumulate the streamed
     `message.content`. `idle_timeout` is a NO-PROGRESS (idle) timeout, not a total
     deadline: `urlopen`'s socket timeout applies to each read, so a model that keeps
     producing tokens never times out — only a truly-stalled one (crashed/deadlocked)
-    does. This is what lets a merely-slow local model run as long as it needs."""
+    does. This is what lets a merely-slow local model run as long as it needs.
+
+    The third member is the FINAL streamed object — the one carrying `done: true`.
+    Only that last chunk holds Ollama's `prompt_eval_count` / `eval_count`, so a
+    caller wanting to account for the call has to be handed it here; by the time
+    the text is joined the counts are gone."""
     _ai_throttle()
     data = json.dumps({**payload, "stream": True}).encode("utf-8")
     req = Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
     parts: list[str] = []
+    final: dict[str, Any] = {}
     try:
         with urlopen(req, timeout=idle_timeout) as resp:
             if resp.status >= 400:
-                return resp.status, resp.read().decode("utf-8", "replace")
+                return resp.status, resp.read().decode("utf-8", "replace"), final
             for raw_line in resp:  # each read may block up to idle_timeout
                 line = raw_line.strip()
                 if not line:
@@ -253,15 +263,22 @@ def _post_ollama_chat_stream(url: str, payload: dict[str, Any], idle_timeout: in
                 if isinstance(message, dict) and message.get("content"):
                     parts.append(str(message["content"]))
                 if obj.get("done"):
+                    if isinstance(obj, dict):
+                        final = obj
                     break
-            return resp.status, "".join(parts)
+            return resp.status, "".join(parts), final
     except HTTPError as err:
-        return err.code, err.read().decode("utf-8", "replace")
+        return err.code, err.read().decode("utf-8", "replace"), final
     except OSError as err:
         raise ProviderCallError(f"NETWORK_ERROR: {err}") from err
 
 
-def call_mistral_chat(prompt: str, model: str, timeout: int = 60, **api_params: Any) -> str:
+def call_mistral_chat(
+    prompt: str, model: str, timeout: int = 60, *, task: str = "", **api_params: Any
+) -> str:
+    # `task` is keyword-only and declared BEFORE **api_params on purpose: any name
+    # landing in api_params is forwarded verbatim into the request payload, so a
+    # plain keyword would be sent to Mistral as an unknown field.
     api_key = os.getenv("MISTRAL_API_KEY")
     if not api_key:
         raise ProviderCallError("MISTRAL_API_KEY is not set")
@@ -289,6 +306,10 @@ def call_mistral_chat(prompt: str, model: str, timeout: int = 60, **api_params: 
     if status_code >= 400:
         raise ProviderCallError(f"API_ERROR_{status_code}: {body}")
 
+    # Recorded only once the call is known to have succeeded. A rate-limited or
+    # failed call is retried, and counting an attempt that produced nothing would
+    # inflate the run's reported consumption above what is actually billed.
+    record_response("mistral", model, task, body)
     return _extract_mistral_content(body)
 
 
@@ -305,7 +326,7 @@ def _ollama_num_ctx(default_value: int = 8192) -> int:
     return value if value > 0 else default_value
 
 
-def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
+def call_ollama_chat(prompt: str, model: str, timeout: int = 60, *, task: str = "") -> str:
     # `format: "json"` constrains Ollama to emit valid JSON. Every text task that
     # uses this (analysis / organize / grouping) expects a JSON object, and small
     # local models otherwise wrap or mangle it. `num_ctx` lifts the 2048-token
@@ -315,7 +336,7 @@ def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
     # STREAMING: the response is consumed token by token, and `timeout` is treated as
     # a NO-PROGRESS (idle) timeout — a slow local model that keeps producing is never
     # killed for being slow, only a truly-stalled one is. There is no total deadline.
-    status_code, content = _post_ollama_chat_stream(
+    status_code, content, final = _post_ollama_chat_stream(
         OLLAMA_CHAT_URL,
         payload={
             "model": model,
@@ -330,6 +351,9 @@ def call_ollama_chat(prompt: str, model: str, timeout: int = 60) -> str:
         raise ProviderCallError(f"OLLAMA_ERROR_{status_code}: {content}")
     if not content.strip():
         raise ProviderCallError("OLLAMA_BAD_RESPONSE: empty content")
+    # Local, so free — but still recorded, because a run must be able to show that
+    # its calls cost nothing rather than leave the user to assume it.
+    record_response("ollama", model, task, final)
     return content.strip()
 
 

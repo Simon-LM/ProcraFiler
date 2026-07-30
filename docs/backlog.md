@@ -42,6 +42,38 @@ binary in the taxonomy) is not in the document — it depends on the user's
    whole folder + dates) has more context than per-file classification to resolve
    work-vs-personal, especially when files arrive grouped in a folder.
 
+## Cost in money — staged plan (step 1 shipped)
+
+Raised 2026-07-30 by a simple question: the preview counts AI *calls*, but a call
+is not a price — prices are per million tokens, and nobody knows what a run costs
+from a call count. Four steps, of which the first is done.
+
+- [x] **1. Measure real consumption** — **SHIPPED**. `usage_meter.py` keeps the
+      `usage` block every provider already returns; per task, per model, printed and
+      written to the action log (`run_ai_usage`). The estimator became
+      provider-aware in the same move, so a local run is no longer quoted as if it
+      were billed.
+- [ ] **2. A price table** — a dated, user-editable file, seeded from the companion
+      repository specified in [ai-pricing-source.md](ai-pricing-source.md). Ships
+      inside the package as an offline fallback; refreshed at most weekly; never
+      blocking a run; disableable. **Blocked on that repository existing** — nothing
+      to consume until then.
+- [ ] **3. Convert, and warn before spending** — the real point of the exercise:
+      *"this run will exceed €5 — continue?"*, with a configurable ceiling. Useful
+      even when imprecise, because the failure mode is asking needlessly, never
+      spending silently. Calibrated on the history from step 1 rather than on a
+      published formula — the token weight of an image depends on its resolution, so
+      measuring the user's own photos beats any general rule. Coarse on the very
+      first run, accurate afterwards.
+- [ ] **4. Cross-check against the invoice** (optional, low value) — `/v1/admin/usage`
+      returns real spend, but needs an **admin** API key. Rejected as a dependency
+      for steps 1–3 precisely because ordinary users have no such key; keep only as
+      a possible power-user command.
+
+Explicitly rejected: **hardcoding prices in the source** (goes stale silently in
+every installation) and **scraping the pricing page from the user's machine** (a
+page redesign yields a wrong number rather than an error, everywhere at once).
+
 ## Deferred features (planned, not built yet)
 
 - [ ] **Cache the per-file analysis by content hash** — so a document is never paid

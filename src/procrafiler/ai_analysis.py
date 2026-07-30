@@ -430,9 +430,9 @@ def analyze_content(
         for attempt in range(retry_count + 1):
             try:
                 if entry.provider == "mistral":
-                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout)
+                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout, task="ANALYSIS")
                 elif entry.provider == "ollama":
-                    raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout)
+                    raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout, task="ANALYSIS")
                 else:
                     raise ProviderCallError(f"unsupported_provider:{entry.provider}")
 
@@ -514,9 +514,9 @@ def _keywords_from_chain(
         for attempt in range(retry_count + 1):
             try:
                 if entry.provider == "mistral":
-                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout)
+                    raw_output = call_mistral_chat(prompt, entry.model, timeout=timeout, task="ANALYSIS")
                 elif entry.provider == "ollama":
-                    raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout)
+                    raw_output = call_ollama_chat(prompt, entry.model, timeout=timeout, task="ANALYSIS")
                 else:
                     raise ProviderCallError(f"unsupported_provider:{entry.provider}")
                 payload = _extract_json_dict(raw_output)

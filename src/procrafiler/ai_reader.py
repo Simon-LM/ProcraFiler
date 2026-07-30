@@ -37,6 +37,7 @@ from procrafiler.ai_naming import (  # type: ignore[reportMissingImports]
     _task_timeout_from_env,
     task_chain_from_env,
 )
+from procrafiler.usage_meter import record_response  # type: ignore[reportMissingImports]
 
 MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr"
 
@@ -177,7 +178,9 @@ def _extract_ocr_text(body: dict[str, Any]) -> str:
     return "\n\n".join(parts).strip()
 
 
-def call_mistral_ocr(path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT) -> str:
+def call_mistral_ocr(
+    path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT, *, task: str = "OCR"
+) -> str:
     """Run Mistral OCR on a local PDF **or image** and return the extracted text.
 
     The file is sent inline as a base64 data URI (no separate Files upload). The
@@ -219,10 +222,16 @@ def call_mistral_ocr(path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT
     if status_code >= 400:
         raise ProviderCallError(f"OCR_API_ERROR_{status_code}: {body}")
 
+    # OCR is billed per PAGE, not per token, and the response says how many it
+    # processed — the one AI cost in this app that is exactly known rather than
+    # inferred from a token count.
+    record_response("mistral", model, task, body)
     return _extract_ocr_text(body)
 
 
-def _ollama_vision_call(image_png: bytes, model: str, prompt: str, timeout: int) -> str:
+def _ollama_vision_call(
+    image_png: bytes, model: str, prompt: str, timeout: int, task: str = "IMAGE"
+) -> str:
     """Send ONE image to an Ollama vision model via /api/chat, return its text.
 
     Ollama's chat API takes images as raw base64 strings in the message's
@@ -248,6 +257,7 @@ def _ollama_vision_call(image_png: bytes, model: str, prompt: str, timeout: int)
         content = body["message"]["content"]
     except Exception as exc:  # noqa: BLE001
         raise ProviderCallError(f"OLLAMA_VISION_BAD_RESPONSE: {exc}") from exc
+    record_response("ollama", model, task, body)
     return str(content).strip()
 
 
@@ -256,9 +266,11 @@ def call_ollama_vision(
     model: str,
     prompt: str = _DEFAULT_VISION_PROMPT,
     timeout: int = _DEFAULT_VISION_TIMEOUT,
+    *,
+    task: str = "IMAGE",
 ) -> str:
     """Read a local IMAGE with an Ollama vision model (mirrors call_mistral_vision)."""
-    return _ollama_vision_call(path.read_bytes(), model, prompt, timeout)
+    return _ollama_vision_call(path.read_bytes(), model, prompt, timeout, task)
 
 
 # Cap how many PDF pages we OCR through a local vision model, to bound latency.
@@ -295,7 +307,10 @@ def call_ollama_ocr(path: Path, model: str, timeout: int = _DEFAULT_OCR_TIMEOUT)
     pages = _render_pdf_to_pngs(path)
     if not pages:
         raise ProviderCallError("OCR_PDF_NO_PAGES")
-    parts = [_ollama_vision_call(png, model, _DEFAULT_OCR_PROMPT, timeout) for png in pages]
+    # Every rendered page is one vision call, so a 30-page scan is 30 of them. Each
+    # is recorded separately, which is what makes the OCR line of the usage report
+    # reflect the real work rather than one "document".
+    parts = [_ollama_vision_call(png, model, _DEFAULT_OCR_PROMPT, timeout, "OCR") for png in pages]
     return "\n\n".join(part for part in parts if part.strip()).strip()
 
 
@@ -351,6 +366,8 @@ def call_mistral_vision(
     model: str,
     prompt: str = _DEFAULT_VISION_PROMPT,
     timeout: int = _DEFAULT_VISION_TIMEOUT,
+    *,
+    task: str = "IMAGE",
 ) -> str:
     """Send an image to a Mistral vision model and return its text output.
 
@@ -391,6 +408,10 @@ def call_mistral_vision(
     if status_code >= 400:
         raise ProviderCallError(f"VISION_API_ERROR_{status_code}: {body}")
 
+    # The one cost no published formula lets us predict: an image's token count
+    # depends on its resolution. Measuring the user's own photos is the only
+    # reliable way to know what a run of them will cost.
+    record_response("mistral", model, task, body)
     return _extract_mistral_content(body)
 
 
