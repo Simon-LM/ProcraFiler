@@ -422,6 +422,19 @@ def cmd_process_once(dry_run: bool = False) -> int:
     return 0
 
 
+def _confirm_spend(question: str) -> bool:
+    """Answer the pipeline's cost-ceiling question at the terminal.
+
+    Defaults to NO: this guard exists to stop an unintended charge, and a stray
+    Enter must not authorise one. A non-interactive session (a cron job, a pipe)
+    raises EOFError, which likewise means "do not spend"."""
+    try:
+        answer = input(f"{question} [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
 def cmd_process_all(dry_run: bool = False, limit: int | None = None) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -430,11 +443,18 @@ def cmd_process_all(dry_run: bool = False, limit: int | None = None) -> int:
         with runtime_lock(paths):
             reconcile_catalog_snapshot(paths, now_utc=now_utc)
             summary = process_all_inbox_files(
-                paths, now_utc=now_utc, dry_run=dry_run, progress=_live, limit=limit
+                paths,
+                now_utc=now_utc,
+                dry_run=dry_run,
+                progress=_live,
+                limit=limit,
+                confirm=_confirm_spend,
             )
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
+    if summary.get("aborted"):
+        return EXIT_OK
     print(
         "Batch result: "
         f"processed: {summary['processed']}, "

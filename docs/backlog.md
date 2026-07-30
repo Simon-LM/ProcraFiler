@@ -42,6 +42,41 @@ binary in the taxonomy) is not in the document — it depends on the user's
    whole folder + dates) has more context than per-file classification to resolve
    work-vs-personal, especially when files arrive grouped in a folder.
 
+## Cost in money — staged plan (step 1 shipped)
+
+Raised 2026-07-30 by a simple question: the preview counts AI *calls*, but a call
+is not a price — prices are per million tokens, and nobody knows what a run costs
+from a call count. Four steps, of which the first is done.
+
+- [x] **1. Measure real consumption** — **SHIPPED**. `usage_meter.py` keeps the
+      `usage` block every provider already returns; per task, per model, printed and
+      written to the action log (`run_ai_usage`). The estimator became
+      provider-aware in the same move, so a local run is no longer quoted as if it
+      were billed.
+- [x] **2. A price table** — **SHIPPED**. `pricing.py` + `data/pricing.json`, dated,
+      packaged for offline use, overridable by `<config>/pricing.json`. An unknown
+      model yields no price rather than zero.
+- [x] **3. Convert, and warn before spending** — **SHIPPED**. `cost_forecast.py`
+      prices a run before it starts; `PROCRAFILER_MAX_RUN_COST` asks past a ceiling,
+      on the upper bound. Text-task token profiles were **measured** from the real
+      prompts (bounded by `MAX_CONTENT_CHARS` / `MAX_LISTING_CHARS`); image and scan
+      profiles are frank guesses, declared as such in the output, and replaced by the
+      user's own measured history from the first run onwards.
+- [ ] **2b. Automatic refresh of the table** — the remaining piece: fetch the
+      companion repository's `pricing.json` at most weekly, cached, never blocking a
+      run, disableable. **Blocked on that repository existing**
+      ([ai-pricing-source.md](ai-pricing-source.md)). Until then the packaged table
+      is edited by hand at release time, and its age is visible to the user — past
+      `STALE_AFTER_DAYS` the app says so itself.
+- [ ] **4. Cross-check against the invoice** (optional, low value) — `/v1/admin/usage`
+      returns real spend, but needs an **admin** API key. Rejected as a dependency
+      for steps 1–3 precisely because ordinary users have no such key; keep only as
+      a possible power-user command.
+
+Explicitly rejected: **hardcoding prices in the source** (goes stale silently in
+every installation) and **scraping the pricing page from the user's machine** (a
+page redesign yields a wrong number rather than an error, everywhere at once).
+
 ## Deferred features (planned, not built yet)
 
 - [ ] **Cache the per-file analysis by content hash** — so a document is never paid

@@ -39,6 +39,11 @@ procrafiler = "procrafiler.cli:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+# The dated price table must travel with the package: it is the offline fallback
+# that lets a machine with no network still show a cost with the date it was true.
+procrafiler = ["data/*.json"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

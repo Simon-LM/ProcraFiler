@@ -21,6 +21,11 @@ from uuid import uuid4
 # pipeline never prints directly — it only calls this when given.
 ProgressFn = Callable[[str], None]
 
+# Asked before a run whose forecast cost exceeds the user's ceiling. A callback
+# rather than a direct `input()`: the pipeline must stay usable from a script, a
+# test, or a future GUI, none of which can answer a terminal prompt.
+ConfirmFn = Callable[[str], bool]
+
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import (
     RuntimePaths,
@@ -33,6 +38,18 @@ from procrafiler.config import (
 from procrafiler.ai_analysis import analyze_content, translate_keywords  # type: ignore[reportMissingImports]
 from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
 from procrafiler.ai_estimate import estimate_ai_calls, format_estimate  # type: ignore[reportMissingImports]
+from procrafiler.cost_forecast import (  # type: ignore[reportMissingImports]
+    CostForecast,
+    forecast_cost,
+    format_cost_forecast,
+    max_run_cost,
+)
+from procrafiler.pricing import format_amount  # type: ignore[reportMissingImports]
+from procrafiler.usage_meter import (  # type: ignore[reportMissingImports]
+    RunUsage,
+    format_usage_report,
+    usage_scope,
+)
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
 from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
@@ -3074,11 +3091,102 @@ def process_all_inbox_files(
     dry_run: bool = False,
     progress: ProgressFn | None = None,
     limit: int | None = None,
+    confirm: ConfirmFn | None = None,
 ) -> dict[str, int]:
     """Process the whole Inbox. Every event this writes carries one `run_id`, so
     the batch can be identified — and reversed with `undo-run` — as a whole."""
-    with _run_scope(str(uuid4())):
-        return _process_all_inbox_files(paths, now_utc, dry_run, progress, limit)
+    with _run_scope(str(uuid4())), usage_scope() as usage:
+        # `finally`, so an interrupted run still reports what it consumed: the AI
+        # calls already made are billed whether or not the batch finished, and
+        # that is precisely the moment the user wants the number.
+        try:
+            return _process_all_inbox_files(paths, now_utc, dry_run, progress, limit, confirm)
+        finally:
+            _report_run_usage(paths, usage, progress=progress, now_utc=now_utc)
+
+
+def _cost_ceiling_accepted(
+    forecast: CostForecast | None,
+    *,
+    confirm: ConfirmFn | None,
+    emit: ProgressFn,
+) -> bool:
+    """Stop and ask when the run is forecast to cost more than the user's ceiling.
+
+    The check uses the UPPER bound. An estimate that only warns at its optimistic
+    end would let through exactly the run the ceiling exists to catch, and the two
+    mistakes are not equivalent: a needless question costs a keystroke, a silent
+    overspend costs money.
+
+    With no ceiling set, or no way to ask (a non-interactive caller), the run
+    proceeds — a ceiling nobody configured must not block automation.
+    """
+    ceiling = max_run_cost()
+    if forecast is None or ceiling is None or forecast.high <= ceiling:
+        return True
+    symbol = forecast.table.currency_symbol
+    question = (
+        f"This run is estimated at up to {format_amount(forecast.high, forecast.table)} "
+        f"{forecast.table.currency}, above your {symbol}{ceiling:.2f} limit. Continue?"
+    )
+    if confirm is None:
+        emit(f"   ⚠ {question} (no prompt available — continuing)")
+        return True
+    if confirm(question):
+        return True
+    emit("   Stopped before any AI call. Nothing was processed.")
+    return False
+
+
+def _report_run_usage(
+    paths: RuntimePaths,
+    usage: RunUsage,
+    *,
+    progress: ProgressFn | None,
+    now_utc: datetime | None,
+) -> None:
+    """Show what the run consumed, and persist it.
+
+    Persisting matters as much as showing: the printed lines vanish with the
+    terminal, but the recorded totals are what a later run can calibrate a forecast
+    against. Measuring a hundred of the user's own photos and then forgetting the
+    result would leave us estimating from guesswork forever.
+    """
+    if usage.is_empty:
+        return
+    if progress is not None:
+        progress(format_usage_report(usage))
+    try:
+        _append_action_log(
+            paths,
+            operation_id=str(uuid4()),
+            action="run_ai_usage",
+            status="success",
+            message=(
+                f"AI usage: {usage.billed_calls} billable call(s), "
+                f"{usage.total_tokens} token(s), {usage.total_pages} OCR page(s), "
+                f"{usage.local_calls} local call(s)"
+            ),
+            now_utc=now_utc,
+            extra_fields={
+                "ai_usage": [
+                    {
+                        "provider": entry.provider,
+                        "model": entry.model,
+                        "task": entry.task,
+                        "calls": entry.calls,
+                        "tokens_in": entry.tokens_in,
+                        "tokens_out": entry.tokens_out,
+                        "pages": entry.pages,
+                        "billed": entry.is_billed,
+                        "unmeasured_calls": entry.unmeasured_calls,
+                    }
+                    for entry in usage.entries()
+                ]
+            },
+        )
+    except OSError:  # pragma: no cover - accounting never fails a completed run
+        pass
 
 
 def _process_all_inbox_files(
@@ -3087,6 +3195,7 @@ def _process_all_inbox_files(
     dry_run: bool,
     progress: ProgressFn | None,
     limit: int | None,
+    confirm: ConfirmFn | None = None,
 ) -> dict[str, int]:
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
@@ -3104,6 +3213,9 @@ def _process_all_inbox_files(
         "rescan_moved": 0,
         "rescan_new": 0,
         "recovered": 0,
+        # Set when the run stopped at the cost ceiling, so a caller can tell
+        # "nothing to do" apart from "the user declined to spend".
+        "aborted": 0,
         "total": 0,
     }
 
@@ -3118,7 +3230,11 @@ def _process_all_inbox_files(
             planned, _deferred_sets, deferred_files = _limit_work_sets(planned, limit)
             if deferred_files:
                 emit(f"   --limit {limit}: {deferred_files} file(s) would be left for a later run.")
-        emit(f"   {format_estimate(estimate_ai_calls(planned))}")
+        dry_estimate = estimate_ai_calls(planned)
+        emit(f"   {format_estimate(dry_estimate)}")
+        # `--dry-run` is how you ask "what would this cost" without committing to
+        # anything, so the money answer belongs here as much as in a real run.
+        emit(f"   {format_cost_forecast(forecast_cost(dry_estimate, paths=paths))}")
         for candidate in [member for _, members in planned for member in members]:
             sha256 = _file_sha256(candidate)
             summary["total"] += 1
@@ -3227,7 +3343,13 @@ def _process_all_inbox_files(
         )
 
     # What this will cost, before spending it. Extensions only, no file opened.
-    emit(f"   {format_estimate(estimate_ai_calls(work_sets))}")
+    estimate = estimate_ai_calls(work_sets)
+    emit(f"   {format_estimate(estimate)}")
+    forecast = forecast_cost(estimate, paths=paths)
+    emit(f"   {format_cost_forecast(forecast)}")
+    if not _cost_ceiling_accepted(forecast, confirm=confirm, emit=emit):
+        summary["aborted"] = 1
+        return summary
     # Printed so it can be passed to `undo-run --run-id` even weeks later.
     emit(f"   run id: {_CURRENT_RUN_ID.get()}")
 
