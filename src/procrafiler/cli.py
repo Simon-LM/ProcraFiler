@@ -101,6 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     process_all = subparsers.add_parser("process-all", help="Process all files currently present in Inbox")
     process_all.add_argument("--dry-run", action="store_true", help="Simulate batch processing")
+    process_all.add_argument(
+        "--limit", type=int, default=None,
+        help="Process at most N files, never splitting a dropped folder. Leaves the rest for the next run.",
+    )
 
     purge_trash = subparsers.add_parser("purge-mirror-trash", help="Purge old files from Mirror_Trash by TTL")
     purge_trash.add_argument("--days", type=int, default=None, help="Retention period in days (default: policy)")
@@ -401,14 +405,16 @@ def cmd_process_once(dry_run: bool = False) -> int:
     return 0
 
 
-def cmd_process_all(dry_run: bool = False) -> int:
+def cmd_process_all(dry_run: bool = False, limit: int | None = None) -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
     now_utc = _resolve_now_utc()
     try:
         with runtime_lock(paths):
             reconcile_catalog_snapshot(paths, now_utc=now_utc)
-            summary = process_all_inbox_files(paths, now_utc=now_utc, dry_run=dry_run, progress=_live)
+            summary = process_all_inbox_files(
+                paths, now_utc=now_utc, dry_run=dry_run, progress=_live, limit=limit
+            )
     except RuntimeLockedError as err:
         _print_lock_busy(err)
         return EXIT_TEMPFAIL
@@ -881,7 +887,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "process-once":
         return cmd_process_once(args.dry_run)
     if args.command == "process-all":
-        return cmd_process_all(args.dry_run)
+        return cmd_process_all(args.dry_run, limit=args.limit)
     if args.command == "purge-mirror-trash":
         return cmd_purge_mirror_trash(args.days)
     if args.command == "library-trash":

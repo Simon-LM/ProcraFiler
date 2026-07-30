@@ -30,6 +30,7 @@ from procrafiler.config import (
 )
 from procrafiler.ai_analysis import analyze_content, translate_keywords  # type: ignore[reportMissingImports]
 from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissingImports]
+from procrafiler.ai_estimate import estimate_ai_calls, format_estimate  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
 from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
@@ -2997,11 +2998,61 @@ def _heal_double_nestings(
     return len(report.redundant_dirs)
 
 
+def _build_work_sets(paths: RuntimePaths) -> list[tuple[str, list[Path]]]:
+    """Group the Inbox into units of work: `(top_level_folder, members)`.
+
+    Each top-level subfolder is ONE set — files dropped together are read and
+    named together. Each loose file at the Inbox root is its own singleton and
+    gets no invented context. Order is deterministic (`_iter_inbox_files` sorts),
+    so `--limit` picks the same sets on every run.
+    """
+    folder_sets: dict[str, list[Path]] = {}
+    singletons: list[Path] = []
+    for candidate in _iter_inbox_files(paths.inbox_dir):
+        try:
+            relative_dir = candidate.parent.relative_to(paths.inbox_dir)
+        except ValueError:
+            relative_dir = Path(".")
+        if relative_dir == Path("."):
+            singletons.append(candidate)
+        else:
+            folder_sets.setdefault(relative_dir.parts[0], []).append(candidate)
+
+    work_sets: list[tuple[str, list[Path]]] = [(top, members) for top, members in folder_sets.items()]
+    work_sets += [("", [loose]) for loose in singletons]
+    return work_sets
+
+
+def _limit_work_sets(
+    work_sets: list[tuple[str, list[Path]]], limit: int
+) -> tuple[list[tuple[str, list[Path]]], int, int]:
+    """Keep whole sets up to `limit` files. Returns (kept, deferred_sets, deferred_files).
+
+    The limit is on FILES but applied by SET, and never splits one: a dropped
+    folder is read as a whole, and the naming pass re-judges its members
+    together — half a folder would be judged against half its context, which is
+    exactly the misreading the set pass exists to prevent.
+
+    At least one set is always kept, so `--limit 1` on a ten-file folder still
+    makes progress instead of doing nothing forever.
+    """
+    kept: list[tuple[str, list[Path]]] = []
+    taken = 0
+    for index, (set_top, members) in enumerate(work_sets):
+        if index > 0 and taken + len(members) > limit:
+            deferred = work_sets[index:]
+            return kept, len(deferred), sum(len(m) for _, m in deferred)
+        kept.append((set_top, members))
+        taken += len(members)
+    return kept, 0, 0
+
+
 def process_all_inbox_files(
     paths: RuntimePaths,
     now_utc: datetime | None = None,
     dry_run: bool = False,
     progress: ProgressFn | None = None,
+    limit: int | None = None,
 ) -> dict[str, int]:
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
@@ -3022,11 +3073,19 @@ def process_all_inbox_files(
         "total": 0,
     }
 
+    emit: ProgressFn = progress or (lambda _message: None)
+
     if dry_run:
         repo = CatalogRepository(paths.catalog_db_file)
         repo.init_schema()
         known_hashes = {doc["sha256"] for doc in repo.list_documents() if doc.get("status") != "DELETED"}
-        for candidate in _iter_inbox_files(paths.inbox_dir):
+        planned = _build_work_sets(paths)
+        if limit is not None:
+            planned, _deferred_sets, deferred_files = _limit_work_sets(planned, limit)
+            if deferred_files:
+                emit(f"   --limit {limit}: {deferred_files} file(s) would be left for a later run.")
+        emit(f"   {format_estimate(estimate_ai_calls(planned))}")
+        for candidate in [member for _, members in planned for member in members]:
             sha256 = _file_sha256(candidate)
             summary["total"] += 1
             if sha256 in known_hashes:
@@ -3056,8 +3115,6 @@ def process_all_inbox_files(
             features=features,
         )
         return summary
-
-    emit: ProgressFn = progress or (lambda _message: None)
 
     # Recovery FIRST, before the rescan and before the Inbox is listed: files an
     # interrupted run stranded in the Queue must come back into the Inbox so THIS
@@ -3117,28 +3174,26 @@ def process_all_inbox_files(
     # coherent group is placed together — nothing scatters or leaks to the
     # decisions queue file-by-file. Files loose in the Inbox root are singletons,
     # classified one by one. One bad file never aborts the batch.
-    folder_sets: dict[str, list[Path]] = {}
-    singletons: list[Path] = []
-    for candidate in _iter_inbox_files(paths.inbox_dir):
-        try:
-            relative_dir = candidate.parent.relative_to(paths.inbox_dir)
-        except ValueError:
-            relative_dir = Path(".")
-        if relative_dir == Path("."):
-            singletons.append(candidate)
-        else:
-            folder_sets.setdefault(relative_dir.parts[0], []).append(candidate)
-
-    # Each top-level subfolder = one set; each loose root file = its own singleton.
-    work_sets: list[tuple[str, list[Path]]] = [(top, members) for top, members in folder_sets.items()]
-    work_sets += [("", [loose]) for loose in singletons]
+    work_sets = _build_work_sets(paths)
 
     inbox_total = sum(len(members) for _, members in work_sets)
-    if inbox_total >= LARGE_BATCH_WARN:
+
+    if limit is not None:
+        work_sets, deferred_sets, deferred_files = _limit_work_sets(work_sets, limit)
+        if deferred_files:
+            emit(
+                f"   --limit {limit}: processing {sum(len(m) for _, m in work_sets)} file(s) now, "
+                f"leaving {deferred_files} in {deferred_sets} set(s) for the next run."
+            )
+
+    if inbox_total >= LARGE_BATCH_WARN and limit is None:
         emit(
             f"   ⚠ {inbox_total} files in the Inbox to read & classify — "
             "this may take a while and use AI (API cost, or local CPU/GPU)."
         )
+
+    # What this will cost, before spending it. Extensions only, no file opened.
+    emit(f"   {format_estimate(estimate_ai_calls(work_sets))}")
 
     organize_chain = task_chain_from_env("ORGANIZE")
     naming_chain = task_chain_from_env("NAMING")
