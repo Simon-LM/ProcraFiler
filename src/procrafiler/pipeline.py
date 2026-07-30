@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -487,6 +489,22 @@ def _sweep_staging_files(root: Path) -> int:
     return removed
 
 
+# Every event of one `process-all` invocation carries the same `run_id`, so a run
+# can be identified — and undone — as a whole. A ContextVar rather than a
+# parameter: `_append_action_log` has ~70 call sites, and threading an argument
+# through all of them would be noise that any new call site could silently forget.
+_CURRENT_RUN_ID: ContextVar[str | None] = ContextVar("procrafiler_run_id", default=None)
+
+
+@contextmanager
+def _run_scope(run_id: str) -> Iterator[None]:
+    token = _CURRENT_RUN_ID.set(run_id)
+    try:
+        yield
+    finally:
+        _CURRENT_RUN_ID.reset(token)
+
+
 def _append_action_log(
     paths: RuntimePaths,
     *,
@@ -512,6 +530,9 @@ def _append_action_log(
         "path_before": path_before,
         "path_after": path_after,
     }
+    run_id = _CURRENT_RUN_ID.get()
+    if run_id is not None:
+        event["run_id"] = run_id
     if extra_fields:
         event.update(extra_fields)
     with paths.actions_log_file.open("a", encoding="utf-8") as f:
@@ -3054,6 +3075,19 @@ def process_all_inbox_files(
     progress: ProgressFn | None = None,
     limit: int | None = None,
 ) -> dict[str, int]:
+    """Process the whole Inbox. Every event this writes carries one `run_id`, so
+    the batch can be identified — and reversed with `undo-run` — as a whole."""
+    with _run_scope(str(uuid4())):
+        return _process_all_inbox_files(paths, now_utc, dry_run, progress, limit)
+
+
+def _process_all_inbox_files(
+    paths: RuntimePaths,
+    now_utc: datetime | None,
+    dry_run: bool,
+    progress: ProgressFn | None,
+    limit: int | None,
+) -> dict[str, int]:
     ensure_runtime_layout(paths)
     features = load_feature_settings(paths)["features"]
 
@@ -3194,6 +3228,8 @@ def process_all_inbox_files(
 
     # What this will cost, before spending it. Extensions only, no file opened.
     emit(f"   {format_estimate(estimate_ai_calls(work_sets))}")
+    # Printed so it can be passed to `undo-run --run-id` even weeks later.
+    emit(f"   run id: {_CURRENT_RUN_ID.get()}")
 
     organize_chain = task_chain_from_env("ORGANIZE")
     naming_chain = task_chain_from_env("NAMING")

@@ -73,6 +73,14 @@ from procrafiler.restore import replicate_catalog_to_mirror, restore_from_mirror
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
 from procrafiler.scrub import format_report as format_scrub_report
+from procrafiler.undo import (
+    apply_undo,
+    format_undo_plan,
+    format_undo_report,
+    latest_run_id,
+    list_runs,
+    plan_undo,
+)
 from procrafiler.scrub import scrub as run_scrub
 
 EXIT_TEMPFAIL = 75  # sysexits.h: temp resource shortage; reused for "lock held"
@@ -157,6 +165,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not prompt before replacing existing documents (for scripts)",
     )
+
+    undo_p = subparsers.add_parser(
+        "undo-run",
+        help="Put a run back: return the documents it filed to the Inbox subfolders they came from",
+    )
+    undo_p.add_argument("--run-id", default=None, help="Which run to undo (default: the most recent)")
+    undo_p.add_argument("--list", action="store_true", help="List recent runs and exit")
+    undo_p.add_argument("--dry-run", action="store_true", help="Show what would move and change nothing")
+    undo_p.add_argument("--yes", action="store_true", help="Do not prompt (for scripts)")
 
     subparsers.add_parser(
         "review",
@@ -530,6 +547,69 @@ def cmd_reconcile_snapshot() -> int:
     return 0
 
 
+def cmd_undo_run(
+    run_id: str | None = None,
+    *,
+    show_list: bool = False,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+) -> int:
+    paths = default_runtime_paths()
+    ensure_runtime_layout(paths)
+
+    if show_list:
+        runs = list_runs(paths)
+        if not runs:
+            print("No run recorded yet.")
+            return 0
+        print("Recent runs (most recent first):")
+        for identifier, when, filed in runs:
+            print(f"  {identifier}  {when}  {filed} document(s) filed")
+        return 0
+
+    target = run_id or latest_run_id(paths)
+    if target is None:
+        print(
+            "No run to undo. Runs are identifiable only from the version that "
+            "started recording a run id — an older run cannot be reversed this way."
+        )
+        return 1
+
+    try:
+        with runtime_lock(paths):
+            plan = plan_undo(paths, target)
+            print(format_undo_plan(plan))
+            if plan.is_empty:
+                print()
+                print("Nothing to undo.")
+                return 0
+            if dry_run:
+                return 0
+            if not assume_yes:
+                print()
+                answer = input(
+                    f"Return {len(plan.restore)} document(s) to the Inbox? [y/N] "
+                ).strip().lower()
+                if not answer.startswith(("y", "o")):
+                    print("Cancelled - nothing was changed.")
+                    return 1
+            now_utc = _resolve_now_utc()
+
+            def _log(**fields):
+                from procrafiler.pipeline import _append_action_log
+
+                _append_action_log(paths, now_utc=now_utc, **fields)
+
+            report = apply_undo(paths, plan, log_event=_log)
+    except RuntimeLockedError as err:
+        _print_lock_busy(err)
+        return EXIT_TEMPFAIL
+
+    print()
+    print(format_undo_report(report))
+    return 1 if report.failures else 0
+
+
 def cmd_review() -> int:
     paths = default_runtime_paths()
     ensure_runtime_layout(paths)
@@ -896,6 +976,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_reconcile_snapshot()
     if args.command == "review":
         return cmd_review()
+    if args.command == "undo-run":
+        return cmd_undo_run(
+            args.run_id, show_list=args.list, dry_run=args.dry_run, assume_yes=args.yes
+        )
     if args.command == "setup":
         return cmd_setup()
     if args.command == "setup-context":

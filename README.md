@@ -159,6 +159,8 @@ procrafiler process-once --dry-run  # simulate, mutate nothing
 procrafiler process-all             # process every file currently in the Inbox
 procrafiler process-all --limit 5   # try it on a handful first; never splits a dropped folder
 procrafiler process-all --dry-run
+procrafiler undo-run --dry-run      # what undoing the last run would put back
+procrafiler undo-run                # put the last run back: documents return to the Inbox
 procrafiler review                  # resolve files the AI was unsure about (the decisions queue)
 procrafiler setup-context           # guided questionnaire → your context file (helps the AI file your docs)
 procrafiler search <terms>          # find documents by fiche AND body text (offline, ranked; e.g. `search facture edf`)
@@ -172,6 +174,8 @@ procrafiler search-ai <terms>       # deeper search: an AI broadens your query w
 Files you drop **together in a subfolder** are treated as a set: after the per-file pass, `process-all` runs a **set-aware organize pass** (configurable via `PROCRAFILER_AI_ORGANIZE_*`; Mistral medium in the default profile, or a local model) that groups them into a shared **dated affair/series folder** (e.g. a water-damage claim → `…/Insurance/Degats-eaux-2025-08/`, recurring meter readings → a series folder). With no organize chain configured it's a no-op. Loose files at the Inbox root are handled individually.
 
 **Every run tells you what it will cost before making a single call** — e.g. *"≈ 12 to 16 AI call(s) for 5 file(s): 3 image read(s), 1 PDF(s), OCR only if scanned, 5 analysis, 2 naming, 2 organize"*. No file is opened to work that out, so it is instant on a large Inbox; that is also why it is a range, and it says so — a PDF may have a text layer (free) or be a scan (one OCR call), and a photo costs a second call only if it turns out to be a photographed document. Tasks with no provider chain configured are not counted, since those calls never happen. Pair it with **`--limit N`** for a cautious first run: the limit counts files but is applied **by drop**, so a folder you dropped is never cut in half (its files are named together — half a folder would be judged against half its context). The rest waits in the Inbox for your next run.
+
+**A run can be put back.** Every `process-all` prints a run id and tags all its actions with it, so **`procrafiler undo-run`** returns the documents that run filed to the exact Inbox subfolder they came from — files dropped together stay a set for your next attempt. It shows the plan and asks before moving anything (`--dry-run` to only look, `--run-id` for an older run, `--list` to see recent ones). It **refuses rather than guesses**: a document you have since renamed or moved by hand is reported and left strictly alone, because the catalog — not the log — is the authority on where your documents are. Nothing is deleted: mirror copies go to `Mirror_Trash`, and the only thing removed is the hidden cache of AI-extracted text, which would otherwise be ingested as a document of its own on the next run.
 
 When the AI cannot confidently place a file but has plausible candidates, it does not guess: the file is parked in the **decisions queue** (`Manual_Review`, status `DECISION_PENDING`) and `process-all` tells you how many are waiting. `procrafiler review` walks them one by one, showing the AI's options — you pick one, type a custom path (a new subfolder, or a brand-new top-level category, which is allowed only here), or skip. Only once you resolve a file is it re-filed and mirrored.
 
