@@ -455,9 +455,32 @@ earns its role as the go/no-go command:
 > `scrub._restore`'s internal hash guard is unreachable from its only callers, which
 > pass an already-verified source. That is defensive code, not a hole.
 >
-> Still uncovered, judged low risk and deliberately left: `restore.format_plan`'s
-> rendered **text** (the plan *data* it renders is covered by four killed mutations),
-> `collapse_nesting`'s directory-merge branch, and naive-datetime normalisation.
+> Three gaps were left open at that point. Two were then closed, after re-judging
+> them on consequence rather than on how the code looked:
+>
+> - **`restore.format_plan`'s rendered text.** First filed as "low risk, the data it
+>   renders is tested". That was the wrong question. This text is printed
+>   *immediately before* the `[y/N]` prompt of an irreversible overwrite — it is the
+>   basis on which the user consents, not decoration. Now covered by 6 tests: the
+>   three counts cannot be swapped, every document at risk is named, a list longer
+>   than 20 still accounts for the hidden ones, a harmless restore raises no false
+>   alarm, and both locations are shown. Five mutations die. (Mitigating, and worth
+>   recording: the number inside the prompt itself comes straight from
+>   `plan.overwrites`, so a rendering bug misleads about *which* documents, not
+>   *how many*.)
+> - **`collapse_nesting`'s directory-merge branch.** It moves real documents when an
+>   inner folder collides with a same-named folder in the parent — a different code
+>   path from the file-collision case, which was the only one tested. Now covered by
+>   3 tests: both documents survive a merge, the recursion still refuses to clobber a
+>   file, and a folder left non-empty by a conflict is kept rather than removed with
+>   the document inside. Three mutations die.
+>
+> **Deliberately left, with the reason:** naive-datetime normalisation
+> (`dt.replace(tzinfo=utc)` in `mirror` and `naming`). The worst outcome is a few
+> hours of drift on a 30-day mirror-trash retention — no document is lost, nothing
+> is misfiled, and a test would mostly assert that Python's `datetime` behaves. This
+> is a decision, not an oversight; revisit only if retention ever becomes
+> short enough for hours to matter.
 
 **Do this last**, once A–F have settled. Two parts: (1) re-read the existing suite
 for gaps, (2) add the missing tests. The bar is not coverage percentage — it is:

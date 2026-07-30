@@ -17,6 +17,8 @@ from pathlib import Path
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 from procrafiler.restore import (
+    RestorePlan,
+    format_plan,
     plan_restore,
     replicate_catalog_to_mirror,
     restore_from_mirror,
@@ -148,6 +150,77 @@ class TestRestoreSafety(unittest.TestCase):
             if p.is_file()
         )
         self.assertEqual(rescued, sorted([CURRENT, b"SECOND edit"]))
+
+
+class TestTheTextTheUserConsentsTo(unittest.TestCase):
+    """`format_plan` is printed immediately before the `[y/N]` prompt of an
+    irreversible overwrite. It is not decoration — it is the basis of consent.
+
+    The counts and lists it renders come from a `RestorePlan` whose construction
+    is well covered above; what was never exercised is the rendering itself. A
+    plan that is right and a text that under-reports it is the failure mode this
+    class exists to prevent: the user reads "0 would be overwritten", types `y`,
+    and loses documents.
+
+    (Mitigating, and worth stating: the number inside the prompt itself is taken
+    straight from `plan.overwrites`, not from this text. A rendering bug misleads
+    about *which* documents, not *how many*.)
+    """
+
+    SOURCE = Path("/backup/mirror")
+    LIBRARY = Path("/home/u/ProcraFiler_Library")
+
+    def _render(self, **kwargs: list[str]) -> str:
+        plan = RestorePlan(**kwargs)
+        return format_plan(plan, source=self.SOURCE, library_root=self.LIBRARY)
+
+    def test_the_three_counts_are_reported_and_not_swapped(self) -> None:
+        """Distinct counts, so a mix-up between the three cannot pass."""
+        text = self._render(
+            new_files=["a.pdf"],
+            identical=["b.pdf", "c.pdf"],
+            overwrites=["d.pdf", "e.pdf", "f.pdf"],
+        )
+        self.assertIn("1 document(s) would be created", text)
+        self.assertIn("2 already identical", text)
+        self.assertIn("3 would be OVERWRITTEN", text)
+
+    def test_every_document_at_risk_is_named(self) -> None:
+        text = self._render(overwrites=["Taxes/2024.pdf", "Health/scan.pdf"])
+        self.assertIn("Taxes/2024.pdf", text)
+        self.assertIn("Health/scan.pdf", text)
+        self.assertIn("moved to the library trash", text, "the rescue is not mentioned")
+
+    def test_a_long_list_is_truncated_but_says_how_many_are_hidden(self) -> None:
+        """Silently showing only the first 20 of 25 would understate the danger."""
+        text = self._render(overwrites=[f"doc-{i:02}.pdf" for i in range(25)])
+        self.assertIn("doc-00.pdf", text)
+        self.assertIn("doc-19.pdf", text)
+        self.assertNotIn("doc-20.pdf", text)
+        self.assertIn("5 more", text, "the hidden documents are not accounted for")
+        self.assertIn("25 would be OVERWRITTEN", text, "the total must stay exact")
+
+    def test_a_harmless_restore_raises_no_alarm(self) -> None:
+        """The other direction: crying wolf on a safe restore trains the user to
+        type `y` without reading."""
+        text = self._render(new_files=["a.pdf"], identical=["b.pdf"])
+        self.assertIn("0 would be OVERWRITTEN", text)
+        self.assertNotIn("OVERWRITTEN with a different version:", text)
+        self.assertNotIn("These documents differ", text)
+        self.assertNotIn("library trash", text)
+
+    def test_documents_only_in_the_library_are_reported_as_untouched(self) -> None:
+        """So it is clear a restore MERGES rather than replaces the library."""
+        text = self._render(overwrites=["x.pdf"], library_only=["keep-1.pdf", "keep-2.pdf"])
+        self.assertIn("2 document(s) exist only in your library", text)
+        self.assertIn("left untouched", text)
+
+    def test_both_locations_are_shown(self) -> None:
+        """Restoring from the wrong backup, or into the wrong library, is the
+        mistake this line exists to catch."""
+        text = self._render(overwrites=["x.pdf"])
+        self.assertIn(str(self.SOURCE), text)
+        self.assertIn(str(self.LIBRARY), text)
 
 
 if __name__ == "__main__":

@@ -62,5 +62,74 @@ class TestCollapseNesting(unittest.TestCase):
         self.assertEqual(len(report.conflicts), 1)
 
 
+class TestDirectoryMerge(unittest.TestCase):
+    """When the inner folder holds a SUBFOLDER whose name already exists in the
+    parent, the two must be merged — not left, not clobbered.
+
+    This branch moves real documents and had no test. The collision test above
+    only covers a **file** landing on an existing file; a *directory* landing on
+    an existing directory takes a different path entirely (recursive merge, then
+    remove the emptied source).
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _write(self, *parts: str, body: str = "x") -> Path:
+        p = self.root.joinpath(*parts)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    def test_two_folders_of_the_same_name_are_merged_keeping_both_documents(self) -> None:
+        # OC/OC/2025/inner.txt collapsing into an OC/2025/ that already exists.
+        self._write("OC", "OC", "2025", "inner.txt", body="INNER")
+        self._write("OC", "2025", "outer.txt", body="OUTER")
+
+        report = collapse_double_nestings(self.root, apply=True)
+
+        self.assertEqual((self.root / "OC/2025/inner.txt").read_text(encoding="utf-8"), "INNER")
+        self.assertEqual((self.root / "OC/2025/outer.txt").read_text(encoding="utf-8"), "OUTER")
+        self.assertFalse((self.root / "OC/OC").exists(), "the emptied inner folder was left behind")
+        self.assertEqual(report.conflicts, [], "a merge was reported as a conflict")
+
+    def test_the_merge_recurses_and_still_refuses_to_clobber_a_file(self) -> None:
+        """Two levels of folder collision, with one real file collision at the
+        bottom: everything merges except that file, which is reported."""
+        self._write("OC", "OC", "2025", "Q1", "moved.txt", body="MOVED")
+        self._write("OC", "OC", "2025", "Q1", "clash.txt", body="FROM INNER")
+        self._write("OC", "2025", "Q1", "clash.txt", body="ALREADY THERE")
+
+        report = collapse_double_nestings(self.root, apply=True)
+
+        self.assertEqual((self.root / "OC/2025/Q1/moved.txt").read_text(encoding="utf-8"), "MOVED")
+        self.assertEqual(
+            (self.root / "OC/2025/Q1/clash.txt").read_text(encoding="utf-8"), "ALREADY THERE",
+            "an existing document was overwritten by the merge",
+        )
+        self.assertEqual(len(report.conflicts), 1, f"expected one conflict, got {report.conflicts}")
+        # The document that could not be moved is still where it was — never lost.
+        self.assertEqual(
+            (self.root / "OC/OC/2025/Q1/clash.txt").read_text(encoding="utf-8"), "FROM INNER"
+        )
+
+    def test_a_source_folder_left_non_empty_by_a_conflict_is_kept(self) -> None:
+        """`rmdir` on a non-empty directory raises and is swallowed — which is
+        correct, but only because the document inside must not be deleted."""
+        self._write("OC", "OC", "2025", "clash.txt", body="FROM INNER")
+        self._write("OC", "2025", "clash.txt", body="ALREADY THERE")
+
+        collapse_double_nestings(self.root, apply=True)
+
+        self.assertTrue(
+            (self.root / "OC/OC/2025/clash.txt").is_file(),
+            "the unmergeable document was deleted with its folder",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
