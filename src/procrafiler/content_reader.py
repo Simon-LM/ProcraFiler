@@ -40,6 +40,10 @@ _MIN_EXTRACTABLE_CHARS = 16
 
 READER_HINT_OCR = "ocr"
 READER_HINT_VISION = "vision"
+# Audio and video both go through the same reader: listen to the whole thing, then
+# look at a few chosen stills. An audio file is simply the case with nothing to
+# look at, which is why one hint covers both.
+READER_HINT_AV = "av"
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,13 @@ def extract_text_content(path: Path, media_type: str) -> ContentExtraction:
         # capture date keeps working; it is just timestamped + catalogued, no AI.
         return ContentExtraction(
             "image", text=None, needs_ai_reader=False, reader_hint=None, reason="image_not_vision_readable"
+        )
+    if media_type in ("video", "audio"):
+        # Nothing here decides whether it CAN be read — ffmpeg may be absent, the
+        # file may hold no audio. Those answers cost a probe, and the probe belongs
+        # to the reader that acts on them, not to this pure local pass.
+        return ContentExtraction(
+            media_type, text=None, needs_ai_reader=True, reader_hint=READER_HINT_AV, reason="av_needs_reader"
         )
     return ContentExtraction(
         media_type, text=None, needs_ai_reader=False, reader_hint=None, reason="unsupported_local_extraction"

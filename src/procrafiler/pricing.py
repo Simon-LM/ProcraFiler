@@ -43,12 +43,16 @@ class ModelPrice:
     in_per_mtok: float | None = None
     out_per_mtok: float | None = None
     per_1k_pages: float | None = None
+    # Transcription bills by recording length. Voxtral's reply also carries token
+    # counts, which are NOT what it charges for — a model with this field set is
+    # priced on duration, and its tokens are ignored.
+    per_audio_minute: float | None = None
 
     @property
     def is_priceable(self) -> bool:
         return any(
             value is not None
-            for value in (self.in_per_mtok, self.out_per_mtok, self.per_1k_pages)
+            for value in (self.in_per_mtok, self.out_per_mtok, self.per_1k_pages, self.per_audio_minute)
         )
 
 
@@ -69,7 +73,13 @@ class PriceTable:
         return (self.models or {}).get(model)
 
     def cost(
-        self, model: str, *, tokens_in: int = 0, tokens_out: int = 0, pages: int = 0
+        self,
+        model: str,
+        *,
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        pages: int = 0,
+        audio_seconds: int = 0,
     ) -> float | None:
         """Cost of one model's consumption, or None when it cannot be priced."""
         price = self.price_for(model)
@@ -82,6 +92,14 @@ class PriceTable:
             total += tokens_out / 1_000_000 * price.out_per_mtok
         if price.per_1k_pages is not None:
             total += pages / 1_000 * price.per_1k_pages
+        if price.per_audio_minute is not None:
+            total += audio_seconds / 60 * price.per_audio_minute
+        # Each unit is charged if and only if the TABLE declares a price for it.
+        # That is what keeps a transcription honest: Voxtral Mini's reply reports
+        # token counts, but its entry carries no token price, so they cost nothing.
+        # A model that genuinely bills both ways — Voxtral Small, per audio minute
+        # AND per text token — declares both and is charged for both. Special-casing
+        # "duration means duration only" here looked safer and was simply wrong.
         return total
 
     def age_days(self, today: date | None = None) -> int | None:
@@ -121,6 +139,7 @@ def _parse_table(payload: Any, origin: str) -> PriceTable | None:
             in_per_mtok=_as_price(spec.get("in_per_mtok")),
             out_per_mtok=_as_price(spec.get("out_per_mtok")),
             per_1k_pages=_as_price(spec.get("per_1k_pages")),
+            per_audio_minute=_as_price(spec.get("per_audio_minute")),
         )
     if not models:
         return None

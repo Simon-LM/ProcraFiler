@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import procrafiler.ai_reader as ai_reader
 import procrafiler.pipeline as pipeline
 from procrafiler.ai_reader import (
     _DEFAULT_VISION_PROMPT,
@@ -135,7 +136,7 @@ class TestVisionHintsInPipeline(unittest.TestCase):
             "R", (), {"text": "une surface verte", "provider": "p", "model": "m",
                       "reason": None, "used_fallback": False, "is_document": False}
         )()
-        with patch.object(pipeline, "read_with_vision", return_value=reply) as reader:
+        with patch.object(ai_reader, "read_with_vision", return_value=reply) as reader:
             pipeline.process_all_inbox_files(self.paths, now_utc=self.now)
         self.assertTrue(reader.call_args_list, "no photo was read — the test proves nothing")
         return reader.call_args_list

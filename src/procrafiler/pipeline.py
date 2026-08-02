@@ -54,7 +54,8 @@ from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingIm
 from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
-from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
+from procrafiler.ai_reader import read_visual, read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
+from procrafiler.av_reader import read_audio_video
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import (  # type: ignore[reportMissingImports]
@@ -62,6 +63,7 @@ from procrafiler.mirror import (  # type: ignore[reportMissingImports]
     sync_library_file_to_mirror,
 )
 from procrafiler.search_index import BodyTextIndex
+from procrafiler.file_dates import DateHint, date_evidence, embedded_date  # type: ignore[reportMissingImports]
 from procrafiler.naming import build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
@@ -271,69 +273,44 @@ def recover_queue(
     return recovered
 
 
-def _exif_capture_datetime(path: Path) -> datetime | None:
-    """The photo's own capture date from EXIF (DateTimeOriginal), or None.
-
-    A hard metadata fact, and far more reliable than a vision model reading a
-    date off the image (which can hallucinate). EXIF carries no timezone, so the
-    naive value is treated as UTC for consistency with the rest of the pipeline.
-    Any problem (no Pillow, no EXIF, unparseable) yields None — the caller then
-    falls through the cascade.
-    """
-    try:
-        from PIL import Image  # optional dep; absence just disables EXIF dating
-    except ImportError:
-        return None
-    try:
-        with Image.open(path) as image:
-            exif = image.getexif()
-            if not exif:
-                return None
-            raw = None
-            try:
-                # DateTimeOriginal (36867) lives in the Exif sub-IFD (0x8769).
-                raw = exif.get_ifd(0x8769).get(36867)
-            except Exception:
-                raw = None
-            if not isinstance(raw, str) or not raw.strip():
-                raw = exif.get(306)  # DateTime (fallback)
-            if not isinstance(raw, str) or not raw.strip():
-                return None
-            return datetime.strptime(raw.strip(), "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
-
-
 def _resolve_document_date(
     ai_date: str | None,
     source_path: Path,
     now_utc: datetime | None,
     *,
-    media_type: str | None = None,
+    embedded: DateHint | None = None,
 ) -> datetime:
     """Pick the date used to prefix the stored filename.
 
-    Cascade:
-    1. For images, the EXIF capture date (DateTimeOriginal) — real metadata, and
-       it sidesteps vision date-hallucination; it also makes photos taken the
-       same day group naturally.
-    2. else the date the AI found inside the document content (at midnight UTC —
-       a document states a day, not a time, and midnight keeps same-day files
-       grouped instead of scattered by processing seconds).
-    3. else the file's modification time.
+    The decision itself was already made, by the analysis call: it saw the
+    content, the original filename AND the timestamps the file carries (see
+    `file_dates`), which is the only vantage point from which "the date printed on
+    this letter" can be told apart from "the day it was scanned". Nothing here
+    re-ranks that judgement.
+
+    What remains is a fallback ladder, for when the model established no date at
+    all — every file must end up dated, even one nothing could be read from:
+
+    1. the date the analysis settled on (at midnight UTC — a document states a day,
+       not a time, and midnight keeps same-day files grouped instead of scattered
+       by processing seconds);
+    2. else the timestamp the file's own format carries, whatever the format was;
+    3. else the file's modification time;
     4. else the processing time.
+
+    It is uniform across every file type. Steps 2-4 are not a ranking of evidence,
+    they are what is left when there is no judgement to honour.
+
     This only affects the FILENAME prefix; action-log and catalog timestamps keep
     the real processing time.
     """
-    if media_type == "image":
-        exif_dt = _exif_capture_datetime(source_path)
-        if exif_dt is not None:
-            return exif_dt
     if ai_date:
         try:
             return datetime.strptime(ai_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
             pass
+    if embedded is not None:
+        return embedded.value
     try:
         return datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc)
     except OSError:
@@ -837,6 +814,10 @@ class _CatalogedDoc:
     read_via: str | None = None
     analysis: Any = None  # AnalysisResult | None
     max_depth: int = 0
+    # Extracted once, used twice: shown to the analysis call as evidence, then
+    # kept as the fallback date if that call establishes none. Re-reading it later
+    # would mean opening the file (or shelling out to ffprobe) a second time.
+    embedded_dt: DateHint | None = None
 
 
 def _read_and_analyze(
@@ -930,56 +911,42 @@ def _read_and_analyze(
         # the image alone can be genuinely undecidable (a green close-up: lawn or
         # soaked carpet?), and these two names are the only context available at
         # read time. The prompt caps what they may do: break a tie, never add.
-        vision_result = read_with_vision(
+        # The vision read and its OCR confirmation are ONE behaviour, and it lives
+        # in `ai_reader.read_visual` so the video reader gets exactly the same one
+        # for the frames it samples. It used to be written out here, which is
+        # precisely why a document filmed in a video came back described while the
+        # same document photographed came back transcribed.
+        visual = read_visual(
             queued_target,
             original_filename=source.name,
             source_folder=source_folder or None,
         )
-        if vision_result.text and vision_result.text.strip():
-            content_text = vision_result.text
-            read_via = "vision"
-            # A photographed DOCUMENT reaches the vision model only because it is
-            # a .jpg — so an invoice comes back DESCRIBED ("an administrative
-            # document with a logo") instead of transcribed, and that weak text is
-            # what gets cached in the search sidecar. When the vision model says
-            # this is a written document, re-read it with the OCR model, which is
-            # built for exactly that. Costs a second call, but only for photos of
-            # documents; a photo of water damage triggers none.
-            if vision_result.is_document:
-                ocr_confirm = read_with_ocr(queued_target)
-                if ocr_confirm.text and ocr_confirm.text.strip():
-                    # Keep BOTH, weighted toward the OCR: order and labels carry
-                    # the weighting, no extra mechanism. `read_via` becomes "ocr"
-                    # so the analysis prompt treats the content as reliable — now
-                    # true, since the primary text IS an OCR transcription.
-                    content_text = (
-                        "[Transcription OCR — fiable]\n"
-                        f"{ocr_confirm.text.strip()}\n\n"
-                        "[Description visuelle — contexte, moins fiable]\n"
-                        f"{vision_result.text.strip()}"
-                    )
-                    read_via = "ocr"
-                    _append_action_log(
-                        paths,
-                        operation_id=operation_id,
-                        action="ocr_confirm_photographed_document",
-                        status="success",
-                        message="Vision flagged a written document; re-read with OCR",
-                        now_utc=now_utc,
-                        path_before=str(queued_target),
-                        extra_fields={
-                            "provider": ocr_confirm.provider,
-                            "model": ocr_confirm.model,
-                            "ocr_chars": len(ocr_confirm.text),
-                            "vision_chars": len(vision_result.text),
-                        },
-                        features=features,
-                    )
-                    emit(f"   photo of a document → OCR: {len(ocr_confirm.text)} chars")
-                else:
-                    # No OCR chain, or it failed: keep the vision text as-is. The
-                    # document is still read, just less precisely.
-                    emit(f"   OCR confirm unavailable ({ocr_confirm.reason}) — keeping the vision read")
+        vision_result = visual.vision
+        if visual.is_readable and vision_result is not None:
+            content_text = visual.text
+            read_via = visual.read_via
+            if visual.used_ocr and visual.ocr is not None:
+                _append_action_log(
+                    paths,
+                    operation_id=operation_id,
+                    action="ocr_confirm_photographed_document",
+                    status="success",
+                    message="Vision flagged a written document; re-read with OCR",
+                    now_utc=now_utc,
+                    path_before=str(queued_target),
+                    extra_fields={
+                        "provider": visual.ocr.provider,
+                        "model": visual.ocr.model,
+                        "ocr_chars": len(visual.ocr.text or ""),
+                        "vision_chars": len(vision_result.text or ""),
+                    },
+                    features=features,
+                )
+                emit(f"   photo of a document → OCR: {len(visual.ocr.text or '')} chars")
+            elif visual.ocr is not None:
+                # No OCR chain, or it failed: the vision text is kept. The document
+                # is still read, just less precisely.
+                emit(f"   OCR confirm unavailable ({visual.ocr.reason}) — keeping the vision read")
             _append_action_log(
                 paths,
                 operation_id=operation_id,
@@ -1009,9 +976,63 @@ def _read_and_analyze(
                 features=features,
             )
             emit(f"   vision unavailable ({vision_result.reason})")
+    elif (content_text is None or not content_text.strip()) and extraction.reader_hint == "av":
+        # Listen to the whole recording (cheap, per second), then look at a few
+        # stills chosen from what was said (expensive, per image). See av_reader.
+        av_result = read_audio_video(
+            queued_target,
+            original_filename=source.name,
+            source_folder=source_folder or None,
+        )
+        if av_result.is_readable:
+            content_text = av_result.text
+            # The primary content is a spoken transcript — deliberate speech, not
+            # an inference from pixels — so it is treated as reliable, like OCR.
+            # A recording with no speech read only from stills is a vision read,
+            # and the filename must weigh more there.
+            read_via = "ocr" if (av_result.transcript and av_result.transcript.has_speech) else "vision"
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="av_read_success",
+                status="success",
+                message="Audio/video read via transcript and sampled frames",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={
+                    "duration_seconds": round(av_result.duration_seconds, 1),
+                    "frames_analysed": av_result.frames_analysed,
+                    "has_speech": bool(av_result.transcript and av_result.transcript.has_speech),
+                    "audio_seconds_billed": av_result.transcript.audio_seconds if av_result.transcript else 0,
+                    "notes": av_result.notes,
+                },
+                features=features,
+            )
+            emit(
+                f"   audio/video: {int(av_result.duration_seconds)}s, "
+                f"{av_result.frames_analysed} frame(s) looked at"
+            )
+        else:
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="av_read_unavailable",
+                status="warning",
+                message="Audio/video could not be read, routing to manual review",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={"reason": av_result.reason, "notes": av_result.notes},
+                features=features,
+            )
+            emit(f"   audio/video unreadable ({av_result.reason})")
 
     analysis = None
     max_depth = load_runtime_policy(paths).taxonomy_max_depth
+    # Whatever the format records about its own age — EXIF, container tag, PDF
+    # /CreationDate, office XML property. Read from the QUEUED copy, whose bytes
+    # are the original's; its mtime is preserved by the move.
+    hints = date_evidence(queued_target, dispatch.media_type)
+    embedded_dt = embedded_date(queued_target, dispatch.media_type)
     if content_text is not None and content_text.strip():
         base_categories = [category_label(c) for c in classifiable_categories()]
         existing_paths = existing_category_paths(paths.library_root)
@@ -1028,6 +1049,9 @@ def _read_and_analyze(
             # interpretation, so those hints must weigh MORE, not the same.
             read_via=read_via,
             sibling_filenames=sibling_names or None,
+            # The file's own timestamps go to the model rather than to a rule: it
+            # is the only party that can see both them and what the document says.
+            date_hints=hints,
         )
 
     return _CatalogedDoc(
@@ -1042,6 +1066,7 @@ def _read_and_analyze(
         read_via=read_via,
         analysis=analysis,
         max_depth=max_depth,
+        embedded_dt=embedded_dt,
     )
 
 
@@ -1326,7 +1351,7 @@ def _file_cataloged(
     else:
         stem = sanitize_filename_stem(Path(queued_target.name).stem)
     document_date = analysis.document_date if analysis is not None else None
-    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=catdoc.dispatch.media_type)
+    document_dt = _resolve_document_date(document_date, queued_target, now_utc, embedded=catdoc.embedded_dt)
 
     # SERIES placement, owned by the code so it can't be dropped/guessed:
     # 1) if the AI under-routed a series to a bare base, push it into its issuer
@@ -2592,6 +2617,7 @@ def _ingest_new_library_file(
     analysis = None
     read_via: str | None = None
     content_text: str | None = None
+    embedded_dt: DateHint | None = None
     if dispatch.can_dispatch:
         catdoc = _read_and_analyze(
             paths,
@@ -2609,7 +2635,10 @@ def _ingest_new_library_file(
         analysis = catdoc.analysis
         read_via = catdoc.read_via
         content_text = catdoc.content_text
+        embedded_dt = catdoc.embedded_dt
     else:
+        # An extension nothing can read still has a date somewhere in its bytes.
+        embedded_dt = embedded_date(file_path, dispatch.media_type)
         emit(f"   read: unreadable kind ({file_path.name}) — timestamped, not classified")
 
     # The user's location WINS: anchor at the file's current folder; only apply
@@ -2617,7 +2646,7 @@ def _ingest_new_library_file(
     user_route = file_path.parent.relative_to(paths.library_root).parts
     series = bool(analysis.series) if analysis is not None else False
     document_date = analysis.document_date if analysis is not None else None
-    document_dt = _resolve_document_date(document_date, file_path, now_utc, media_type=dispatch.media_type)
+    document_dt = _resolve_document_date(document_date, file_path, now_utc, embedded=embedded_dt)
     issuer = analysis.entities.get("issuer") if analysis is not None and isinstance(analysis.entities, dict) else None
     route_dir = _with_series_entity(
         user_route, series=series, issuer=issuer if isinstance(issuer, str) else None, library_root=paths.library_root

@@ -7,7 +7,7 @@
 
 PYTHON ?= .venv/bin/python
 
-.PHONY: test test-isolation test-ollama test-mistral
+.PHONY: test test-isolation test-ollama test-mistral test-av
 
 test:  ## Routine suite: offline, mocked, deterministic, free (no API)
 	$(PYTHON) -m unittest discover -t . -s tests
@@ -37,3 +37,7 @@ test-ollama:  ## Opt-in: real LOCAL Ollama integration (needs Ollama running)
 
 test-mistral:  ## Opt-in: real MISTRAL API integration — COSTS MONEY (needs MISTRAL_API_KEY)
 	PROCRAFILER_MISTRAL_IT=1 $(PYTHON) -m unittest tests.test_mistral_integration
+
+test-av:  ## Opt-in: read a REAL video/audio file end to end — COSTS MONEY. Usage: make test-av FILE=/path/to/clip.mp4
+	@test -n "$(FILE)" || { echo "usage: make test-av FILE=/path/to/video-or-audio"; exit 2; }
+	PROCRAFILER_AV_IT=1 PROCRAFILER_AV_FILE="$(FILE)" $(PYTHON) -m unittest tests.test_av_integration

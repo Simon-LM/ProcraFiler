@@ -5,9 +5,17 @@ starts calling. A batch of a few dozen photos is tens of paid calls, and until n
 nothing said so in advance: the only warning was "this may take a while and use
 AI" past a threshold, with no number.
 
-**No file is opened.** The estimate comes from extensions and the configured task
-chains alone, so it is instant even on a large Inbox and can be printed before a
-run starts. That precision limit is real and stated rather than hidden: a PDF may
+**Almost no file is opened.** The estimate comes from extensions and the
+configured task chains alone, so it is instant even on a large Inbox and can be
+printed before a run starts.
+
+The **one exception is audio and video**, which are probed with ffprobe — a local,
+free, millisecond read of the container header. The exception is worth making: a
+five-second clip and a two-hour recording differ by a factor of a thousand in what
+they cost, and an estimate that could not tell them apart would be useless exactly
+where the money is. Everything else is still costed from its extension alone.
+
+That precision limit is real and stated rather than hidden: a PDF may
 carry a text layer (free, read locally) or be a scan (one OCR call), and a photo
 costs one vision call plus a second OCR call **only if** it turns out to be a
 photographed document. So the answer is a RANGE, and its two ends are honest.
@@ -38,6 +46,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
+from procrafiler.av_reader import MAX_FRAMES_HARD_CAP, max_transcribe_seconds  # type: ignore[reportMissingImports]
+from procrafiler.frame_sampling import frame_budget  # type: ignore[reportMissingImports]
+from procrafiler.media_tools import probe_media  # type: ignore[reportMissingImports]
 from procrafiler.taxonomy import dispatch_for_filename  # type: ignore[reportMissingImports]
 
 # Providers that charge for a call. Everything else runs on the user's own
@@ -52,9 +63,12 @@ _MAYBE_OCR_MEDIA = {"pdf"}
 # An image always costs a vision call, and a second (OCR) one when the vision
 # model reports it is a photographed document.
 _VISION_MEDIA = {"image"}
+# Audio and video are the one case where the file MUST be opened to be costed —
+# see the note on probing in `estimate_ai_calls`.
+_AV_MEDIA = {"video", "audio"}
 # Every task that can produce a call during a run, so each one's provider is looked
 # up exactly once instead of re-reading the environment per property access.
-_TASKS = ("IMAGE", "OCR", "ANALYSIS", "NAMING", "ORGANIZE")
+_TASKS = ("IMAGE", "OCR", "ANALYSIS", "NAMING", "ORGANIZE", "TRANSCRIBE", "VIDEO")
 
 
 @dataclass(frozen=True)
@@ -71,6 +85,15 @@ class AICallEstimate:
     # A photographed document is re-read with OCR — which cannot happen at all
     # when no OCR chain is configured, so the upper bound must not charge for it.
     ocr_available: bool = True
+    # Audio and video. `audio_seconds` is the one quantity in this whole estimate
+    # that is EXACT rather than inferred: ffprobe reports the true duration, and
+    # transcription is billed by duration. Frames and passes are counts of calls
+    # like any other.
+    av_files: int = 0
+    audio_seconds: int = 0
+    transcribe_calls: int = 0
+    highlight_calls: int = 0
+    av_frames: int = 0
     # Task names whose PRIMARY provider bills. The primary rather than the whole
     # chain: a paid fallback behind a local primary only fires when the local one
     # fails, and quoting a run at the price of its worst case would cry wolf on
@@ -83,7 +106,15 @@ class AICallEstimate:
     @property
     def minimum(self) -> int:
         """Every PDF has a text layer, and no photo is a document."""
-        return self.vision_reads + self.analyses + self.naming_passes + self.organize_passes
+        return (
+            self.vision_reads
+            + self.analyses
+            + self.naming_passes
+            + self.organize_passes
+            + self.transcribe_calls
+            + self.highlight_calls
+            + self.av_frames
+        )
 
     @property
     def maximum(self) -> int:
@@ -95,6 +126,9 @@ class AICallEstimate:
     def billed_minimum(self) -> int:
         return (
             self._billed("IMAGE", self.vision_reads)
+            + self._billed("IMAGE", self.av_frames)
+            + self._billed("TRANSCRIBE", self.transcribe_calls)
+            + self._billed("VIDEO", self.highlight_calls)
             + self._billed("ANALYSIS", self.analyses)
             + self._billed("NAMING", self.naming_passes)
             + self._billed("ORGANIZE", self.organize_passes)
@@ -115,8 +149,10 @@ class AICallEstimate:
         photo's OCR confirmation are both "maybe", and both land on OCR."""
         confirms = self.vision_reads if self.ocr_available else 0
         return {
-            "IMAGE": (self.vision_reads, self.vision_reads),
+            "IMAGE": (self.vision_reads + self.av_frames, self.vision_reads + self.av_frames),
             "OCR": (0, self.maybe_ocr_reads + confirms),
+            "TRANSCRIBE": (self.transcribe_calls, self.transcribe_calls),
+            "VIDEO": (self.highlight_calls, self.highlight_calls),
             "ANALYSIS": (self.analyses, self.analyses),
             "NAMING": (self.naming_passes, self.naming_passes),
             "ORGANIZE": (self.organize_passes, self.organize_passes),
@@ -140,6 +176,7 @@ def estimate_ai_calls(work_sets: list[tuple[str, list[Path]]]) -> AICallEstimate
     """
     files = local = maybe_ocr = vision = unreadable = 0
     folder_sets = 0
+    av_files = audio_seconds = transcribe_calls = highlight_calls = av_frames = 0
 
     for set_top, members in work_sets:
         if set_top:
@@ -155,8 +192,26 @@ def estimate_ai_calls(work_sets: list[tuple[str, list[Path]]]) -> AICallEstimate
                 maybe_ocr += 1
             elif dispatch.media_type in _LOCAL_MEDIA:
                 local += 1
+            elif dispatch.media_type in _AV_MEDIA:
+                probe = probe_media(member)
+                if not probe.ok or probe.duration_seconds <= 0:
+                    unreadable += 1
+                    continue
+                av_files += 1
+                if probe.has_audio:
+                    transcribe_calls += 1
+                    audio_seconds += int(min(probe.duration_seconds, max_transcribe_seconds()))
+                if probe.has_video:
+                    frames = min(frame_budget(probe.duration_seconds), MAX_FRAMES_HARD_CAP)
+                    av_frames += frames
+                    # The passage-selection pass only happens when there is speech
+                    # to read, and whether there IS speech cannot be known without
+                    # transcribing. Counted whenever there is an audio track: it is
+                    # one cheap text call, and over-stating by one beats a surprise.
+                    if probe.has_audio and frames > 2:
+                        highlight_calls += 1
             else:
-                # video / audio / archive: no reader wired yet, so no call either.
+                # archive and anything else: no reader, so no call.
                 unreadable += 1
 
     # Every task is charged only when its own chain is configured: with no chain
@@ -171,6 +226,13 @@ def estimate_ai_calls(work_sets: list[tuple[str, list[Path]]]) -> AICallEstimate
         maybe_ocr = 0
     # A file that cannot be read never reaches the analysis: it goes to manual
     # review, free of charge.
+    if not chains["TRANSCRIBE"]:
+        transcribe_calls = audio_seconds = 0
+        highlight_calls = 0  # nothing to select passages from
+    if not chains["VIDEO"]:
+        highlight_calls = 0
+    if not chains["IMAGE"]:
+        av_frames = 0
     analyses = files - unreadable if chains["ANALYSIS"] else 0
     naming = folder_sets if chains["NAMING"] else 0
     organize = folder_sets if chains["ORGANIZE"] else 0
@@ -181,6 +243,11 @@ def estimate_ai_calls(work_sets: list[tuple[str, list[Path]]]) -> AICallEstimate
             for task, entries in chains.items()
             if entries and entries[0].provider in _BILLED_PROVIDERS
         ),
+        av_files=av_files,
+        audio_seconds=audio_seconds,
+        transcribe_calls=transcribe_calls,
+        highlight_calls=highlight_calls,
+        av_frames=av_frames,
         files=files,
         folder_sets=folder_sets,
         local_reads=local,
@@ -204,6 +271,20 @@ def format_estimate(estimate: AICallEstimate) -> str:
     parts: list[str] = []
     if estimate.vision_reads:
         parts.append(f"{estimate.vision_reads} image read(s)")
+    if estimate.av_files:
+        # Never "0 min" for a real recording about to be paid for: a short clip
+        # is shown in seconds, so the figure always matches something billable.
+        seconds = estimate.audio_seconds
+        length = f"{seconds}s" if seconds < 60 else f"{seconds // 60} min"
+        detail = f"{estimate.av_files} audio/video"
+        if estimate.transcribe_calls:
+            detail += f" ({length} to transcribe"
+            if estimate.av_frames:
+                detail += f", {estimate.av_frames} frame(s) sampled"
+            detail += ")"
+        elif estimate.av_frames:
+            detail += f" ({estimate.av_frames} frame(s) sampled)"
+        parts.append(detail)
     if estimate.maybe_ocr_reads:
         parts.append(f"{estimate.maybe_ocr_reads} PDF(s), OCR only if scanned")
     if estimate.analyses:

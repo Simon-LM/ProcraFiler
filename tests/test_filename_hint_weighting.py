@@ -211,7 +211,7 @@ class TestSiblingsReachThePipeline(unittest.TestCase):
         vision_reply = type(
             "R", (), {"text": "A blurry indoor photo.", "provider": "p", "model": "m", "reason": None, "is_document": False}
         )()
-        with patch("procrafiler.pipeline.read_with_vision", return_value=vision_reply):
+        with patch("procrafiler.ai_reader.read_with_vision", return_value=vision_reply):
             with patch("procrafiler.ai_analysis.call_mistral_chat", return_value=self._REPLY) as call:
                 process_all_inbox_files(self.paths, now_utc=self.now)
 

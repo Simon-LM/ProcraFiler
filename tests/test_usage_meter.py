@@ -42,45 +42,57 @@ class ExtractUnitsTests(unittest.TestCase):
     """Three providers, three response shapes, one extractor."""
 
     def test_mistral_chat_usage_block(self) -> None:
-        tokens_in, tokens_out, pages, measured = extract_units(
-            {"choices": [], "usage": {"prompt_tokens": 1847, "completion_tokens": 213}}
-        )
-        self.assertEqual((tokens_in, tokens_out, pages), (1847, 213, 0))
-        self.assertTrue(measured)
+        units = extract_units({"choices": [], "usage": {"prompt_tokens": 1847, "completion_tokens": 213}})
+        self.assertEqual((units.tokens_in, units.tokens_out, units.pages), (1847, 213, 0))
+        self.assertTrue(units.measured)
 
     def test_mistral_ocr_reports_pages_not_tokens(self) -> None:
         """OCR is billed per page. Reading its count as tokens, or ignoring it,
         would leave the one exactly-knowable cost in the app unmeasured."""
-        tokens_in, tokens_out, pages, measured = extract_units(
-            {"pages": [], "usage_info": {"pages_processed": 12, "doc_size_bytes": 900}}
-        )
-        self.assertEqual(pages, 12)
-        self.assertEqual((tokens_in, tokens_out), (0, 0))
-        self.assertTrue(measured)
+        units = extract_units({"pages": [], "usage_info": {"pages_processed": 12, "doc_size_bytes": 900}})
+        self.assertEqual(units.pages, 12)
+        self.assertEqual((units.tokens_in, units.tokens_out), (0, 0))
+        self.assertTrue(units.measured)
 
     def test_ollama_reports_at_top_level(self) -> None:
-        tokens_in, tokens_out, _pages, measured = extract_units(
+        units = extract_units(
             {"message": {"content": "x"}, "prompt_eval_count": 900, "eval_count": 64, "done": True}
         )
-        self.assertEqual((tokens_in, tokens_out), (900, 64))
-        self.assertTrue(measured)
+        self.assertEqual((units.tokens_in, units.tokens_out), (900, 64))
+        self.assertTrue(units.measured)
 
     def test_unknown_shape_is_unmeasured_not_zero(self) -> None:
         """"We do not know what this cost" and "this cost nothing" must not collapse
         into the same answer — one of them silently understates a bill."""
-        tokens_in, tokens_out, pages, measured = extract_units({"choices": [{"x": 1}]})
-        self.assertEqual((tokens_in, tokens_out, pages), (0, 0, 0))
-        self.assertFalse(measured)
+        units = extract_units({"choices": [{"x": 1}]})
+        self.assertEqual((units.tokens_in, units.tokens_out, units.pages), (0, 0, 0))
+        self.assertFalse(units.measured)
 
     def test_non_numeric_counts_do_not_poison_totals(self) -> None:
-        _in, _out, pages, measured = extract_units({"usage_info": {"pages_processed": "not a number"}})
-        self.assertEqual(pages, 0)
-        self.assertTrue(measured)  # the field was present, merely unusable
+        units = extract_units({"usage_info": {"pages_processed": "not a number"}})
+        self.assertEqual(units.pages, 0)
+        self.assertTrue(units.measured)  # the field was present, merely unusable
+
+    def test_transcription_reports_seconds_of_audio(self) -> None:
+        """Voxtral bills per second of audio, and its reply ALSO carries token
+        counts that are not the billing basis. Both are kept; only the price table
+        decides which one costs money. Reading the tokens as the bill would price
+        an hour of speech at a few cents' worth of text."""
+        units = extract_units(
+            {"text": "hello", "usage": {"prompt_audio_seconds": 7, "prompt_tokens": 4, "completion_tokens": 62}}
+        )
+        self.assertEqual(units.audio_seconds, 7)
+        self.assertEqual((units.tokens_in, units.tokens_out), (4, 62))
+        self.assertTrue(units.measured)
 
     def test_garbage_body_never_raises(self) -> None:
         for body in (None, "a string", 42, [], {"usage": "not a dict"}):
             with self.subTest(body=body):
-                self.assertEqual(extract_units(body), (0, 0, 0, False))
+                units = extract_units(body)
+                self.assertEqual(
+                    (units.tokens_in, units.tokens_out, units.pages, units.audio_seconds), (0, 0, 0, 0)
+                )
+                self.assertFalse(units.measured)
 
 
 class RecordingTests(unittest.TestCase):

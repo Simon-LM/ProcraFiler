@@ -74,6 +74,38 @@ ensure_env() {
   fi
 }
 
+# `reset` is an `rm -rf` over the whole sandbox. That is fine on an empty layout
+# and destructive on a populated one — and the sandbox is gitignored, so nothing
+# it deletes can be recovered. It has already cost a real person their test corpus.
+#
+# So: count what is actually there, and refuse to destroy it unless a human says
+# so at the prompt. A non-interactive caller (a script, an agent, CI) gets a
+# refusal rather than a question it cannot answer — which is the whole point.
+# FORCE=1 is the deliberate override.
+sandbox_file_count() {
+  find "$WS" "$LIB" "$PROCRAFILER_LIBRARY_MIRROR_DIR" -type f 2>/dev/null \
+    | grep -v '/\.procrafiler-sandbox$' | grep -cv '/procrafiler\.lock$' || true
+}
+
+confirm_wipe() {
+  local count; count="$(sandbox_file_count)"
+  [[ "$count" -eq 0 ]] && return 0
+  [[ "${FORCE:-}" == "1" ]] && { echo "FORCE=1 — wiping $count file(s)."; return 0; }
+  if [[ ! -t 0 ]]; then
+    echo "refusing to reset: $count file(s) in the sandbox, and nothing here can be" >&2
+    echo "recovered (sandbox/workspace/ is gitignored). Re-run with FORCE=1 to wipe." >&2
+    exit 3
+  fi
+  echo "This deletes $count file(s) from the sandbox. They are NOT recoverable."
+  read -r -p "Type 'wipe' to confirm: " answer
+  [[ "$answer" == "wipe" ]] || { echo "Cancelled — nothing deleted."; exit 3; }
+}
+
+wipe_sandbox() {
+  rm -rf "$WS" "$LIB" "${LIB}_Trash_Manual" "$PROCRAFILER_LIBRARY_MIRROR_DIR" \
+         "$PROCRAFILER_HOME" "$PROCRAFILER_CONFIG_HOME"
+}
+
 seed() {
   procra init-layout >/dev/null
   cp -n "$HERE"/samples/* "$WS/Inbox/" 2>/dev/null || true
@@ -113,7 +145,8 @@ Any other ProcraFiler command is passed straight through, e.g.:
   ./run.sh review · ./run.sh rescan · ./run.sh deleted-history
 USAGE
     ;;
-  reset)  rm -rf "$WS" "$LIB" "${LIB}_Trash_Manual" "$PROCRAFILER_LIBRARY_MIRROR_DIR" "$PROCRAFILER_HOME" "$PROCRAFILER_CONFIG_HOME"
+  reset)  confirm_wipe
+          wipe_sandbox
           procra init-layout >/dev/null
           echo "Sandbox reset — empty layout recreated. Drop files into: $WS/Inbox" ;;
   init)   procra init-layout ;;
@@ -123,7 +156,7 @@ USAGE
   tree)   tree_view ;;
   log)    tail -n 40 "$PROCRAFILER_HOME/actions_log.jsonl" 2>/dev/null || echo "(no log yet)" ;;
   e2e)
-          echo "### reset";   rm -rf "$WS" "$LIB" "${LIB}_Trash_Manual" "$PROCRAFILER_LIBRARY_MIRROR_DIR" "$PROCRAFILER_HOME" "$PROCRAFILER_CONFIG_HOME"
+          echo "### reset";   confirm_wipe; wipe_sandbox
           echo "### init";    procra init-layout >/dev/null && echo "ok"
           echo "### doctor";  procra doctor || true
           echo "### seed";    seed

@@ -75,3 +75,9 @@ the whole surface against the sandbox, e.g.:
   `purge-mirror-trash`, scoped to `Mirror_Trash`.
 - `reset` only removes the generated `sandbox/workspace/` — your `samples/` and
   scripts stay.
+
+## `reset` asks before deleting
+
+`sandbox/workspace/` is gitignored: nothing `reset` deletes can be recovered, from git or anywhere else. So `reset` counts what is there and refuses to wipe a populated sandbox unless a human confirms at the prompt. A non-interactive caller — a script, an agent, CI — gets a refusal instead of a question it cannot answer. `FORCE=1 ./sandbox/run.sh reset` is the deliberate override.
+
+This exists because an unattended `reset` once destroyed a real test corpus.

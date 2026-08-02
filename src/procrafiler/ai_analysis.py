@@ -33,6 +33,7 @@ from procrafiler.ai_naming import (  # type: ignore[reportMissingImports]
     call_ollama_chat,
     task_chain_from_env,
 )
+from procrafiler.file_dates import DateHint, format_date_evidence  # type: ignore[reportMissingImports]
 from procrafiler.naming import sanitize_filename_stem
 
 # Cap the document text sent to the model: the gist is enough for naming,
@@ -95,13 +96,25 @@ def _summary_and_keyword_instructions(user_language: str) -> tuple[str, str]:
     """How to phrase the summary and keywords for the user's language. Keywords are
     asked in English AND the user's language so search works either way; the
     summary is in the user's language. Falls back to English-only."""
+    # Proper nouns shown rather than said — an organisation on a closing card, a
+    # reference stamped on a form — are exactly what someone later searches for,
+    # and they are the first thing a "salient words" instruction drops: they look
+    # like noise next to topic words. Asking for them HERE, in the keyword bullet,
+    # is what makes them survive; the same request placed under "entities" was
+    # measured and did not reach the keywords.
+    verbatim = (
+        ", and ALWAYS include verbatim any organisation name, reference or code the "
+        "content shows (a logo, a card, a letterhead, a stamp) even if you cannot tell "
+        "what role it plays — keep its original spelling and capitalisation"
+    )
     code = (user_language or "en").lower()
     name = _LANG_NAMES.get(code, code)
     if code == "en":
-        return ("1-2 sentences in English", "3-8 short lowercase English search terms")
+        return ("1-2 sentences in English", f"3-8 short lowercase English search terms{verbatim}")
     return (
         f"1-2 sentences in {name}",
-        f"6-12 short lowercase search terms covering the document's salient words in BOTH English and {name}",
+        f"6-12 short lowercase search terms covering the document's salient words in BOTH "
+        f"English and {name}{verbatim}",
     )
 
 
@@ -126,9 +139,10 @@ def _build_hints_block(
     source_folder: str | None,
     sibling_filenames: list[str] | None = None,
     read_via: str | None = None,
+    date_hints: list[DateHint] | None = None,
 ) -> str:
-    """The hints block: the original filename, the drop folder, and the names of the
-    files dropped alongside.
+    """The hints block: the original filename, the drop folder, the names of the
+    files dropped alongside, and the timestamps the file's own format carries.
 
     "Never trust the filename" means the name must never *decide* — NOT that it is
     discarded. It stays a strong indicator, and it must weigh MORE the less reliable
@@ -148,7 +162,7 @@ def _build_hints_block(
     it works on fiches already produced, so a misreading has already happened.
     """
     interpreted = read_via in _INTERPRETED_READS
-    if not (original_filename or source_folder or sibling_filenames):
+    if not (original_filename or source_folder or sibling_filenames or date_hints):
         return ""
 
     if interpreted:
@@ -171,6 +185,12 @@ def _build_hints_block(
     lines = [header]
     if original_filename:
         lines.append(f"- the user's original filename was: {original_filename}")
+        # Both headers above say the hints only DISAMBIGUATE, which reads as "take no
+        # fact from here" — so a date sitting in the name was never used, even when it
+        # was the only date the file had. This says a date is among the things the name
+        # can carry. What it is worth against the content is the model's call, not a
+        # rule written here: a name can be exact, stale, copied, or not a date at all.
+        lines.append("  A filename may also carry the document's date.")
     if source_folder:
         lines.append(f"- it was dropped in a folder named: {source_folder}")
     if sibling_filenames:
@@ -186,6 +206,9 @@ def _build_hints_block(
                 "- it was dropped together with these files (same set — a strong clue about "
                 f"what this document is about): {', '.join(shown)}"
             )
+    evidence = format_date_evidence(date_hints or [])
+    if evidence:
+        lines.append(evidence)
     return "\n".join(lines) + "\n"
 
 
@@ -199,6 +222,7 @@ def _build_analysis_prompt(
     user_language: str = "en",
     sibling_filenames: list[str] | None = None,
     read_via: str | None = None,
+    date_hints: list[DateHint] | None = None,
 ) -> str:
     bases = "\n".join(f"- {label}" for label in base_categories)
     tree = "\n".join(f"- {label}" for label in existing_paths) if existing_paths else "(none yet)"
@@ -230,6 +254,7 @@ def _build_analysis_prompt(
         source_folder=source_folder,
         sibling_filenames=sibling_filenames,
         read_via=read_via,
+        date_hints=date_hints,
     )
     return (
         "Read this document and file it. Return JSON only, with this exact schema:\n"
@@ -263,8 +288,17 @@ def _build_analysis_prompt(
         "good name: it may be hurried, partial, or plainly wrong (a copy, a template, a stale scan_001). "
         "If the content confirms it, use its information and improve the name; if reliable content "
         "contradicts it, ignore it. Leave an already-correct name alone.\n"
-        "- \"date\": the document's own date (letter/invoice/statement date) as YYYY-MM-DD if clearly "
-        "stated in the content; otherwise null.\n"
+        "- \"date\": the document's own date as YYYY-MM-DD, or null when you cannot "
+        "establish one. It may be stated in the content, written in the original filename "
+        "— for a recording or a scan the filename is often the only place it appears — or it "
+        "may be one of the timestamps the file itself carries, listed below. These are evidence "
+        "of unequal weight, and which one carries the most weight depends on what this document "
+        "turns out to be; judge which of them is this document's date.\n"
+        "  A numeric date can be ambiguous in its DAY/MONTH order (03-04-2026) while its YEAR "
+        "never is. Do not discard the whole date over that: give your best reading, and record "
+        "the doubt under entities as \"date_ambiguity\" (e.g. \"day/month order uncertain: "
+        "03-04-2026\"). The year alone is worth keeping — it is what files a series. The "
+        "language of the content is a clue to the convention the writer used.\n"
         "- \"category_path\": MUST start with one of these existing base categories "
         "(you may NOT invent a new top-level category):\n"
         f"{bases}\n"
@@ -325,6 +359,17 @@ def _build_analysis_prompt(
         f"- \"keywords\": {keywords_instruction}.\n"
         "- \"entities\": a JSON object of key facts when present (e.g. issuer, doc_type, amounts, "
         "references, names); omit the ones you don't find.\n"
+        "  WHO MADE IT counts as much as who appears in it. A letter has a sender, an invoice an "
+        "issuer, a recording a producer or channel — record that party under a key naming its role "
+        "(sender, issuer, publisher, producer, interviewer…) whenever the content shows it. Do NOT "
+        "invent one; omit the key when nothing shows it.\n"
+        "  Whatever TEXT the content actually shows — a name on a card, a logo, a letterhead, a "
+        "stamp — record it verbatim under \"on_screen_text\" even when you cannot tell what role "
+        "its owner played, AND name it in the summary and the keywords so it can be searched for. "
+        "Measured behaviour, not a guess: shown a closing card reading \"L214\", models decline to "
+        "conclude that party published the work, and they are arguably right to — a logo could be a "
+        "sponsor or a subject. But dropping the string loses the only trace of it in a 36-minute "
+        "recording. Preserve the evidence and make it findable; leave the inference to the reader.\n"
         "- \"language\": the document's main language code (e.g. \"fr\", \"en\").\n"
         "Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"
@@ -395,6 +440,7 @@ def analyze_content(
     user_language: str = "en",
     sibling_filenames: list[str] | None = None,
     read_via: str | None = None,
+    date_hints: list[DateHint] | None = None,
     chain: list[ChainEntry] | None = None,
     timeout_seconds: int | None = None,
     retries: int | None = None,
@@ -411,6 +457,11 @@ def analyze_content(
     `read_via` says HOW the text was obtained (`text` / `ocr` / `vision`) and so how
     far to trust it against the filesystem hints; `sibling_filenames` are the other
     files dropped in the same set. See `_build_hints_block`.
+
+    `date_hints` are the timestamps the file's own format carries (see
+    `file_dates`). They are shown as evidence, not applied as a rule: this call is
+    the only place that has both them and the content, so it is the only place that
+    can tell a scan's production date from the date printed on the paper.
     """
     chain_entries = chain if chain is not None else task_chain_from_env("ANALYSIS")
     if not chain_entries:
@@ -423,6 +474,7 @@ def analyze_content(
     prompt = _build_analysis_prompt(
         text, base_categories, existing_paths, original_filename, source_folder, user_context,
         user_language, sibling_filenames=sibling_filenames, read_via=read_via,
+        date_hints=date_hints,
     )
 
     last_error = "unknown"

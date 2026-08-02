@@ -53,6 +53,8 @@ class TaskProfile:
 #   ORGANIZE  a five-document set measures ~1 060.
 DEFAULT_PROFILES: dict[str, TaskProfile] = {
     "ANALYSIS": TaskProfile(tokens_in=2650, tokens_out=300),
+    # Reading a transcript and naming a handful of moments — one short JSON reply.
+    "VIDEO": TaskProfile(tokens_in=2000, tokens_out=200),
     "NAMING": TaskProfile(tokens_in=1060, tokens_out=250),
     "ORGANIZE": TaskProfile(tokens_in=1060, tokens_out=250),
     # Frank guesses — see COARSE_TASKS.
@@ -177,6 +179,24 @@ def forecast_cost(
 
     for task, (task_low, task_high) in estimate.calls_by_task().items():
         if task_high <= 0:
+            continue
+        if task == "TRANSCRIBE":
+            # The only line here that is not an estimate. ffprobe gave the exact
+            # duration and Voxtral bills by duration, so this is arithmetic, not a
+            # forecast — no profile, no calibration, no margin of error.
+            chain = task_chain_from_env(task)
+            if not chain:
+                continue
+            model = chain[0].model
+            amount = price_table.cost(model, audio_seconds=estimate.audio_seconds)
+            if amount is None:
+                if chain[0].provider != "ollama":
+                    unpriced.add(model)
+                continue
+            calls_low += task_low
+            calls_high += task_high
+            low += amount
+            high += amount
             continue
         chain = task_chain_from_env(task)
         if not chain:

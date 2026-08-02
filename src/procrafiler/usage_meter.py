@@ -51,6 +51,10 @@ class UsageEntry:
     tokens_in: int = 0
     tokens_out: int = 0
     pages: int = 0
+    # Transcription is billed by duration, not by tokens or pages — a third unit,
+    # not a variant of the other two. Folding it into tokens would price an hour
+    # of speech at a few cents' worth of text.
+    audio_seconds: int = 0
     unmeasured_calls: int = 0
 
     @property
@@ -79,6 +83,7 @@ class RunUsage:
         tokens_in: int = 0,
         tokens_out: int = 0,
         pages: int = 0,
+        audio_seconds: int = 0,
         measured: bool = True,
     ) -> None:
         key = (provider or "unknown", model or "unknown", task or "unknown")
@@ -90,6 +95,7 @@ class RunUsage:
         entry.tokens_in += max(0, tokens_in)
         entry.tokens_out += max(0, tokens_out)
         entry.pages += max(0, pages)
+        entry.audio_seconds += max(0, audio_seconds)
         if not measured:
             entry.unmeasured_calls += 1
 
@@ -98,7 +104,13 @@ class RunUsage:
         the ones the user needs to see, and they should not be buried."""
         return sorted(
             self._entries.values(),
-            key=lambda e: (not e.is_billed, -(e.tokens_in + e.tokens_out), -e.pages, e.task),
+            key=lambda e: (
+                not e.is_billed,
+                -(e.tokens_in + e.tokens_out),
+                -e.pages,
+                -e.audio_seconds,
+                e.task,
+            ),
         )
 
     @property
@@ -124,6 +136,10 @@ class RunUsage:
     @property
     def total_pages(self) -> int:
         return sum(entry.pages for entry in self._entries.values() if entry.is_billed)
+
+    @property
+    def total_audio_seconds(self) -> int:
+        return sum(entry.audio_seconds for entry in self._entries.values() if entry.is_billed)
 
 
 # A ContextVar, matching how `run_id` is threaded through the pipeline: recording
@@ -164,15 +180,33 @@ def _as_int(value: Any) -> int:
     return 0
 
 
-def extract_units(body: Any) -> tuple[int, int, int, bool]:
-    """Pull (tokens_in, tokens_out, pages, measured) out of a provider response.
+@dataclass(frozen=True)
+class CallUnits:
+    """What one call consumed, in whichever units its endpoint bills by.
 
-    Deliberately tolerant across three shapes we know and any we do not:
+    A record rather than a tuple: providers keep adding billing units — tokens,
+    then OCR pages, now seconds of audio — and each addition would otherwise
+    change the shape of a value every caller unpacks positionally.
+    """
+
+    tokens_in: int = 0
+    tokens_out: int = 0
+    pages: int = 0
+    audio_seconds: int = 0
+    measured: bool = False
+
+
+def extract_units(body: Any) -> CallUnits:
+    """Pull the billed units out of a provider response.
+
+    Deliberately tolerant across the shapes we know and any we do not:
 
     - Mistral chat / vision — `usage: {prompt_tokens, completion_tokens}`
-    - Mistral OCR — `usage_info: {pages_processed, ...}`; the endpoint bills per
-      page, not per token, so pages are a first-class unit here rather than a
-      curiosity.
+    - Mistral OCR — `usage_info: {pages_processed, ...}`; billed per page, not per
+      token, so pages are a first-class unit here rather than a curiosity.
+    - Mistral transcription — `usage: {prompt_audio_seconds}`; billed per second of
+      audio. Its `prompt_tokens` is also present and is NOT the billing basis, so
+      recording both is correct: the price table decides which one it charges for.
     - Ollama — `prompt_eval_count` / `eval_count` at the top level.
 
     `measured` is False when nothing recognisable was found. That flag matters: it
@@ -180,9 +214,9 @@ def extract_units(body: Any) -> tuple[int, int, int, bool]:
     call cost", and collapsing the two would quietly understate a bill.
     """
     if not isinstance(body, dict):
-        return (0, 0, 0, False)
+        return CallUnits()
 
-    tokens_in = tokens_out = pages = 0
+    tokens_in = tokens_out = pages = audio_seconds = 0
     found = False
 
     for container_key in ("usage", "usage_info"):
@@ -201,6 +235,10 @@ def extract_units(body: Any) -> tuple[int, int, int, bool]:
             if key in container:
                 pages += _as_int(container[key])
                 found = True
+        for key in ("prompt_audio_seconds", "audio_seconds"):
+            if key in container:
+                audio_seconds += _as_int(container[key])
+                found = True
 
     # Ollama reports at the top level, with its own names.
     if "prompt_eval_count" in body:
@@ -210,7 +248,13 @@ def extract_units(body: Any) -> tuple[int, int, int, bool]:
         tokens_out += _as_int(body["eval_count"])
         found = True
 
-    return (tokens_in, tokens_out, pages, found)
+    return CallUnits(
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        pages=pages,
+        audio_seconds=audio_seconds,
+        measured=found,
+    )
 
 
 def record_response(provider: str, model: str, task: str, body: Any) -> None:
@@ -220,15 +264,16 @@ def record_response(provider: str, model: str, task: str, body: Any) -> None:
     if meter is None:
         return
     try:
-        tokens_in, tokens_out, pages, measured = extract_units(body)
+        units = extract_units(body)
         meter.add(
             provider=provider,
             model=model,
             task=task,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            pages=pages,
-            measured=measured,
+            tokens_in=units.tokens_in,
+            tokens_out=units.tokens_out,
+            pages=units.pages,
+            audio_seconds=units.audio_seconds,
+            measured=units.measured,
         )
     except Exception:  # noqa: BLE001 - accounting is never worth a crash
         pass
@@ -236,6 +281,13 @@ def record_response(provider: str, model: str, task: str, body: Any) -> None:
 
 def _format_count(value: int) -> str:
     return f"{value:,}".replace(",", " ")
+
+
+def _format_duration(seconds: int) -> str:
+    """Audio is billed per second but read by humans in minutes."""
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60}m {seconds % 60:02d}s"
 
 
 def format_usage_report(usage: RunUsage) -> str:
@@ -258,6 +310,8 @@ def format_usage_report(usage: RunUsage) -> str:
             )
         if entry.pages:
             units.append(f"{_format_count(entry.pages)} page(s)")
+        if entry.audio_seconds:
+            units.append(f"{_format_duration(entry.audio_seconds)} of audio")
         if not units:
             units.append("volume not reported by the provider")
         detail = ", ".join(units)
@@ -274,6 +328,8 @@ def format_usage_report(usage: RunUsage) -> str:
         totals = [f"{_format_count(usage.total_tokens)} token(s)"]
         if usage.total_pages:
             totals.append(f"{_format_count(usage.total_pages)} OCR page(s)")
+        if usage.total_audio_seconds:
+            totals.append(f"{_format_duration(usage.total_audio_seconds)} of audio")
         lines.append(
             f"  Billable total: {usage.billed_calls} call(s), " + ", ".join(totals)
         )

@@ -137,6 +137,33 @@ class PriceArithmeticTests(unittest.TestCase):
     def test_pages_are_priced_per_thousand(self) -> None:
         self.assertAlmostEqual(self.TABLE.cost("ocr", pages=500) or 0.0, 2.0)
 
+    def test_only_the_units_the_table_prices_are_charged(self) -> None:
+        """Voxtral Mini bills per minute of audio, and its reply ALSO reports token
+        counts that it does not charge for. The table is what decides: no token
+        price in its entry, so tokens cost nothing — an hour of speech reports
+        hundreds of thousands of them, so getting this wrong would not be a small
+        error."""
+        from procrafiler.pricing import load_price_table
+
+        table = load_price_table()
+        assert table is not None
+        audio_only = table.cost("voxtral-mini-latest", audio_seconds=600)
+        with_tokens = table.cost("voxtral-mini-latest", audio_seconds=600, tokens_in=5_000_000)
+        self.assertEqual(audio_only, with_tokens, "a unit with no price in the table is free")
+        self.assertAlmostEqual(audio_only or 0.0, 600 / 60 * 0.003)
+
+    def test_a_model_that_bills_both_ways_is_charged_both_ways(self) -> None:
+        """Voxtral Small charges per audio minute AND per text token. Suppressing
+        the tokens because a duration price exists would under-report its bill."""
+        from procrafiler.pricing import load_price_table
+
+        table = load_price_table()
+        assert table is not None
+        both = table.cost("voxtral-small-latest", audio_seconds=600, tokens_in=1_000_000)
+        audio_part = 600 / 60 * 0.004
+        self.assertGreater(both or 0.0, audio_part, "the token price must be added too")
+        self.assertAlmostEqual(both or 0.0, audio_part + 0.1)
+
     def test_an_unknown_model_has_no_price_rather_than_a_free_one(self) -> None:
         self.assertIsNone(self.TABLE.cost("who-knows", tokens_in=10_000_000))
 
