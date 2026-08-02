@@ -48,6 +48,11 @@ SUPPORTED_AI_TASKS: tuple[str, ...] = (
     "OCR",
     "PDF",
     "IMAGE",
+    # Speech to text (Voxtral). Serves audio files AND the audio track of a video —
+    # it is the cheap read that tells us where to spend on vision.
+    "TRANSCRIBE",
+    # Given a transcript, which moments are worth looking at. Text in, timestamps
+    # out; the reserved slot now has the job it was reserved for.
     "VIDEO",
     "SUPERVISOR",
 )

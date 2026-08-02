@@ -55,6 +55,7 @@ from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImpo
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
+from procrafiler.av_reader import read_audio_video
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
 from procrafiler.mirror import (  # type: ignore[reportMissingImports]
@@ -1009,6 +1010,55 @@ def _read_and_analyze(
                 features=features,
             )
             emit(f"   vision unavailable ({vision_result.reason})")
+    elif (content_text is None or not content_text.strip()) and extraction.reader_hint == "av":
+        # Listen to the whole recording (cheap, per second), then look at a few
+        # stills chosen from what was said (expensive, per image). See av_reader.
+        av_result = read_audio_video(
+            queued_target,
+            original_filename=source.name,
+            source_folder=source_folder or None,
+        )
+        if av_result.is_readable:
+            content_text = av_result.text
+            # The primary content is a spoken transcript — deliberate speech, not
+            # an inference from pixels — so it is treated as reliable, like OCR.
+            # A recording with no speech read only from stills is a vision read,
+            # and the filename must weigh more there.
+            read_via = "ocr" if (av_result.transcript and av_result.transcript.has_speech) else "vision"
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="av_read_success",
+                status="success",
+                message="Audio/video read via transcript and sampled frames",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={
+                    "duration_seconds": round(av_result.duration_seconds, 1),
+                    "frames_analysed": av_result.frames_analysed,
+                    "has_speech": bool(av_result.transcript and av_result.transcript.has_speech),
+                    "audio_seconds_billed": av_result.transcript.audio_seconds if av_result.transcript else 0,
+                    "notes": av_result.notes,
+                },
+                features=features,
+            )
+            emit(
+                f"   audio/video: {int(av_result.duration_seconds)}s, "
+                f"{av_result.frames_analysed} frame(s) looked at"
+            )
+        else:
+            _append_action_log(
+                paths,
+                operation_id=operation_id,
+                action="av_read_unavailable",
+                status="warning",
+                message="Audio/video could not be read, routing to manual review",
+                now_utc=now_utc,
+                path_before=str(queued_target),
+                extra_fields={"reason": av_result.reason, "notes": av_result.notes},
+                features=features,
+            )
+            emit(f"   audio/video unreadable ({av_result.reason})")
 
     analysis = None
     max_depth = load_runtime_policy(paths).taxonomy_max_depth
