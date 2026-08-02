@@ -83,7 +83,8 @@ The catalog is also the **content metadata store**. When a document is read, the
   - `language` (optional).
 - **Grouping / dating signals:**
   - `source_folder` — the Inbox subfolder the file was dropped in (e.g. `Water-Damage`; null at the Inbox root). A signal for the organize phase: files dropped together are a candidate set — a hint, not ground truth.
-  - `effective_date` — the real date the file was filed under (`YYYY-MM-DD`), from the date cascade: **EXIF capture date for photos** → the AI's content date → the file's mtime → processing time. EXIF comes first for images because it is hard metadata and sidesteps vision date-hallucination, and it makes photos taken the same day group naturally.
+  - `effective_date` — the real date the file was filed under (`YYYY-MM-DD`). **The AI decides it**, in the same single analysis call: it is shown the content, the original filename, and the timestamps the file's own format carries (EXIF for a photo, the container tag for a recording, `/CreationDate` for a PDF, `dcterms:created` / `meta:creation-date` for an office document — see `file_dates`), and it says which of them is the date this *document* bears. No format ranks above another in code, because the answer depends on the document: a scan's `/CreationDate` is the day it was digitised, while a holiday photo has nothing better than its EXIF.
+    What remains in code is a fallback ladder for when the AI establishes no date at all — the file's embedded timestamp → its mtime → the processing time — uniform across every file type. Every file ends up dated.
 - **Provenance:** `read_via` (text / ocr / vision), `provider`, `model`, `analyzed_at`.
 
 `doc_id` is the stable key: search and `reorganize` operate on these records, **not** on the files themselves. When the analysis step cannot run (no chain, all providers failed), the identity/lifecycle fields are still written and the content-metadata fields are left empty.

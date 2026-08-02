@@ -22,7 +22,9 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # A malformed file can make ffmpeg sit and spin. These bound the damage; they are
 # generous enough that a large legitimate file on a slow disk still succeeds.
@@ -136,6 +138,52 @@ def extract_audio(source: Path, destination: Path, *, max_seconds: int | None = 
     # ffmpeg can exit 0 having written nothing at all (a video whose "audio track"
     # is an empty stream), so success is judged on the artefact, not the code.
     return code == 0 and destination.is_file() and destination.stat().st_size > 0
+
+
+def container_creation_time(path: Path) -> datetime | None:
+    """When the container says the recording was made, or None.
+
+    A video has no EXIF, but MP4/MOV carry `creation_time` in their metadata and
+    Matroska carries `DateUTC` — the same class of fact as a photo's capture date:
+    written by the device, not interpreted from the content. Measured on real
+    files: present on a camera/editor export, absent from a WebM download, since
+    re-encoding and most download pipelines strip it.
+    """
+    if not ffmpeg_available() or not path.is_file():
+        return None
+    code, out, _err = _run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags:stream_tags",
+         "-of", "json", str(path)],
+        timeout=_PROBE_TIMEOUT,
+    )
+    if code != 0:
+        return None
+    try:
+        payload = json.loads(out.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+
+    tags: dict[str, Any] = dict((payload.get("format") or {}).get("tags") or {})
+    for stream in payload.get("streams") or []:
+        if isinstance(stream, dict):
+            tags.update(stream.get("tags") or {})
+
+    for key in ("creation_time", "DateUTC", "date"):
+        raw = tags.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        text = raw.strip().replace("Z", "+00:00")
+        for parse in (
+            lambda t: datetime.fromisoformat(t),
+            lambda t: datetime.strptime(t, "%Y-%m-%d %H:%M:%S"),
+            lambda t: datetime.strptime(t, "%Y-%m-%d"),
+        ):
+            try:
+                found = parse(text)
+            except ValueError:
+                continue
+            return found if found.tzinfo else found.replace(tzinfo=timezone.utc)
+    return None
 
 
 def perceptual_hash(path: Path) -> int | None:

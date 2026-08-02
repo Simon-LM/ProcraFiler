@@ -63,7 +63,8 @@ from procrafiler.mirror import (  # type: ignore[reportMissingImports]
     sync_library_file_to_mirror,
 )
 from procrafiler.search_index import BodyTextIndex
-from procrafiler.naming import date_from_filename, build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
+from procrafiler.file_dates import DateHint, date_evidence, embedded_date  # type: ignore[reportMissingImports]
+from procrafiler.naming import build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
     base_category_for,
@@ -272,77 +273,44 @@ def recover_queue(
     return recovered
 
 
-def _exif_capture_datetime(path: Path) -> datetime | None:
-    """The photo's own capture date from EXIF (DateTimeOriginal), or None.
-
-    A hard metadata fact, and far more reliable than a vision model reading a
-    date off the image (which can hallucinate). EXIF carries no timezone, so the
-    naive value is treated as UTC for consistency with the rest of the pipeline.
-    Any problem (no Pillow, no EXIF, unparseable) yields None — the caller then
-    falls through the cascade.
-    """
-    try:
-        from PIL import Image  # optional dep; absence just disables EXIF dating
-    except ImportError:
-        return None
-    try:
-        with Image.open(path) as image:
-            exif = image.getexif()
-            if not exif:
-                return None
-            raw = None
-            try:
-                # DateTimeOriginal (36867) lives in the Exif sub-IFD (0x8769).
-                raw = exif.get_ifd(0x8769).get(36867)
-            except Exception:
-                raw = None
-            if not isinstance(raw, str) or not raw.strip():
-                raw = exif.get(306)  # DateTime (fallback)
-            if not isinstance(raw, str) or not raw.strip():
-                return None
-            return datetime.strptime(raw.strip(), "%Y:%m:%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
-
-
 def _resolve_document_date(
     ai_date: str | None,
     source_path: Path,
     now_utc: datetime | None,
     *,
-    media_type: str | None = None,
+    embedded: DateHint | None = None,
 ) -> datetime:
     """Pick the date used to prefix the stored filename.
 
-    Cascade:
-    1. For images, the EXIF capture date (DateTimeOriginal) — real metadata, and
-       it sidesteps vision date-hallucination; it also makes photos taken the
-       same day group naturally.
-    2. else the date the AI found inside the document content (at midnight UTC —
-       a document states a day, not a time, and midnight keeps same-day files
-       grouped instead of scattered by processing seconds).
-    3. else a date WRITTEN IN THE FILENAME. Someone typed it, or a camera did; it
-       beats the modification time, which says when the bytes were last touched —
-       a copy, a download or a `chmod` rewrites mtime and has nothing to do with
-       when the document is from. This step is what a video needs: no EXIF to
-       read, and nothing spoken that states a day.
-    4. else the file's modification time.
-    5. else the processing time.
+    The decision itself was already made, by the analysis call: it saw the
+    content, the original filename AND the timestamps the file carries (see
+    `file_dates`), which is the only vantage point from which "the date printed on
+    this letter" can be told apart from "the day it was scanned". Nothing here
+    re-ranks that judgement.
+
+    What remains is a fallback ladder, for when the model established no date at
+    all — every file must end up dated, even one nothing could be read from:
+
+    1. the date the analysis settled on (at midnight UTC — a document states a day,
+       not a time, and midnight keeps same-day files grouped instead of scattered
+       by processing seconds);
+    2. else the timestamp the file's own format carries, whatever the format was;
+    3. else the file's modification time;
+    4. else the processing time.
+
+    It is uniform across every file type. Steps 2-4 are not a ranking of evidence,
+    they are what is left when there is no judgement to honour.
+
     This only affects the FILENAME prefix; action-log and catalog timestamps keep
     the real processing time.
     """
-    if media_type == "image":
-        exif_dt = _exif_capture_datetime(source_path)
-        if exif_dt is not None:
-            return exif_dt
     if ai_date:
         try:
             return datetime.strptime(ai_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
             pass
-    named = date_from_filename(source_path.name)
-    if named is not None:
-        return datetime(named.year, named.month, named.day, tzinfo=timezone.utc)
+    if embedded is not None:
+        return embedded.value
     try:
         return datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc)
     except OSError:
@@ -846,6 +814,10 @@ class _CatalogedDoc:
     read_via: str | None = None
     analysis: Any = None  # AnalysisResult | None
     max_depth: int = 0
+    # Extracted once, used twice: shown to the analysis call as evidence, then
+    # kept as the fallback date if that call establishes none. Re-reading it later
+    # would mean opening the file (or shelling out to ffprobe) a second time.
+    embedded_dt: DateHint | None = None
 
 
 def _read_and_analyze(
@@ -1056,6 +1028,11 @@ def _read_and_analyze(
 
     analysis = None
     max_depth = load_runtime_policy(paths).taxonomy_max_depth
+    # Whatever the format records about its own age — EXIF, container tag, PDF
+    # /CreationDate, office XML property. Read from the QUEUED copy, whose bytes
+    # are the original's; its mtime is preserved by the move.
+    hints = date_evidence(queued_target, dispatch.media_type)
+    embedded_dt = embedded_date(queued_target, dispatch.media_type)
     if content_text is not None and content_text.strip():
         base_categories = [category_label(c) for c in classifiable_categories()]
         existing_paths = existing_category_paths(paths.library_root)
@@ -1072,6 +1049,9 @@ def _read_and_analyze(
             # interpretation, so those hints must weigh MORE, not the same.
             read_via=read_via,
             sibling_filenames=sibling_names or None,
+            # The file's own timestamps go to the model rather than to a rule: it
+            # is the only party that can see both them and what the document says.
+            date_hints=hints,
         )
 
     return _CatalogedDoc(
@@ -1086,6 +1066,7 @@ def _read_and_analyze(
         read_via=read_via,
         analysis=analysis,
         max_depth=max_depth,
+        embedded_dt=embedded_dt,
     )
 
 
@@ -1370,7 +1351,7 @@ def _file_cataloged(
     else:
         stem = sanitize_filename_stem(Path(queued_target.name).stem)
     document_date = analysis.document_date if analysis is not None else None
-    document_dt = _resolve_document_date(document_date, queued_target, now_utc, media_type=catdoc.dispatch.media_type)
+    document_dt = _resolve_document_date(document_date, queued_target, now_utc, embedded=catdoc.embedded_dt)
 
     # SERIES placement, owned by the code so it can't be dropped/guessed:
     # 1) if the AI under-routed a series to a bare base, push it into its issuer
@@ -2636,6 +2617,7 @@ def _ingest_new_library_file(
     analysis = None
     read_via: str | None = None
     content_text: str | None = None
+    embedded_dt: DateHint | None = None
     if dispatch.can_dispatch:
         catdoc = _read_and_analyze(
             paths,
@@ -2653,7 +2635,10 @@ def _ingest_new_library_file(
         analysis = catdoc.analysis
         read_via = catdoc.read_via
         content_text = catdoc.content_text
+        embedded_dt = catdoc.embedded_dt
     else:
+        # An extension nothing can read still has a date somewhere in its bytes.
+        embedded_dt = embedded_date(file_path, dispatch.media_type)
         emit(f"   read: unreadable kind ({file_path.name}) — timestamped, not classified")
 
     # The user's location WINS: anchor at the file's current folder; only apply
@@ -2661,7 +2646,7 @@ def _ingest_new_library_file(
     user_route = file_path.parent.relative_to(paths.library_root).parts
     series = bool(analysis.series) if analysis is not None else False
     document_date = analysis.document_date if analysis is not None else None
-    document_dt = _resolve_document_date(document_date, file_path, now_utc, media_type=dispatch.media_type)
+    document_dt = _resolve_document_date(document_date, file_path, now_utc, embedded=embedded_dt)
     issuer = analysis.entities.get("issuer") if analysis is not None and isinstance(analysis.entities, dict) else None
     route_dir = _with_series_entity(
         user_route, series=series, issuer=issuer if isinstance(issuer, str) else None, library_root=paths.library_root
