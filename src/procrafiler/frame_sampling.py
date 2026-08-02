@@ -57,11 +57,23 @@ _FRAME_BUDGET: tuple[tuple[float, int], ...] = (
 # wide for a ten-second clip.
 _MIN_GAP_FLOOR = 0.4
 
-# The ends, as a fraction of the duration: far enough in to clear a fade, far
-# enough from the end to survive a container whose last frames are not seekable.
-_HEAD_RATIO = 0.02
-_TAIL_RATIO = 0.97
-_MAX_EDGE_INSET = 5.0
+# How far in from each end the bookend stills are taken. Small ABSOLUTE offsets,
+# not fractions of the duration — and that distinction was learned the hard way.
+#
+# These were originally 2% and 3% of the duration, capped at 5 seconds. On a
+# 36-minute interview that put the closing still at 2164.6 s; the end card naming
+# the organisation that produced the film appeared at ~2166 s. The one frame in the
+# whole recording that identified the publisher was missed by under two seconds,
+# and nothing else in 36 minutes said who it was.
+#
+# The offsets exist to clear a fade-in and to survive a container whose very last
+# frames are not seekable. Both of those are measured in fractions of a second, so
+# they do not scale with the length of the film — title cards and end cards do not
+# get later because the video is longer.
+_HEAD_INSET = 1.0
+_TAIL_INSET = 1.5
+# On a clip too short to afford those offsets, fall back to a fraction of it.
+_EDGE_RATIO_CAP = 0.05
 
 
 @dataclass(frozen=True)
@@ -92,9 +104,10 @@ def frame_budget(duration_seconds: float) -> int:
 
 
 def _edges(duration: float) -> tuple[float, float]:
-    head = min(duration * _HEAD_RATIO, _MAX_EDGE_INSET)
-    tail = max(duration * _TAIL_RATIO, duration - _MAX_EDGE_INSET)
-    return (round(head, 3), round(min(tail, max(duration - 0.1, 0.0)), 3))
+    """The two bookend timestamps: just inside the opening, just inside the close."""
+    head = min(_HEAD_INSET, duration * _EDGE_RATIO_CAP)
+    tail = max(duration - _TAIL_INSET, duration * (1 - _EDGE_RATIO_CAP))
+    return (round(head, 3), round(min(tail, max(duration - 0.05, 0.0)), 3))
 
 
 def _accept(candidate: float, taken: list[float], min_gap: float, duration: float) -> bool:

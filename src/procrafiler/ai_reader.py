@@ -415,6 +415,80 @@ def call_mistral_vision(
     return _extract_mistral_content(body)
 
 
+@dataclass
+class VisualRead:
+    """One visual read: what the vision model saw, plus an OCR transcription when
+    the thing turned out to be a written document."""
+
+    text: str | None = None
+    # "ocr" once a transcription is the primary content — the analysis then treats
+    # it as reliable, which is true, since it IS a transcription rather than an
+    # interpretation of pixels.
+    read_via: str = "vision"
+    vision: AIReadResult | None = None
+    ocr: AIReadResult | None = None
+
+    @property
+    def is_readable(self) -> bool:
+        return bool(self.text and self.text.strip())
+
+    @property
+    def used_ocr(self) -> bool:
+        return self.read_via == "ocr"
+
+
+def read_visual(
+    path: Path,
+    *,
+    original_filename: str | None = None,
+    source_folder: str | None = None,
+) -> VisualRead:
+    """Read ONE image the way the app decided images should be read.
+
+    A photographed document reaches a vision model only because it is a `.jpg`, so
+    an invoice comes back DESCRIBED ("an administrative document with a logo")
+    instead of transcribed — and that weak text is what lands in the search
+    sidecar, permanently. When the model reports a written document, it is re-read
+    with OCR and both are kept, transcription first: the order and the labels carry
+    the weighting, with no extra mechanism.
+
+    **Why this is a function and not inline in the caller.** It used to live inside
+    the pipeline's per-file routine, which meant the video reader could not use it
+    without copying forty lines — so it did not use it, and a document filmed in a
+    video came back described while the same document photographed came back
+    transcribed. One behaviour, one place, two callers.
+
+    Costs a second call, but only for images that ARE documents; a photo of water
+    damage or a logo triggers none.
+    """
+    vision = read_with_vision(
+        path, original_filename=original_filename, source_folder=source_folder
+    )
+    if not (vision.text and vision.text.strip()):
+        return VisualRead(text=None, read_via="vision", vision=vision)
+
+    if not vision.is_document:
+        return VisualRead(text=vision.text, read_via="vision", vision=vision)
+
+    ocr = read_with_ocr(path)
+    if not (ocr.text and ocr.text.strip()):
+        # No OCR chain, or it failed: the document is still read, just less
+        # precisely. Degrading beats losing the read.
+        return VisualRead(text=vision.text, read_via="vision", vision=vision, ocr=ocr)
+
+    return VisualRead(
+        text=(
+            "[Transcription OCR — fiable]\n"
+            f"{ocr.text.strip()}\n\n"
+            "[Description visuelle — contexte, moins fiable]\n"
+            f"{vision.text.strip()}"
+        ),
+        read_via="ocr",
+        vision=vision,
+        ocr=ocr,
+    )
+
+
 def read_with_vision(
     path: Path,
     *,

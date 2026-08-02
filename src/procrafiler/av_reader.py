@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from procrafiler.ai_highlights import select_highlights  # type: ignore[reportMissingImports]
-from procrafiler.ai_reader import read_with_vision  # type: ignore[reportMissingImports]
+from procrafiler.ai_reader import read_visual  # type: ignore[reportMissingImports]
 from procrafiler.ai_transcribe import TranscriptResult, format_transcript, transcribe  # type: ignore[reportMissingImports]
 from procrafiler.frame_sampling import frame_budget, plan_frame_timestamps  # type: ignore[reportMissingImports]
 from procrafiler.media_tools import (  # type: ignore[reportMissingImports]
@@ -62,6 +62,8 @@ class AVReadResult:
     duration_seconds: float = 0.0
     transcript: TranscriptResult | None = None
     frames_analysed: int = 0
+    # Frames that turned out to hold a written document and were re-read with OCR.
+    transcribed_frames: int = 0
     reason: str | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -146,6 +148,7 @@ def read_audio_video(
 
         visual_text = ""
         frames_analysed = 0
+        transcribed_frames = 0
         if probe.has_video:
             budget = min(frame_budget(probe.duration_seconds), MAX_FRAMES_HARD_CAP)
             # Two of the budget are always the ends; only the rest is worth asking
@@ -160,12 +163,19 @@ def read_audio_video(
             descriptions: list[str] = []
             for index, frame in enumerate(frames):
                 at = timestamps[index] if index < len(timestamps) else 0.0
-                read = read_with_vision(
+                # The SAME reading a photograph gets: describe it, and when the
+                # model reports a written document, re-read it with OCR. A slide,
+                # a filmed page or a whiteboard therefore comes back transcribed
+                # rather than described — the loss #116 fixed for photos, which
+                # this path would otherwise have reintroduced.
+                read = read_visual(
                     frame, original_filename=original_filename, source_folder=source_folder
                 )
-                if read.text and read.text.strip():
+                if read.is_readable and read.text:
                     descriptions.append(f"at {int(at // 60)}m{int(at % 60):02d}s — {read.text.strip()}")
                     frames_analysed += 1
+                    if read.used_ocr:
+                        transcribed_frames += 1
             visual_text = "\n".join(descriptions)
 
     transcript_text = format_transcript(transcript) if transcript.has_speech else ""
@@ -184,5 +194,6 @@ def read_audio_video(
         duration_seconds=probe.duration_seconds,
         transcript=transcript,
         frames_analysed=frames_analysed,
+        transcribed_frames=transcribed_frames,
         notes=notes,
     )

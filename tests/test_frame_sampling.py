@@ -52,6 +52,29 @@ class PlanTests(unittest.TestCase):
         self.assertGreater(plan[0], 0.0)
         self.assertLess(plan[-1], duration)
 
+    def test_the_bookends_stay_near_the_ends_however_long_the_video(self) -> None:
+        """Regression, from a real 36-minute interview.
+
+        The insets used to be fractions of the duration (2% and 3%, capped at 5 s),
+        which put the closing still at 2164.6 s on that film. The end card naming
+        the organisation that produced it appeared at ~2166 s — the single frame in
+        thirty-six minutes that identified the publisher, missed by under two
+        seconds, and nothing in the audio ever said who it was.
+
+        A fade lasts a fraction of a second whatever the film's length, so the
+        offsets must not grow with it.
+        """
+        for duration in (45.0, 300.0, 1800.0, 2169.6, 7200.0):
+            with self.subTest(duration=duration):
+                plan = plan_frame_timestamps(duration)
+                self.assertLessEqual(
+                    plan[0], 2.0, "a title card lives in the first seconds, not the first 2%"
+                )
+                self.assertLessEqual(
+                    duration - plan[-1], 2.0,
+                    f"the closing still is {duration - plan[-1]:.1f}s from the end — an end card would be missed",
+                )
+
     def test_the_budget_is_respected_exactly(self) -> None:
         for duration in (10, 60, 600, 3600):
             with self.subTest(duration=duration):

@@ -54,7 +54,7 @@ from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingIm
 from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
-from procrafiler.ai_reader import read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
+from procrafiler.ai_reader import read_visual, read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.av_reader import read_audio_video
 from procrafiler.content_reader import extract_text_content
 from procrafiler.flow import INITIAL_STATE, validate_transition
@@ -931,56 +931,42 @@ def _read_and_analyze(
         # the image alone can be genuinely undecidable (a green close-up: lawn or
         # soaked carpet?), and these two names are the only context available at
         # read time. The prompt caps what they may do: break a tie, never add.
-        vision_result = read_with_vision(
+        # The vision read and its OCR confirmation are ONE behaviour, and it lives
+        # in `ai_reader.read_visual` so the video reader gets exactly the same one
+        # for the frames it samples. It used to be written out here, which is
+        # precisely why a document filmed in a video came back described while the
+        # same document photographed came back transcribed.
+        visual = read_visual(
             queued_target,
             original_filename=source.name,
             source_folder=source_folder or None,
         )
-        if vision_result.text and vision_result.text.strip():
-            content_text = vision_result.text
-            read_via = "vision"
-            # A photographed DOCUMENT reaches the vision model only because it is
-            # a .jpg — so an invoice comes back DESCRIBED ("an administrative
-            # document with a logo") instead of transcribed, and that weak text is
-            # what gets cached in the search sidecar. When the vision model says
-            # this is a written document, re-read it with the OCR model, which is
-            # built for exactly that. Costs a second call, but only for photos of
-            # documents; a photo of water damage triggers none.
-            if vision_result.is_document:
-                ocr_confirm = read_with_ocr(queued_target)
-                if ocr_confirm.text and ocr_confirm.text.strip():
-                    # Keep BOTH, weighted toward the OCR: order and labels carry
-                    # the weighting, no extra mechanism. `read_via` becomes "ocr"
-                    # so the analysis prompt treats the content as reliable — now
-                    # true, since the primary text IS an OCR transcription.
-                    content_text = (
-                        "[Transcription OCR — fiable]\n"
-                        f"{ocr_confirm.text.strip()}\n\n"
-                        "[Description visuelle — contexte, moins fiable]\n"
-                        f"{vision_result.text.strip()}"
-                    )
-                    read_via = "ocr"
-                    _append_action_log(
-                        paths,
-                        operation_id=operation_id,
-                        action="ocr_confirm_photographed_document",
-                        status="success",
-                        message="Vision flagged a written document; re-read with OCR",
-                        now_utc=now_utc,
-                        path_before=str(queued_target),
-                        extra_fields={
-                            "provider": ocr_confirm.provider,
-                            "model": ocr_confirm.model,
-                            "ocr_chars": len(ocr_confirm.text),
-                            "vision_chars": len(vision_result.text),
-                        },
-                        features=features,
-                    )
-                    emit(f"   photo of a document → OCR: {len(ocr_confirm.text)} chars")
-                else:
-                    # No OCR chain, or it failed: keep the vision text as-is. The
-                    # document is still read, just less precisely.
-                    emit(f"   OCR confirm unavailable ({ocr_confirm.reason}) — keeping the vision read")
+        vision_result = visual.vision
+        if visual.is_readable and vision_result is not None:
+            content_text = visual.text
+            read_via = visual.read_via
+            if visual.used_ocr and visual.ocr is not None:
+                _append_action_log(
+                    paths,
+                    operation_id=operation_id,
+                    action="ocr_confirm_photographed_document",
+                    status="success",
+                    message="Vision flagged a written document; re-read with OCR",
+                    now_utc=now_utc,
+                    path_before=str(queued_target),
+                    extra_fields={
+                        "provider": visual.ocr.provider,
+                        "model": visual.ocr.model,
+                        "ocr_chars": len(visual.ocr.text or ""),
+                        "vision_chars": len(vision_result.text or ""),
+                    },
+                    features=features,
+                )
+                emit(f"   photo of a document → OCR: {len(visual.ocr.text or '')} chars")
+            elif visual.ocr is not None:
+                # No OCR chain, or it failed: the vision text is kept. The document
+                # is still read, just less precisely.
+                emit(f"   OCR confirm unavailable ({visual.ocr.reason}) — keeping the vision read")
             _append_action_log(
                 paths,
                 operation_id=operation_id,

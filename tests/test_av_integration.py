@@ -100,6 +100,14 @@ class RealRecordingTests(unittest.TestCase):
             print(f"  - {note}")
         print("\n--- ACTUALLY CONSUMED -------------------------------------------------")
         print(format_usage_report(usage))
+
+        # Keep the reading next to the recording. This run costs real money and its
+        # result is the input to everything downstream — classification, naming,
+        # a prompt comparison. Re-transcribing half an hour of audio to get a text
+        # we already paid for once would be waste, and waste nobody notices.
+        saved = self.media.with_suffix(self.media.suffix + ".reading.txt")
+        saved.write_text(result.text or f"(nothing readable: {result.reason})", "utf-8")
+        print(f"\nreading saved to {saved}")
         print()
 
         self.assertTrue(result.is_readable, f"nothing could be read: {result.reason}")

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import procrafiler.ai_reader as ai_reader
 import procrafiler.pipeline as pipeline
 from procrafiler.ai_reader import split_document_marker
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
@@ -90,8 +91,8 @@ class TestOcrConfirmInPipeline(unittest.TestCase):
 
     def _run(self, vision, ocr):
         self._drop_photo()
-        with patch.object(pipeline, "read_with_vision", return_value=vision) as v:
-            with patch.object(pipeline, "read_with_ocr", return_value=ocr) as o:
+        with patch.object(ai_reader, "read_with_vision", return_value=vision) as v:
+            with patch.object(ai_reader, "read_with_ocr", return_value=ocr) as o:
                 process_all_inbox_files(self.paths, now_utc=self.now)
         return v, o
 

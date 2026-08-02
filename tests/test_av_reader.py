@@ -53,7 +53,7 @@ class _Patched(unittest.TestCase):
     def setUp(self) -> None:
         self._saved = {
             name: getattr(av_reader, name)
-            for name in ("transcribe", "select_highlights", "read_with_vision")
+            for name in ("transcribe", "select_highlights", "read_visual")
         }
 
     def tearDown(self) -> None:
@@ -63,7 +63,7 @@ class _Patched(unittest.TestCase):
     def _no_ai(self) -> None:
         av_reader.transcribe = lambda *a, **k: TranscriptResult(reason="chain_not_configured")
         av_reader.select_highlights = lambda *a, **k: []
-        av_reader.read_with_vision = lambda *a, **k: _Vision(None)
+        av_reader.read_visual = lambda *a, **k: _Visual(None)
 
     @staticmethod
     def _speaks(text: str = "This is a water damage report for the kitchen."):
@@ -76,13 +76,20 @@ class _Patched(unittest.TestCase):
         )
 
 
-class _Vision:
-    def __init__(self, text: str | None) -> None:
+class _Visual:
+    """Stands in for `ai_reader.VisualRead` — what one frame's reading looks like."""
+
+    def __init__(self, text: str | None, read_via: str = "vision") -> None:
         self.text = text
-        self.provider = "mistral"
-        self.model = "m"
-        self.reason = None if text else "unavailable"
-        self.is_document = False
+        self.read_via = read_via
+
+    @property
+    def is_readable(self) -> bool:
+        return bool(self.text and self.text.strip())
+
+    @property
+    def used_ocr(self) -> bool:
+        return self.read_via == "ocr"
 
 
 @unittest.skipUnless(FFMPEG, "ffmpeg is not installed")
@@ -107,7 +114,7 @@ class RealMediaTests(_Patched):
         attempted: list[int] = []
         av_reader.transcribe = lambda *a, **k: attempted.append(1) or TranscriptResult()
         av_reader.select_highlights = lambda *a, **k: []
-        av_reader.read_with_vision = lambda *a, **k: _Vision("a colour test pattern")
+        av_reader.read_visual = lambda *a, **k: _Visual("a colour test pattern")
 
         result = read_audio_video(video)
 
@@ -122,7 +129,7 @@ class RealMediaTests(_Patched):
         looked: list[int] = []
         av_reader.transcribe = lambda *a, **k: self._speaks()
         av_reader.select_highlights = lambda *a, **k: []
-        av_reader.read_with_vision = lambda *a, **k: looked.append(1) or _Vision("x")
+        av_reader.read_visual = lambda *a, **k: looked.append(1) or _Visual("x")
 
         result = read_audio_video(audio)
 
@@ -138,7 +145,7 @@ class RealMediaTests(_Patched):
         _silent_video(video)
         av_reader.transcribe = lambda *a, **k: TranscriptResult(audio_seconds=4)  # empty text
         av_reader.select_highlights = lambda *a, **k: []
-        av_reader.read_with_vision = lambda *a, **k: _Vision("a colour test pattern")
+        av_reader.read_visual = lambda *a, **k: _Visual("a colour test pattern")
 
         result = read_audio_video(video)
 
@@ -157,7 +164,7 @@ class RealMediaTests(_Patched):
         _silent_video(video)
         self._no_ai()
         seen: list[int] = []
-        av_reader.read_with_vision = lambda *a, **k: seen.append(1) or _Vision("x")
+        av_reader.read_visual = lambda *a, **k: seen.append(1) or _Visual("x")
         read_audio_video(video)
         self.assertLessEqual(len(seen), av_reader.MAX_FRAMES_HARD_CAP)
 
@@ -261,7 +268,7 @@ class DegradationTests(_Patched):
         av_reader.extract_frames = lambda _s, ts, out: [Path("f.jpg")]
         av_reader.transcribe = lambda *a, **k: self._speaks()
         av_reader.select_highlights = lambda *a, **k: []
-        av_reader.read_with_vision = lambda *a, **k: _Vision("a wet ceiling")
+        av_reader.read_visual = lambda *a, **k: _Visual("a wet ceiling")
         try:
             text = read_audio_video(Path("x.mp4")).text or ""
         finally:
@@ -273,6 +280,60 @@ class DegradationTests(_Patched):
             "the transcript must come first",
         )
         self.assertIn("less reliable", text)
+
+
+class FramesGetTheSameReadingAsAPhotographTests(_Patched):
+    """A document filmed in a video must be transcribed, not described — exactly
+    like the same document photographed.
+
+    This behaviour shipped in #116 for photos, but it lived INLINE in the pipeline,
+    so this reader could not reach it and silently did without. Extracting it into
+    `ai_reader.read_visual` is what closes that gap; these tests are what stop it
+    reopening.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._probe = av_reader.probe_media
+        av_reader.probe_media = lambda _p: MediaProbe(
+            duration_seconds=60.0, has_audio=False, has_video=True, ok=True
+        )
+        av_reader.extract_frames = lambda _s, ts, out: [Path(f"f{i}.jpg") for i in range(len(ts))]
+
+    def tearDown(self) -> None:
+        av_reader.probe_media = self._probe
+        av_reader.extract_frames = media_tools.extract_frames
+        super().tearDown()
+
+    def test_a_filmed_document_is_transcribed_not_described(self) -> None:
+        from procrafiler.ai_reader import VisualRead
+
+        av_reader.read_visual = lambda *a, **k: VisualRead(
+            text="[Transcription OCR — fiable]\nFACTURE N° 4417 — 128,40 EUR",
+            read_via="ocr",
+        )
+        try:
+            result = read_audio_video(Path("x.mp4"))
+        finally:
+            av_reader.read_visual = self._saved["read_visual"]
+
+        self.assertIn("FACTURE N° 4417", result.text or "", "the transcription must reach the analysis")
+        self.assertGreater(result.transcribed_frames, 0, "the OCR re-read must be counted")
+
+    def test_an_ordinary_scene_costs_no_ocr_call(self) -> None:
+        """A photo of water damage — or a logo — triggers none. The confirmation is
+        for dense written documents, and paying for it on every frame would double
+        the cost of every video."""
+        from procrafiler.ai_reader import VisualRead
+
+        av_reader.read_visual = lambda *a, **k: VisualRead(text="a wet ceiling", read_via="vision")
+        try:
+            result = read_audio_video(Path("x.mp4"))
+        finally:
+            av_reader.read_visual = self._saved["read_visual"]
+
+        self.assertGreater(result.frames_analysed, 0)
+        self.assertEqual(result.transcribed_frames, 0)
 
 
 class TranscriptFormattingTests(unittest.TestCase):
