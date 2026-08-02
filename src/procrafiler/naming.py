@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -23,6 +23,47 @@ def _slugify_stem(stem: str) -> str:
 # rescan ingesting a hand-placed file the user named in our own format — does not
 # double the prefix (`…__00-00-00__…`). Matched on the RAW stem.
 _TIMESTAMP_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}__")
+
+
+# Dates a filename may carry. Deliberately narrow: these are the machine-written
+# forms people and cameras actually produce, and each one is unambiguous.
+# `DD-MM-YYYY` is accepted only when the first group cannot be a month, because
+# 03-04-2026 is the third of April to half the world and the fourth of March to
+# the other half — and a silently wrong date is worse than no date.
+_FILENAME_DATE_PATTERNS = (
+    re.compile(r"(?<!\d)(?P<y>\d{4})[-_.](?P<m>\d{2})[-_.](?P<d>\d{2})(?!\d)"),
+    re.compile(r"(?<!\d)(?P<d>1[3-9]|2\d|3[01])[-_.](?P<m>\d{2})[-_.](?P<y>\d{4})(?!\d)"),
+    re.compile(r"(?<!\d)(?P<y>\d{4})(?P<m>\d{2})(?P<d>\d{2})(?!\d)"),
+)
+# A plausible document date. The upper bound is what keeps a version number or a
+# random id that happens to parse (`20991231`) from dating a file to the far
+# future, where it would sort above everything the user owns.
+_EARLIEST_FILENAME_YEAR = 1900
+
+
+def date_from_filename(name: str, *, today: date | None = None) -> date | None:
+    """A date written in the filename, or None.
+
+    Filenames are the one place a date survives when the content has none: a video
+    is the clear case — no EXIF to read, and nothing spoken that states a day — but
+    it is equally true of a scan named by hand. The app already RECOGNISED such
+    dates, in `_strip_leading_date`, purely in order to delete them; the
+    information was being thrown away rather than read.
+
+    Conservative by design. It returns a date only when the digits can mean
+    nothing else, and never one in the future.
+    """
+    limit = (today or datetime.now(timezone.utc).date())
+    for pattern in _FILENAME_DATE_PATTERNS:
+        for match in pattern.finditer(name):
+            try:
+                found = date(int(match.group("y")), int(match.group("m")), int(match.group("d")))
+            except ValueError:
+                continue  # 2026-13-45 is digits, not a date
+            if found.year < _EARLIEST_FILENAME_YEAR or found > limit:
+                continue
+            return found
+    return None
 
 
 def _strip_leading_date(stem: str) -> str:

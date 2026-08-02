@@ -45,12 +45,25 @@ MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr"
 _DEFAULT_OCR_TIMEOUT = 120
 _DEFAULT_VISION_TIMEOUT = 90
 
-# Ask the vision model for usable text, not chit-chat: transcription first so
-# scanned/photographed documents become classifiable, plus a short description.
+# Describe first, transcribe only IF there is something to transcribe.
+#
+# The order matters, and it was measured. "Transcris fidèlement tout le texte
+# visible" as the opening instruction presupposes that text exists: on twelve
+# frames of a filmed interview containing no text at all, mistral-small invented
+# some on eleven of them — a name on a screen, a badge, a caption. That is the
+# worst possible failure here, because invented text flows into the fiche, the
+# search index and the filename. mistral-medium answered "aucun texte visible" on
+# all twelve, but the pressure to produce text is in the prompt for both.
+#
+# So: describe what is there, and transcribe only what is actually legible.
 _VISION_TASK = (
-    "Transcris fidèlement tout le texte visible dans cette image, puis décris "
-    "brièvement ce qu'elle représente. Réponds en français, en texte brut. "
-    "Si c'est un document, restitue les informations clés (émetteur, type, "
+    "Décris brièvement ce que représente cette image. Réponds en français, en "
+    "texte brut.\n"
+    "Si — et seulement si — l'image contient du texte réellement lisible, "
+    "transcris-le fidèlement. Beaucoup d'images n'en contiennent aucun : dans ce "
+    "cas n'en invente pas et n'en parle pas. Ne devine jamais un mot, un nom ou "
+    "un logo que tu ne lis pas distinctement.\n"
+    "S'il s'agit d'un document, restitue les informations clés (émetteur, type, "
     "date, montants)."
 )
 

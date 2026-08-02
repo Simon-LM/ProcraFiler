@@ -76,6 +76,42 @@ _TAIL_INSET = 1.5
 _EDGE_RATIO_CAP = 0.05
 
 
+# Below this many differing bits out of 64, two frames are the same shot and the
+# second one buys nothing. Measured on a filmed interview: the eight near-identical
+# library shots sat at 1–5 bits from one another, while the four genuinely distinct
+# scenes were 16–39 apart. The threshold sits in a wide empty gap, which is what
+# makes it a safe number rather than a tuned one.
+MIN_DISTINCT_BITS = 8
+
+
+def select_distinct(hashes: list[int | None], *, min_bits: int = MIN_DISTINCT_BITS) -> list[int]:
+    """Indices of the frames worth paying to look at, in order.
+
+    A talking-head interview is visually static: sampling it every three minutes
+    yields the same shot a dozen times, and each one is a billed vision call
+    describing the same man in the same chair. Spacing frames in TIME does not
+    prevent that — only comparing what they show does.
+
+    Compared against every frame already kept, not just the previous one, so a
+    scene that alternates A-B-A-B does not slip through. A frame whose hash could
+    not be computed is KEPT: failing to hash it is not evidence that it is a
+    duplicate, and dropping a frame we know nothing about would silently lose
+    content.
+    """
+    kept: list[int] = []
+    for index, value in enumerate(hashes):
+        if value is None:
+            kept.append(index)
+            continue
+        if all(
+            hashes[other] is None
+            or bin(value ^ (hashes[other] or 0)).count("1") >= min_bits
+            for other in kept
+        ):
+            kept.append(index)
+    return kept
+
+
 @dataclass(frozen=True)
 class Highlight:
     """A moment the transcript pass judged worth looking at."""

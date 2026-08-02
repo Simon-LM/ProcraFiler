@@ -95,13 +95,25 @@ def _summary_and_keyword_instructions(user_language: str) -> tuple[str, str]:
     """How to phrase the summary and keywords for the user's language. Keywords are
     asked in English AND the user's language so search works either way; the
     summary is in the user's language. Falls back to English-only."""
+    # Proper nouns shown rather than said — an organisation on a closing card, a
+    # reference stamped on a form — are exactly what someone later searches for,
+    # and they are the first thing a "salient words" instruction drops: they look
+    # like noise next to topic words. Asking for them HERE, in the keyword bullet,
+    # is what makes them survive; the same request placed under "entities" was
+    # measured and did not reach the keywords.
+    verbatim = (
+        ", and ALWAYS include verbatim any organisation name, reference or code the "
+        "content shows (a logo, a card, a letterhead, a stamp) even if you cannot tell "
+        "what role it plays — keep its original spelling and capitalisation"
+    )
     code = (user_language or "en").lower()
     name = _LANG_NAMES.get(code, code)
     if code == "en":
-        return ("1-2 sentences in English", "3-8 short lowercase English search terms")
+        return ("1-2 sentences in English", f"3-8 short lowercase English search terms{verbatim}")
     return (
         f"1-2 sentences in {name}",
-        f"6-12 short lowercase search terms covering the document's salient words in BOTH English and {name}",
+        f"6-12 short lowercase search terms covering the document's salient words in BOTH "
+        f"English and {name}{verbatim}",
     )
 
 
@@ -325,6 +337,17 @@ def _build_analysis_prompt(
         f"- \"keywords\": {keywords_instruction}.\n"
         "- \"entities\": a JSON object of key facts when present (e.g. issuer, doc_type, amounts, "
         "references, names); omit the ones you don't find.\n"
+        "  WHO MADE IT counts as much as who appears in it. A letter has a sender, an invoice an "
+        "issuer, a recording a producer or channel — record that party under a key naming its role "
+        "(sender, issuer, publisher, producer, interviewer…) whenever the content shows it. Do NOT "
+        "invent one; omit the key when nothing shows it.\n"
+        "  Whatever TEXT the content actually shows — a name on a card, a logo, a letterhead, a "
+        "stamp — record it verbatim under \"on_screen_text\" even when you cannot tell what role "
+        "its owner played, AND name it in the summary and the keywords so it can be searched for. "
+        "Measured behaviour, not a guess: shown a closing card reading \"L214\", models decline to "
+        "conclude that party published the work, and they are arguably right to — a logo could be a "
+        "sponsor or a subject. But dropping the string loses the only trace of it in a 36-minute "
+        "recording. Preserve the evidence and make it findable; leave the inference to the reader.\n"
         "- \"language\": the document's main language code (e.g. \"fr\", \"en\").\n"
         "Do not add other keys or commentary.\n\n"
         "Current folder tree:\n"

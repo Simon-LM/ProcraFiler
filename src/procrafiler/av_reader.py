@@ -41,12 +41,17 @@ from pathlib import Path
 from procrafiler.ai_highlights import select_highlights  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_visual  # type: ignore[reportMissingImports]
 from procrafiler.ai_transcribe import TranscriptResult, format_transcript, transcribe  # type: ignore[reportMissingImports]
-from procrafiler.frame_sampling import frame_budget, plan_frame_timestamps  # type: ignore[reportMissingImports]
+from procrafiler.frame_sampling import (  # type: ignore[reportMissingImports]
+    frame_budget,
+    plan_frame_timestamps,
+    select_distinct,
+)
 from procrafiler.media_tools import (  # type: ignore[reportMissingImports]
     DEFAULT_MAX_TRANSCRIBE_SECONDS,
     MediaProbe,
     extract_audio,
     extract_frames,
+    perceptual_hash,
     probe_media,
 )
 
@@ -160,8 +165,22 @@ def read_audio_video(
             frames = extract_frames(path, timestamps, work / "frames")
             if not frames:
                 notes.append("no frame could be extracted from the video")
+
+            # Extracting is free; LOOKING is not. A filmed interview is visually
+            # static, so a dozen stills of it are a dozen paid descriptions of the
+            # same man in the same chair — measured at 12 frames for 4 distinct
+            # scenes on a real recording. Comparing the images locally, before any
+            # call, removes that waste without touching quality.
+            distinct = select_distinct([perceptual_hash(frame) for frame in frames])
+            if len(distinct) < len(frames):
+                notes.append(
+                    f"{len(frames) - len(distinct)} of {len(frames)} sampled frames "
+                    "showed the same scene and were not sent for reading"
+                )
+
             descriptions: list[str] = []
-            for index, frame in enumerate(frames):
+            for index in distinct:
+                frame = frames[index]
                 at = timestamps[index] if index < len(timestamps) else 0.0
                 # The SAME reading a photograph gets: describe it, and when the
                 # model reports a written document, re-read it with OCR. A slide,

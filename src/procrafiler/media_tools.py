@@ -138,6 +138,32 @@ def extract_audio(source: Path, destination: Path, *, max_seconds: int | None = 
     return code == 0 and destination.is_file() and destination.stat().st_size > 0
 
 
+def perceptual_hash(path: Path) -> int | None:
+    """A 64-bit average-hash of an image, computed with ffmpeg. None if unreadable.
+
+    ffmpeg scales the frame to 8x8 greyscale and hands back 64 raw bytes; each bit
+    of the hash says whether that cell is brighter than the frame's mean. Two
+    frames of the same static shot then differ by a handful of bits, two different
+    scenes by dozens.
+
+    No new dependency: ffmpeg is already required to have got this far, and a
+    Python imaging library would be a heavy addition for sixty-four bytes.
+    """
+    code, out, _err = _run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-vf", "scale=8:8,format=gray",
+         "-f", "rawvideo", "-"],
+        timeout=_PROBE_TIMEOUT,
+    )
+    if code != 0 or len(out) != 64:
+        return None
+    average = sum(out) / 64
+    value = 0
+    for index, cell in enumerate(out):
+        if cell > average:
+            value |= 1 << index
+    return value
+
+
 def extract_frames(source: Path, timestamps: list[float], out_dir: Path) -> list[Path]:
     """Grab one JPEG per timestamp, each seeked to independently.
 

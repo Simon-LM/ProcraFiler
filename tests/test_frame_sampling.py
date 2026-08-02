@@ -16,6 +16,7 @@ from __future__ import annotations
 import unittest
 
 from procrafiler.frame_sampling import (
+    select_distinct,
     Highlight,
     frame_budget,
     plan_frame_timestamps,
@@ -35,6 +36,53 @@ class BudgetTests(unittest.TestCase):
     def test_a_zero_length_video_earns_nothing(self) -> None:
         self.assertEqual(frame_budget(0), 0)
         self.assertEqual(frame_budget(-5), 0)
+
+
+class DistinctFrameTests(unittest.TestCase):
+    """Dropping stills that show the same thing, before paying to look at them.
+
+    Measured on a 36-minute filmed interview: twelve sampled frames, four distinct
+    scenes. The eight repeats each cost a vision call describing the same man in
+    the same chair. Spacing frames in TIME cannot catch that — only comparing what
+    they show does.
+    """
+
+    @staticmethod
+    def _hash(bits: str) -> int:
+        return int(bits, 2)
+
+    def test_identical_frames_collapse_to_one(self) -> None:
+        same = self._hash("1" * 32 + "0" * 32)
+        self.assertEqual(select_distinct([same, same, same, same]), [0])
+
+    def test_distinct_frames_are_all_kept(self) -> None:
+        a = self._hash("1" * 64)
+        b = self._hash("0" * 64)
+        c = self._hash("1" * 32 + "0" * 32)
+        self.assertEqual(select_distinct([a, b, c]), [0, 1, 2])
+
+    def test_a_scene_that_returns_later_is_still_a_duplicate(self) -> None:
+        """A-B-A: comparing each frame only against the PREVIOUS one would let the
+        second A through, and an interview cutting between two shots would pay for
+        every cut."""
+        a = self._hash("1" * 64)
+        b = self._hash("0" * 64)
+        self.assertEqual(select_distinct([a, b, a]), [0, 1])
+
+    def test_a_near_duplicate_is_dropped_and_a_small_real_change_is_not(self) -> None:
+        base = self._hash("0" * 64)
+        near = self._hash("0" * 61 + "111")          # 3 bits — same shot
+        different = self._hash("0" * 44 + "1" * 20)  # 20 bits — another scene
+        self.assertEqual(select_distinct([base, near, different]), [0, 2])
+
+    def test_an_unhashable_frame_is_kept(self) -> None:
+        """Failing to hash a frame is not evidence that it repeats one. Dropping
+        what we know nothing about would silently lose content."""
+        a = self._hash("1" * 64)
+        self.assertEqual(select_distinct([a, None, a]), [0, 1])
+
+    def test_nothing_in_nothing_out(self) -> None:
+        self.assertEqual(select_distinct([]), [])
 
 
 class PlanTests(unittest.TestCase):

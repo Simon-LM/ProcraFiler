@@ -63,7 +63,7 @@ from procrafiler.mirror import (  # type: ignore[reportMissingImports]
     sync_library_file_to_mirror,
 )
 from procrafiler.search_index import BodyTextIndex
-from procrafiler.naming import build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
+from procrafiler.naming import date_from_filename, build_timestamped_filename, has_timestamp_prefix, sanitize_filename_stem
 from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     INTERIM_LIBRARY_DIR,
     base_category_for,
@@ -321,8 +321,13 @@ def _resolve_document_date(
     2. else the date the AI found inside the document content (at midnight UTC —
        a document states a day, not a time, and midnight keeps same-day files
        grouped instead of scattered by processing seconds).
-    3. else the file's modification time.
-    4. else the processing time.
+    3. else a date WRITTEN IN THE FILENAME. Someone typed it, or a camera did; it
+       beats the modification time, which says when the bytes were last touched —
+       a copy, a download or a `chmod` rewrites mtime and has nothing to do with
+       when the document is from. This step is what a video needs: no EXIF to
+       read, and nothing spoken that states a day.
+    4. else the file's modification time.
+    5. else the processing time.
     This only affects the FILENAME prefix; action-log and catalog timestamps keep
     the real processing time.
     """
@@ -335,6 +340,9 @@ def _resolve_document_date(
             return datetime.strptime(ai_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
             pass
+    named = date_from_filename(source_path.name)
+    if named is not None:
+        return datetime(named.year, named.month, named.day, tzinfo=timezone.utc)
     try:
         return datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc)
     except OSError:
