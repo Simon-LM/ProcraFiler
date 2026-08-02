@@ -40,6 +40,9 @@ BASE_LIBRARY_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Work", "Business", "Clients"),
     ("Work", "Misc"),
     ("Work", "Archive"),
+    ("Media",),
+    ("Media", "Music"),
+    ("Media", "Films"),
     ("Manual_Review",),
 )
 
@@ -56,6 +59,37 @@ ARCHIVE_BASE_DIRECTORIES: tuple[tuple[str, ...], ...] = (
     ("Personal", "Archive"),
     ("Work", "Archive"),
 )
+
+
+# MEDIA folders hold music albums and films the user files BY HAND. Like Archive
+# they are a user zone the AI never files into, and nothing inside is ever renamed
+# or moved — but the resemblance stops there, and the difference is the whole point.
+#
+# An Archive folder holds DOCUMENTS: they are read, and being able to search inside
+# them is exactly why the zone exists. A media file is not read at all. There is
+# nothing to gain from transcribing an album or describing every frame of a film,
+# it would cost a great deal, and the app has no way to recognise a piece of music
+# from its sound anyway.
+#
+# So the AI is not excluded here — it is MOVED. It stops reading the content and
+# reads what is written AROUND it: the file's own metadata (ID3, Vorbis comments,
+# MP4 atoms, container tags), its name, and the name of the folder holding it,
+# which for an album or a series is usually the most informative thing available.
+# Not one byte of audio, image or video leaves the machine. See `media_metadata`.
+#
+# `Media` sits at the top level rather than under Personal/Work because it answers
+# a different question from those two: they say what a document is ABOUT, `Media`
+# says how a file is TREATED. An album is neither personal nor professional, it is
+# an album — and a rule about processing, buried under a subject branch, becomes
+# invisible.
+MEDIA_BASE_DIRECTORIES: tuple[tuple[str, ...], ...] = (
+    ("Media",),
+)
+
+
+def is_in_media_zone(relative_parts: tuple[str, ...]) -> bool:
+    """True when a library-relative path lives under the media zone."""
+    return any(tuple(relative_parts[: len(base)]) == base for base in MEDIA_BASE_DIRECTORIES)
 
 
 # Translations / synonyms of the (English) base-folder segment names, per language
@@ -88,6 +122,9 @@ BASE_FOLDER_TRANSLATIONS: dict[str, dict[str, tuple[str, ...]]] = {
     "Expenses": {"fr": ("dépenses", "frais")},
     "Clients": {"fr": ("clients", "client")},
     "Work": {"fr": ("travail", "professionnel", "pro", "boulot")},
+    "Media": {"fr": ("médias", "media", "multimédia")},
+    "Music": {"fr": ("musique", "musiques", "album", "albums", "morceaux")},
+    "Films": {"fr": ("films", "film", "cinéma", "vidéos", "séries")},
 }
 
 
@@ -221,13 +258,22 @@ def category_label(relative_dir: tuple[str, ...]) -> str:
     return "/".join(relative_dir)
 
 
-_NON_CLASSIFIABLE: frozenset[tuple[str, ...]] = frozenset((INTERIM_LIBRARY_DIR, *ARCHIVE_BASE_DIRECTORIES))
+_MEDIA_SUBTREE: frozenset[tuple[str, ...]] = frozenset(
+    d for d in BASE_LIBRARY_DIRECTORIES if is_in_media_zone(d)
+)
+_NON_CLASSIFIABLE: frozenset[tuple[str, ...]] = frozenset(
+    (INTERIM_LIBRARY_DIR, *ARCHIVE_BASE_DIRECTORIES, *_MEDIA_SUBTREE)
+)
 
 
 def classifiable_categories() -> tuple[tuple[str, ...], ...]:
     """Semantic categories the AI may choose from — every base directory EXCEPT
-    the interim review bucket (the fallback, not a real category) and the Archive
-    folders (user-only preserve zones; the AI never files there)."""
+    the interim review bucket (the fallback, not a real category), the Archive
+    folders and the Media zone (user-only zones; the AI never files there).
+
+    Media is excluded for the same reason as Archive but with more force: the
+    files there are deliberately never read, so the model has no basis on which to
+    send anything into it, and a run must never move a document there by mistake."""
     return tuple(d for d in BASE_LIBRARY_DIRECTORIES if d not in _NON_CLASSIFIABLE)
 
 

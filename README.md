@@ -103,12 +103,26 @@ Work/
     Employment/   Administrative  Payslips
     Business/     Administrative  Invoices  Expenses  Clients  Misc
     Archive/          # your keep-as-is zone — the AI never files here
+Media/            # music and films you file BY HAND — never read, never renamed
+    Music/
+    Films/
 Manual_Review/    # safe catch-all (uncertain / unreadable)
 ```
 
 There are **no format buckets**: a photographed receipt saved as `.jpg` is classified by what it *contains* (→ `Personal/Administrative/...`), while a holiday photo goes to its event (`Personal/Trip-Spain-2025`). The format only decides which reader extracts the content, never the destination. Cross-cutting views ("all my bills") come from the catalog fiche (keywords/entities) and soft-links, not by duplicating folders. The taxonomy is a sane default you can adapt.
 
 **`Archive/` (Personal and Work) is your preserve zone.** Drop in anything you want kept **exactly as you arranged it** — backups, snapshots, old folders, a git repository. The AI **never files anything here on its own** (it's not a classification target — archiving is your deliberate act, and this avoids a catch-all magnet). `rescan` treats everything under `Archive/` like a git repository: it **reads the readable documents inside for search** (they enter the catalog) but **never renames, moves or reorganizes** them.
+
+**`Media/` is where music and films live, and nothing there is ever read.** Put your albums and your films in it **yourself** — the AI never files anything here either, and unlike `Archive/` it never *opens* what is inside: no audio is transcribed, no frame is extracted, no image is looked at. Not one byte of media leaves your machine.
+
+That is not a limitation, it is the point. Transcribing an album buys lyrics at best; describing frames of a film costs a great deal to learn what the title already said; and no model available here can recognise a piece of music from its sound.
+
+The AI is not switched off in this zone — it is **moved**. `rescan` gives it the **metadata written into the files** (ID3, Vorbis comments, MP4 atoms, container tags), the **filenames**, and the **folder name**, which for an album or a series is usually the most reliable identification there is. From those words it produces one fiche, so the folder becomes searchable.
+
+- **The folder is the unit, not the file.** One album = **one** AI call, whatever the number of tracks — they are one work, and asking twelve times would buy twelve near-identical answers.
+- **Nothing is renamed, moved or dated.** An album's track order *is* the album; a timestamp prefix would break it and every player that reads it. The catalogued name is the one you chose.
+- **Name your folders well** — `Miles Davis/Kind of Blue/` tells the app far more than `Music2/`, and it costs nothing. It matters most for files with no tags at all, which is the normal case for WAV.
+- **A media file dropped in the Inbox is still read** like anything else — it does not know it is music. Until that is handled, file music and films into `Media/` **by hand**, then run `procrafiler rescan`.
 
 ## AI Analysis (MVP)
 
