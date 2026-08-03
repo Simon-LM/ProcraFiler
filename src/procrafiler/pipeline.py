@@ -72,6 +72,7 @@ from procrafiler.taxonomy import (  # type: ignore[reportMissingImports]
     classifiable_categories,
     dispatch_for_filename,
     existing_category_paths,
+    is_in_media_zone,
     normalize_category_path,
     normalize_review_path,
 )
@@ -2592,6 +2593,142 @@ def _index_preserve_file_in_place(
     return True
 
 
+# How many files of one media folder are described to the AI. An album is a dozen
+# tracks and a series a couple of dozen episodes; past that the extra names repeat
+# and only cost tokens. The rest are still catalogued — they simply inherit the
+# folder's fiche without having been listed individually.
+MEDIA_FOLDER_SAMPLE = 40
+
+
+def _media_folder_description(files: list[Path], library_root: Path) -> str:
+    """One description for a whole media FOLDER, not one per file.
+
+    An album is a set. Fifteen tracks share one album name, one artist and one
+    year, and asking the model fifteen times what that album is would buy fifteen
+    near-identical answers at fifteen times the price. The folder is the unit that
+    means something, so it is the unit that gets the call — which is also the only
+    way the track LIST can inform the answer: `01 Prelude` … `12 Finale` says
+    "album" far more clearly than any one of those names alone.
+    """
+    from procrafiler.media_metadata import describe_media, format_media_description
+
+    shown = files[:MEDIA_FOLDER_SAMPLE]
+    first = describe_media(shown[0], library_root)
+    lines = [format_media_description(first)]
+
+    if len(files) > 1:
+        lines.append("")
+        lines.append(
+            f"- this folder holds {len(files)} media files in total; their names, in order:"
+        )
+        lines += [f"    · {path.name}" for path in shown]
+        if len(files) > len(shown):
+            lines.append(f"    · … and {len(files) - len(shown)} more")
+
+        # Tags that DIFFER between tracks (a title, a track number) are what make a
+        # set a series rather than one work; tags shared by all of them were already
+        # stated above and are not repeated.
+        per_file: list[str] = []
+        for path in shown[1:]:
+            described = describe_media(path, library_root)
+            distinct = {k: v for k, v in described.tags.items() if first.tags.get(k) != v}
+            if distinct:
+                per_file.append(f"    · {path.name}: " + ", ".join(f"{k}: {v}" for k, v in distinct.items()))
+        if per_file:
+            lines.append("- metadata that differs between them:")
+            lines += per_file
+    return "\n".join(lines)
+
+
+def _index_media_folder(
+    paths: RuntimePaths,
+    folder: Path,
+    files: list[Path],
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> int:
+    """Catalog a media folder from its metadata and names. Returns rows written.
+
+    The one place in ProcraFiler that catalogs a file WITHOUT reading it. No audio
+    is transcribed, no frame is extracted, no image is looked at — the analysis
+    call receives written metadata and folder naming, and nothing else (see
+    `media_metadata`). The files are not renamed, not moved and not dated: an
+    album's track order is the album.
+    """
+    description = _media_folder_description(files, paths.library_root)
+    analysis = None
+    if description.strip():
+        analysis = analyze_content(
+            description,
+            base_categories=[category_label(c) for c in classifiable_categories()],
+            existing_paths=[],
+            original_filename=folder.name,
+            source_folder=folder.name,
+            user_context=load_user_context(),
+            user_language=get_user_language(paths),
+            read_via="metadata",
+        )
+
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    now_iso = _utc_iso(now_utc)
+    relative_folder = "/".join(folder.relative_to(paths.library_root).parts)
+    written = 0
+    for media_file in files:
+        embedded = embedded_date(media_file, dispatch_for_filename(media_file.name).media_type)
+        document_dt = _resolve_document_date(
+            analysis.document_date if analysis is not None else None,
+            media_file, now_utc, embedded=embedded,
+        )
+        fiche: dict[str, Any] = {
+            # The user's own name, kept verbatim: whoever made this album named its
+            # tracks, and our naming convention is for documents.
+            "name": media_file.stem,
+            "document_date": analysis.document_date if analysis is not None else None,
+            "series": False,
+            "category_path": relative_folder or None,
+            # The folder's fiche, shared by every file in it — they ARE one work.
+            "summary": analysis.summary if analysis is not None else None,
+            "keywords": analysis.keywords if analysis is not None else [],
+            "entities": analysis.entities if analysis is not None else {},
+            "language": analysis.language if analysis is not None else None,
+            "original_filename": media_file.name,
+            "read_via": "metadata",  # never "text"/"ocr"/"vision": nothing was read
+            "provider": analysis.provider if analysis is not None else None,
+            "model": analysis.model if analysis is not None else None,
+            "analyzed_at": now_iso,
+            "effective_date": document_dt.strftime("%Y-%m-%d"),
+            "indexed_in_place": True,
+            "media_zone": True,  # catalogued from metadata alone; content never read
+        }
+        repo.upsert_document(
+            doc_id=str(uuid4()),
+            sha256=_file_sha256(media_file),
+            current_filename=media_file.name,
+            current_path=str(media_file),
+            status="LIBRARY_STORED",
+            updated_at_utc=now_iso,
+            flow_state="LIBRARY_STORED",
+            pending_decision=None,
+            content_json=json.dumps(fiche, ensure_ascii=True),
+        )
+        written += 1
+
+    emit(
+        f"   media indexed (not read): {relative_folder or folder.name} — "
+        f"{written} file(s), 1 AI call on metadata only"
+    )
+    _append_action_log(
+        paths, operation_id=str(uuid4()), action="media_folder_indexed", status="success",
+        message="Media folder catalogued from metadata and names; content never read.",
+        now_utc=now_utc, path_after=str(folder), features=features,
+        extra_fields={"files": written, "ai_calls": 1 if analysis is not None else 0},
+    )
+    return written
+
+
 def _ingest_new_library_file(
     paths: RuntimePaths,
     file_path: Path,
@@ -2956,6 +3093,31 @@ def run_rescan(
                 paths, operation_id=op, action="library_ingest_error", status="error",
                 message=f"Failed to ingest hand-placed file: {exc}",
                 now_utc=now_utc, path_before=str(new_path), features=features,
+            )
+
+    # The media zone splits off here, and this is the whole point of it. Everything
+    # else in this pass is READ; a media file is not opened at all, and its folder
+    # — not the file — is the unit that gets one AI call on written metadata.
+    media_to_index = [
+        p for p in repo_to_index if is_in_media_zone(p.relative_to(paths.library_root).parts)
+    ]
+    repo_to_index = [p for p in repo_to_index if p not in set(media_to_index)]
+
+    by_folder: dict[Path, list[Path]] = {}
+    for media_file in media_to_index:
+        by_folder.setdefault(media_file.parent, []).append(media_file)
+    for folder in sorted(by_folder):
+        try:
+            counts["indexed"] += _index_media_folder(
+                paths, folder, sorted(by_folder[folder]),
+                now_utc=now_utc, features=features, emit=emit,
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad folder must not abort the sync
+            emit(f"   ⚠ media index skipped ({folder.name}): {exc}")
+            _append_action_log(
+                paths, operation_id=op, action="media_index_error", status="error",
+                message=f"Failed to index media folder: {exc}",
+                now_utc=now_utc, path_before=str(folder), features=features,
             )
 
     # Index-only pass: read preserve-zone documents (repos + Archive) into the

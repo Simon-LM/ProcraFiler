@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from procrafiler.taxonomy import is_in_archive
+from procrafiler.taxonomy import is_in_archive, is_in_media_zone
 
 # Catalog status for a row whose file the user deleted by hand. The row is KEPT
 # (the fiche stays, the history is rich, and a re-deposit of the same content is
@@ -52,11 +52,19 @@ class RescanPlan:
 
 def _is_in_preserve_zone(path: Path, library_root: Path, repo_roots: list[Path]) -> bool:
     """A PRESERVE ZONE is kept exactly as the user arranged it — never renamed,
-    moved or dated — but indexed for search. Two kinds: a VCS repository (a dir
-    containing a `.git`) and an Archive folder (the user's own keep-as-is area)."""
+    moved or dated — but indexed for search. Three kinds: a VCS repository (a dir
+    containing a `.git`), an Archive folder (the user's own keep-as-is area), and
+    the Media zone (albums and films).
+
+    Media belongs here for a reason of its own. An album's tracks are already named
+    by whoever made them, and their order is the album: prefixing each one with a
+    timestamp would break the sequence and every player that reads it. What differs
+    is not whether the files are preserved — it is HOW they are indexed, and that
+    is the pipeline's decision, not this walker's."""
     if any(path.is_relative_to(root) for root in repo_roots):
         return True
-    return is_in_archive(path.relative_to(library_root).parts)
+    relative = path.relative_to(library_root).parts
+    return is_in_archive(relative) or is_in_media_zone(relative)
 
 
 def walk_library_files(library_root: Path) -> list[Path]:
