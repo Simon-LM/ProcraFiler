@@ -67,6 +67,24 @@ def _is_in_preserve_zone(path: Path, library_root: Path, repo_roots: list[Path])
     return is_in_archive(relative) or is_in_media_zone(relative)
 
 
+def walk_repository_roots(library_root: Path) -> list[Path]:
+    """Directories that ARE a version-controlled repository, sorted.
+
+    A repository is not a pile of documents that happen to share a folder — it is
+    one object, with one identity, and its files only mean anything together. So it
+    gets one catalog entry, and the pipeline never reads its working tree file by
+    file.
+
+    Recognised by the `.git` entry itself rather than by where the user put it: a
+    repository must be treated as one whether it sits in `Archive/`, at the root of
+    the library, or three folders down. `.git` is a directory in an ordinary clone
+    and a FILE in a worktree or a submodule, so only the name is matched.
+    """
+    if not library_root.exists():
+        return []
+    return sorted({p.parent for p in library_root.rglob(".git")})
+
+
 def walk_library_files(library_root: Path) -> list[Path]:
     """Every REAL DOCUMENT file under the library that the normal flow may file
     (sorted). Excluded, because filing/renaming them would do harm:

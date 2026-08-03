@@ -2731,6 +2731,171 @@ def _index_media_folder(
     return written
 
 
+# The README is the one file in a repository written to say what the repository
+# IS. Everything else says what it does.
+_README_NAMES = ("readme.md", "readme.txt", "readme.rst", "readme", "readme.markdown")
+
+# Enough of it to identify the project; a long one is a manual, and the rest of the
+# manual adds nothing a catalog entry can use.
+_README_CHARS = 4000
+
+# How many extensions are worth naming in the inventory. Past a handful they are
+# build artefacts and dot-files, and they say nothing about what the project is.
+_TOP_EXTENSIONS = 6
+
+
+def _repository_readme(repo_root: Path) -> str:
+    for entry in sorted(repo_root.iterdir()) if repo_root.is_dir() else []:
+        if entry.is_file() and entry.name.lower() in _README_NAMES:
+            try:
+                return entry.read_text("utf-8", errors="replace")[:_README_CHARS]
+            except OSError:
+                return ""
+    return ""
+
+
+def _repository_inventory(repo_root: Path) -> tuple[int, list[tuple[str, int]]]:
+    """How many files the working tree holds, and which extensions dominate.
+
+    `.git` is skipped, as is everything hidden — the history is never read, and a
+    catalog entry has no use for it.
+    """
+    counts: dict[str, int] = {}
+    total = 0
+    for path in repo_root.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        if any(part.startswith(".") for part in path.relative_to(repo_root).parts):
+            continue
+        total += 1
+        suffix = path.suffix.lower().lstrip(".")
+        if suffix:
+            counts[suffix] = counts.get(suffix, 0) + 1
+    top = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:_TOP_EXTENSIONS]
+    return (total, top)
+
+
+def _repository_description(repo_root: Path, library_root: Path) -> str:
+    """What the analysis call is told about a repository.
+
+    Its README and its shape — never its files one by one. A repository's working
+    tree is dozens of documents that are only meaningful together, and reading each
+    one is both expensive and beside the point: nobody searches for "the third
+    paragraph of a helper module", they search for the project.
+    """
+    total, top = _repository_inventory(repo_root)
+    try:
+        location = "/".join(repo_root.relative_to(library_root).parts)
+    except ValueError:
+        location = repo_root.name
+
+    lines = [
+        "This is a SOFTWARE REPOSITORY (a version-controlled project), catalogued as "
+        "ONE object. Its files were not read individually and its history was not "
+        "read at all. Identify the PROJECT from what follows, and say plainly when "
+        "there is not enough to go on.",
+        "",
+        f"- folder name: {repo_root.name}",
+        f"- location in the library: {location}",
+        f"- {total} file(s) in the working tree",
+    ]
+    if top:
+        lines.append(
+            "- most common file types: "
+            + ", ".join(f"{extension} ({count})" for extension, count in top)
+        )
+    readme = _repository_readme(repo_root)
+    if readme.strip():
+        lines += ["", "Its README, which is where a project says what it is:", readme]
+    else:
+        lines.append("- no README: the name and the file types above are all there is")
+    return "\n".join(lines)
+
+
+def _index_repository(
+    paths: RuntimePaths,
+    repo_root: Path,
+    *,
+    now_utc: datetime | None,
+    features: dict[str, bool],
+    emit: ProgressFn,
+) -> bool:
+    """Catalog a repository as ONE entry. Returns True when a row was written.
+
+    Measured on ProcraFiler's own tree before this existed: 33 readable files,
+    33 paid analysis calls, one per `.md`, `.txt`, `.sh` and `.pdf` under 2 MB. The
+    figure is entirely a property of the repository — a project with a committed
+    `node_modules` would run to thousands — and every one of those calls produced a
+    fiche nobody would ever search for.
+
+    The history is never touched: `.git` is skipped here as everywhere, so no
+    commit, no blob and no branch is read.
+    """
+    description = _repository_description(repo_root, paths.library_root)
+    analysis = analyze_content(
+        description,
+        base_categories=[category_label(c) for c in classifiable_categories()],
+        existing_paths=[],
+        original_filename=repo_root.name,
+        source_folder=repo_root.parent.name,
+        user_context=load_user_context(),
+        user_language=get_user_language(paths),
+        read_via="repository",
+    )
+
+    now_iso = _utc_iso(now_utc)
+    try:
+        relative = "/".join(repo_root.parent.relative_to(paths.library_root).parts)
+    except ValueError:
+        relative = ""
+    fiche: dict[str, Any] = {
+        # The user's folder name, kept verbatim: a repository is known by its name.
+        "name": repo_root.name,
+        "document_date": analysis.document_date if analysis is not None else None,
+        "series": False,
+        "category_path": relative or None,
+        "summary": analysis.summary if analysis is not None else None,
+        "keywords": analysis.keywords if analysis is not None else [],
+        "entities": analysis.entities if analysis is not None else {},
+        "language": analysis.language if analysis is not None else None,
+        "original_filename": repo_root.name,
+        "read_via": "repository",  # not "text": no file of it was read as a document
+        "provider": analysis.provider if analysis is not None else None,
+        "model": analysis.model if analysis is not None else None,
+        "analyzed_at": now_iso,
+        "indexed_in_place": True,
+        "repository": True,
+    }
+    repo = CatalogRepository(paths.catalog_db_file)
+    repo.init_schema()
+    repo.upsert_document(
+        doc_id=str(uuid4()),
+        # A directory has no content hash. Derived from its path so it is stable
+        # across rescans; a repository MOVED by hand is therefore re-catalogued
+        # under its new location rather than followed, which costs one call.
+        sha256=hashlib.sha256(str(repo_root).encode("utf-8")).hexdigest(),
+        current_filename=repo_root.name,
+        current_path=str(repo_root),
+        status="LIBRARY_STORED",
+        updated_at_utc=now_iso,
+        flow_state="LIBRARY_STORED",
+        pending_decision=None,
+        content_json=json.dumps(fiche, ensure_ascii=True),
+    )
+    total, _top = _repository_inventory(repo_root)
+    emit(
+        f"   repository indexed as one entry: {repo_root.name} — "
+        f"{total} file(s) in its tree, 1 AI call (history never read)"
+    )
+    _append_action_log(
+        paths, operation_id=str(uuid4()), action="repository_indexed", status="success",
+        message="Repository catalogued as a single entry; its files were not read individually.",
+        now_utc=now_utc, path_after=str(repo_root), features=features,
+        extra_fields={"files_in_tree": total},
+    )
+    return True
+
+
 def _ingest_new_library_file(
     paths: RuntimePaths,
     file_path: Path,
@@ -2968,7 +3133,12 @@ def run_rescan(
     INDEXED in place into the catalog for search. The catalogued NAME also follows
     your filename — renaming a file by hand syncs the fiche's display name (no AI),
     so search shows the name you chose. Every action is logged."""
-    from procrafiler.rescan import reconcile, walk_indexable_files, walk_library_files
+    from procrafiler.rescan import (
+        reconcile,
+        walk_indexable_files,
+        walk_library_files,
+        walk_repository_roots,
+    )
 
     counts = {"moved": 0, "readded": 0, "duplicates": 0, "deleted": 0, "new": 0, "indexed": 0, "renamed": 0}
     repo = CatalogRepository(paths.catalog_db_file)
@@ -2978,14 +3148,43 @@ def run_rescan(
     # are not in `walk_library_files`, and without this every one of them was
     # declared deleted on the next rescan — an archived document, an album, a
     # repository's files — while sitting untouched on disk.
+    op = str(uuid4())
     preserved = walk_indexable_files(paths.library_root)
-    plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256, preserved)
-    # Preserve-zone docs (VCS repos + Archive folders + Media) not yet catalogued → index.
+    # A repository is ONE object, so its own directory is what the catalog holds and
+    # what must count as present — otherwise its single row is declared deleted on
+    # the next pass, exactly as every preserve-zone row used to be.
+    repository_roots = walk_repository_roots(paths.library_root)
+    plan = reconcile(
+        walk_library_files(paths.library_root), rows, _file_sha256, preserved + repository_roots
+    )
+    # Preserve-zone docs (Archive folders + Media) not yet catalogued → index.
     known_paths = {str(r.get("current_path")) for r in rows}
     repo_to_index = [p for p in preserved if str(p) not in known_paths]
 
+    # Files that belong to a repository are covered by its single entry and must
+    # never be read one by one. Filtered out here rather than in the walker so they
+    # stay in `preserved` above: rows an OLDER version already created for them keep
+    # matching a real file instead of being wiped.
+    if repository_roots:
+        repo_to_index = [
+            p for p in repo_to_index
+            if not any(p.is_relative_to(root) for root in repository_roots)
+        ]
+    for repository in repository_roots:
+        if str(repository) in known_paths:
+            continue
+        try:
+            if _index_repository(paths, repository, now_utc=now_utc, features=features, emit=emit):
+                counts["indexed"] += 1
+        except Exception as exc:  # noqa: BLE001 — one bad repo must not abort the sync
+            emit(f"   ⚠ repository index skipped ({repository.name}): {exc}")
+            _append_action_log(
+                paths, operation_id=op, action="repository_index_error", status="error",
+                message=f"Failed to index repository: {exc}",
+                now_utc=now_utc, path_before=str(repository), features=features,
+            )
+
     now_iso = _utc_iso(now_utc)
-    op = str(uuid4())
     root = paths.library_root
 
     def _rel(path: Any) -> str:
