@@ -21,3 +21,10 @@ from pathlib import Path
 
 # Force the offline env file for the whole suite (override anything inherited).
 os.environ["PROCRAFILER_ENV_FILE"] = str(Path(__file__).resolve().parent / "empty.env")
+
+# The price refresh is the one thing in the app that reaches the network without an
+# API key, so the `.env` guard above does not stop it: a run started by a test finds
+# no refresh stamp, decides it is due, and calls GitHub. Switched off for the whole
+# suite — the tests that exercise refreshing turn it back on and point it at a
+# local URL or a mock, which wins because it is already in `os.environ`.
+os.environ["PROCRAFILER_PRICING_REFRESH"] = "off"
