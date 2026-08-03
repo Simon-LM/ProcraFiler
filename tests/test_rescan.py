@@ -206,20 +206,26 @@ class TestRunRescanIntegration(unittest.TestCase):
         self.assertFalse(new.exists())
         self.assertEqual(self.repo.find_by_current_path(str(prefixed))["doc_id"], "doc-caf")
 
-    def test_repo_document_is_indexed_in_place_not_renamed(self) -> None:
-        # A git repo's working-tree doc is read into the catalog for search but
-        # NEVER renamed/moved/dated; .git internals are not catalogued.
+    def test_a_repository_is_catalogued_as_one_entry_not_file_by_file(self) -> None:
+        # A repository is ONE object: its working tree is not a pile of documents
+        # that happen to share a folder, and reading each file cost a paid AI call
+        # per file (33 of them on ProcraFiler's own tree). Nothing is renamed,
+        # moved or dated, and .git is never catalogued.
         repo_dir = self.paths.library_root / "Work" / "Business" / "VPS" / "Backup" / "repo"
         (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         (repo_dir / ".git" / "HEAD").write_text("ref: refs/heads/main", encoding="utf-8")
         guide = repo_dir / "GUIDE.md"
         guide.write_text("# Guide\nRevocation procedure for SSH keys.", encoding="utf-8")
+
         counts = run_rescan(self.paths, now_utc=self.now, features={}, emit=self._emit)
-        self.assertEqual(counts["indexed"], 1)
+
+        self.assertEqual(counts["indexed"], 1, "one entry for the repository")
         self.assertTrue(guide.is_file())  # untouched, same name and place
-        row = self.repo.find_by_current_path(str(guide))
-        self.assertIsNotNone(row)
-        self.assertIn("indexed_in_place", row["content_json"])
+        row = self.repo.find_by_current_path(str(repo_dir))
+        self.assertIsNotNone(row, "the repository itself is not in the catalog")
+        self.assertIn("repository", row["content_json"])
+        # Its files are covered by that one entry, never catalogued individually.
+        self.assertIsNone(self.repo.find_by_current_path(str(guide)))
         # .git internals are never catalogued
         self.assertIsNone(self.repo.find_by_current_path(str(repo_dir / ".git" / "HEAD")))
 
