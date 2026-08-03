@@ -216,8 +216,11 @@ class DegradationTests(_Patched):
         )
         captured: dict[str, int | None] = {}
 
-        def _fake_extract(_src, dst, *, max_seconds=None):  # noqa: ANN001
-            captured["max_seconds"] = max_seconds
+        def _fake_extract(_src, dst, *, max_seconds=None, speed=1.0, start_seconds=None):  # noqa: ANN001
+            # The speech probe extracts short windows first; only the full pass
+            # carries no start offset, and that is the one this test is about.
+            if start_seconds is None:
+                captured["max_seconds"] = max_seconds
             dst.write_bytes(b"audio")
             return True
 
