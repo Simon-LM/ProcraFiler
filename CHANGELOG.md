@@ -9,6 +9,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **Anything filed in a preserve zone vanished from the catalog at the next rescan.** An archived document, a music album, a repository's files: catalogued by one `rescan`, declared DELETED by the next — with the stored path wiped — while the file sat untouched on disk. Search lost it silently, and since a row without a path no longer matches anything, a later rescan would also re-read and **re-bill** everything it had already analysed.
+
+  The cause was a mismatch of scope. `reconcile` was handed the files the pass *manages* (`walk_library_files`, which deliberately excludes preserve zones) together with *all* the catalog rows, and decided deletion by "is this row's path in that list". A row is deleted when its **file** is gone, not when this pass happens not to manage it. Preserved files are now passed in as existing-but-unmanaged: they count as present, and they are still never moved, renamed or re-dated.
+
+  It had been there since `Archive/` was introduced and it shipped with the `Media/` zone. Nothing caught it because every test ran a **single** rescan; the failure only appears on the second. The new tests run three.
+
 ### Added
 
 - **Prices now refresh themselves.** The table shipped with the app is dated the day the release was cut and never moves, so an installation left alone prices every run against figures that stopped being true — while printing them with a date that makes them look checked. ProcraFiler now fetches `pricing.json` from the companion repository (`docs/ai-pricing-source.md`), where a scheduled job re-verifies it weekly and a human reviews any change before publication.

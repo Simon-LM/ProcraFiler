@@ -117,16 +117,32 @@ def reconcile(
     disk_files: list[Path],
     rows: list[Row],
     sha256_of: Callable[[Path], str],
+    preserved_files: list[Path] | None = None,
 ) -> RescanPlan:
     """Pure reconciliation of the library against the catalog rows. ``sha256_of``
-    is invoked ONLY for files at a path the catalog doesn't already know."""
+    is invoked ONLY for files at a path the catalog doesn't already know.
+
+    ``disk_files`` are the files this pass MANAGES — the ones it may see as moved,
+    renamed, duplicated or newly arrived. ``preserved_files`` are the ones it must
+    only acknowledge as existing: everything inside a VCS repository, an Archive
+    folder or the Media zone.
+
+    The distinction is load-bearing, and getting it wrong was a real bug. Deletion
+    was decided by "is this row's path in the managed list", so every preserve-zone
+    row — an archived document, a music album, a repository's files — was marked
+    DELETED on the very next rescan, its path wiped, while the file sat untouched
+    on disk. A row is deleted when its FILE is gone, not when this pass happens not
+    to manage it.
+    """
     plan = RescanPlan()
 
     live_rows = [r for r in rows if r.get("status") != DELETED_STATUS]
     deleted_rows = [r for r in rows if r.get("status") == DELETED_STATUS]
 
     live_by_path = {str(r.get("current_path")): r for r in live_rows}
-    disk_set = {str(p) for p in disk_files}
+    # Everything that EXISTS, managed or merely acknowledged. Used for presence;
+    # `disk_files` alone still decides what may be moved or re-ingested.
+    disk_set = {str(p) for p in disk_files} | {str(p) for p in (preserved_files or [])}
 
     # Files already known by their path are untouched (and never hashed).
     unknown_disk = [p for p in disk_files if str(p) not in live_by_path]

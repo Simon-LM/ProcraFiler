@@ -2974,10 +2974,15 @@ def run_rescan(
     repo = CatalogRepository(paths.catalog_db_file)
     repo.init_schema()
     rows = repo.list_documents()
-    plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256)
-    # Preserve-zone docs (VCS repos + Archive folders) not yet catalogued → index.
+    # Preserve-zone files are handed to `reconcile` as EXISTING but unmanaged. They
+    # are not in `walk_library_files`, and without this every one of them was
+    # declared deleted on the next rescan — an archived document, an album, a
+    # repository's files — while sitting untouched on disk.
+    preserved = walk_indexable_files(paths.library_root)
+    plan = reconcile(walk_library_files(paths.library_root), rows, _file_sha256, preserved)
+    # Preserve-zone docs (VCS repos + Archive folders + Media) not yet catalogued → index.
     known_paths = {str(r.get("current_path")) for r in rows}
-    repo_to_index = [p for p in walk_indexable_files(paths.library_root) if str(p) not in known_paths]
+    repo_to_index = [p for p in preserved if str(p) not in known_paths]
 
     now_iso = _utc_iso(now_utc)
     op = str(uuid4())
