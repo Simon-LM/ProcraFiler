@@ -40,7 +40,12 @@ from pathlib import Path
 
 from procrafiler.ai_highlights import select_highlights  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_visual  # type: ignore[reportMissingImports]
-from procrafiler.ai_transcribe import TranscriptResult, format_transcript, transcribe  # type: ignore[reportMissingImports]
+from procrafiler.ai_transcribe import (  # type: ignore[reportMissingImports]
+    TranscriptResult,
+    format_transcript,
+    rescale_to_source_time,
+    transcribe,
+)
 from procrafiler.frame_sampling import (  # type: ignore[reportMissingImports]
     frame_budget,
     plan_frame_timestamps,
@@ -53,6 +58,7 @@ from procrafiler.media_tools import (  # type: ignore[reportMissingImports]
     extract_frames,
     perceptual_hash,
     probe_media,
+    transcribe_speed,
 )
 
 # Whatever the duration says it deserves, never send more stills than this in one
@@ -84,6 +90,68 @@ def max_transcribe_seconds() -> int:
     except ValueError:
         return DEFAULT_MAX_TRANSCRIBE_SECONDS
     return value if value > 0 else DEFAULT_MAX_TRANSCRIBE_SECONDS
+
+
+# Below this length, probing costs about as much as simply transcribing the whole
+# thing, so there is nothing to save and one more round trip to lose.
+MIN_PROBE_DURATION = 2 * 60
+
+# Three windows, not one at the front. A conference opens on music, a film on its
+# titles, a phone recording on fumbling — judging any of those from their first ten
+# seconds would throw away the recording. Spread across the file, silence in all
+# three is a real answer.
+PROBE_WINDOWS = 3
+PROBE_WINDOW_SECONDS = 10
+
+# The probe only has to answer "is anyone speaking", not what they said, so it can
+# afford the fastest speed we allow. Measured on a real 6m41 music file: 30 s
+# billed instead of 401 s.
+PROBE_SPEED = 1.5
+
+# ffmpeg's -t caps the OUTPUT, so a window submits PROBE_WINDOW_SECONDS and covers
+# PROBE_WINDOW_SECONDS * PROBE_SPEED of the recording. The speed-up therefore buys
+# more of the file heard for the same price rather than a cheaper probe — which is
+# the better trade when the question is "is anyone speaking anywhere in here".
+PROBE_SOURCE_SPAN = PROBE_WINDOW_SECONDS * PROBE_SPEED
+
+
+def _probe_offsets(duration: float) -> list[float]:
+    """Where to listen: early, middle, late — never at the very edges, which are
+    routinely a fade or a black frame.
+
+    The span each window covers is reserved at the end, so the last one lands
+    inside the recording rather than running off it."""
+    usable = max(0.0, duration - PROBE_SOURCE_SPAN)
+    return [round(usable * fraction, 3) for fraction in (0.05, 0.45, 0.85)][:PROBE_WINDOWS]
+
+
+def has_any_speech(source: Path, duration: float, work: Path) -> tuple[bool, int]:
+    """Listen to a few seconds here and there. Returns (speech found, seconds billed).
+
+    Two audio files in a real run were transcribed end to end — ten minutes of
+    music, 62% of that run's bill — to discover there was nothing to transcribe.
+    This buys that answer for a few seconds instead.
+
+    It stops at the FIRST window containing speech, which is the common case and
+    makes the usual cost one window rather than three. Anything that goes wrong —
+    extraction failure, a provider error — is treated as "there may well be
+    speech": a probe must never be the reason a real recording goes unread.
+    """
+    billed = 0
+    for index, offset in enumerate(_probe_offsets(duration)):
+        window = work / f"probe_{index}.mp3"
+        if not extract_audio(
+            source, window,
+            start_seconds=offset, max_seconds=PROBE_WINDOW_SECONDS, speed=PROBE_SPEED,
+        ):
+            return (True, billed)
+        result = transcribe(window)
+        billed += result.audio_seconds
+        if result.reason:
+            return (True, billed)
+        if result.has_speech:
+            return (True, billed)
+    return (False, billed)
 
 
 def _assemble(transcript_text: str, visual_text: str, probe: MediaProbe, notes: list[str]) -> str:
@@ -129,25 +197,50 @@ def read_audio_video(
         work = Path(workspace)
 
         if probe.has_audio:
-            cap = max_transcribe_seconds()
-            truncated = probe.duration_seconds > cap
-            audio_path = work / "audio.mp3"
-            if extract_audio(path, audio_path, max_seconds=cap if truncated else None):
-                if truncated:
-                    notes.append(
-                        f"only the first {cap // 60} minutes were transcribed "
-                        f"(recording is {int(probe.duration_seconds // 60)} minutes)"
-                    )
-                transcript = transcribe(audio_path)
-                if transcript.reason:
-                    notes.append(f"transcription unavailable ({transcript.reason})")
-                elif not transcript.has_speech:
-                    # Verified against the live API: music or noise returns 200
-                    # with an empty transcript. Saying so is useful content — it
-                    # tells the analysis this is not a spoken document.
-                    notes.append("the audio contains no recognisable speech (music, noise or silence)")
+            # Listen to a few seconds first, on a recording long enough for it to
+            # pay. Music, ambience and wind all transcribe to nothing, and paying
+            # for the whole file to learn that is the single most wasteful thing
+            # this reader can do.
+            speech_expected = True
+            probe_seconds = 0
+            if probe.duration_seconds >= MIN_PROBE_DURATION:
+                speech_expected, probe_seconds = has_any_speech(path, probe.duration_seconds, work)
+
+            if not speech_expected:
+                transcript = TranscriptResult(audio_seconds=probe_seconds)
+                notes.append(
+                    "the audio contains no recognisable speech (music, noise or silence) — "
+                    f"heard {PROBE_WINDOWS} sample(s) across the recording instead of "
+                    "transcribing all of it"
+                )
             else:
-                notes.append("the audio track could not be extracted")
+                cap = max_transcribe_seconds()
+                truncated = probe.duration_seconds > cap
+                speed = transcribe_speed()
+                audio_path = work / "audio.mp3"
+                if extract_audio(
+                    path, audio_path, max_seconds=cap if truncated else None, speed=speed
+                ):
+                    if truncated:
+                        notes.append(
+                            f"only the first {cap // 60} minutes were transcribed "
+                            f"(recording is {int(probe.duration_seconds // 60)} minutes)"
+                        )
+                    # The timestamps come back on the SPED-UP clock. Putting them
+                    # back on the recording's own clock has to happen here, before
+                    # anything reasons about when things were said — the frame
+                    # planner would otherwise cut every still from the wrong moment.
+                    transcript = rescale_to_source_time(transcribe(audio_path), speed)
+                    transcript.audio_seconds += probe_seconds
+                    if transcript.reason:
+                        notes.append(f"transcription unavailable ({transcript.reason})")
+                    elif not transcript.has_speech:
+                        # Verified against the live API: music or noise returns 200
+                        # with an empty transcript. Saying so is useful content — it
+                        # tells the analysis this is not a spoken document.
+                        notes.append("the audio contains no recognisable speech (music, noise or silence)")
+                else:
+                    notes.append("the audio track could not be extracted")
         else:
             notes.append("this file has no audio track")
 

@@ -48,7 +48,7 @@ from pathlib import Path
 from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
 from procrafiler.av_reader import MAX_FRAMES_HARD_CAP, max_transcribe_seconds  # type: ignore[reportMissingImports]
 from procrafiler.frame_sampling import frame_budget  # type: ignore[reportMissingImports]
-from procrafiler.media_tools import probe_media  # type: ignore[reportMissingImports]
+from procrafiler.media_tools import probe_media, transcribe_speed  # type: ignore[reportMissingImports]
 from procrafiler.taxonomy import dispatch_for_filename  # type: ignore[reportMissingImports]
 
 # Providers that charge for a call. Everything else runs on the user's own
@@ -200,7 +200,12 @@ def estimate_ai_calls(work_sets: list[tuple[str, list[Path]]]) -> AICallEstimate
                 av_files += 1
                 if probe.has_audio:
                     transcribe_calls += 1
-                    audio_seconds += int(min(probe.duration_seconds, max_transcribe_seconds()))
+                    # Billed seconds, not recorded seconds: the audio is sped up
+                    # before being sent, and the provider charges for what it
+                    # receives. Forecasting the raw duration would over-state every
+                    # recording by the speed factor — 20% at the default.
+                    sent = min(probe.duration_seconds, max_transcribe_seconds()) / transcribe_speed()
+                    audio_seconds += int(sent)
                 if probe.has_video:
                     frames = min(frame_budget(probe.duration_seconds), MAX_FRAMES_HARD_CAP)
                     av_frames += frames

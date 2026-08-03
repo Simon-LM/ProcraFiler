@@ -110,7 +110,18 @@ class RealRecordingTests(unittest.TestCase):
         print(f"\nreading saved to {saved}")
         print()
 
-        self.assertTrue(result.is_readable, f"nothing could be read: {result.reason}")
+        # A file with no speech and no pictures — a music track, an ambience
+        # recording — is correctly read as "nothing to read here", and that is an
+        # ANSWER, not a failure of this harness. Demanding readable text would fail
+        # the run on exactly the files the speech probe exists to handle cheaply.
+        no_speech = any("no recognisable speech" in note for note in result.notes)
+        if not (probe.has_video or not no_speech):
+            self.assertFalse(
+                result.is_readable,
+                "an audio-only recording with no speech should have nothing to read",
+            )
+        else:
+            self.assertTrue(result.is_readable, f"nothing could be read: {result.reason}")
 
         if probe.has_audio and result.transcript and result.transcript.has_speech:
             transcript = result.transcript

@@ -222,6 +222,39 @@ def transcribe(
     return TranscriptResult(reason=f"transcription_failed:{last_error}")
 
 
+def rescale_to_source_time(result: TranscriptResult, speed: float) -> TranscriptResult:
+    """Put the timestamps back onto the ORIGINAL recording's clock.
+
+    The audio is sped up before being sent, because transcription is billed by the
+    second submitted. The transcript therefore comes back on the sped-up clock: a
+    passage the model reports at 100 s of a 1.25x file happened at 125 s of the
+    real recording.
+
+    Nothing else in the chain knows that. The frame planner takes these timestamps
+    at face value and hands them to ffmpeg, so forgetting this multiplication does
+    not raise, does not fail a test, and does not look wrong in a log — it silently
+    extracts every still from the wrong moment of the film, drifting further the
+    later the passage. That is why the conversion is a named function with its own
+    tests rather than a `* speed` buried in the reader.
+
+    `audio_seconds` is deliberately NOT rescaled: it is what the provider billed,
+    and the bill is for the shortened audio that was actually sent.
+    """
+    if speed == 1.0 or not result.segments:
+        return result
+    return TranscriptResult(
+        text=result.text,
+        segments=[
+            TranscriptSegment(start=segment.start * speed, end=segment.end * speed, text=segment.text)
+            for segment in result.segments
+        ],
+        audio_seconds=result.audio_seconds,
+        provider=result.provider,
+        model=result.model,
+        reason=result.reason,
+    )
+
+
 def format_transcript(result: TranscriptResult, *, max_chars: int = 6000) -> str:
     """The transcript as it goes to the analysis, timestamped.
 

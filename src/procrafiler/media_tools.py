@@ -19,6 +19,7 @@ what the AV reader will spend money on, and two of them can make it spend nothin
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -120,19 +121,76 @@ def probe_media(path: Path) -> MediaProbe:
     )
 
 
-def extract_audio(source: Path, destination: Path, *, max_seconds: int | None = None) -> bool:
+# Speeding the audio up before sending it is a direct discount: transcription is
+# billed by the SECOND SUBMITTED, so 1.25x is 20% off and 1.5x is 33% off, on every
+# recording. Past 1.5x recognition quality falls away; 1.25x is the safe default on
+# a file whose recording conditions are unknown — a phone memo in a noisy room has
+# far less margin than a studio interview. Raise it with PROCRAFILER_TRANSCRIBE_SPEED.
+DEFAULT_TRANSCRIBE_SPEED = 1.25
+MAX_TRANSCRIBE_SPEED = 1.5
+
+# ffmpeg's atempo filter only accepts 0.5–2.0 per instance. Everything we allow is
+# inside that, so a single instance always suffices.
+_ATEMPO_MIN = 0.5
+_ATEMPO_MAX = 2.0
+
+
+def transcribe_speed() -> float:
+    """How much to speed the audio up before paying to transcribe it.
+
+    Clamped rather than trusted: a user who sets 4x would get a cheap bill and an
+    unusable transcript, which is the worst of both. Anything unparseable falls
+    back to the default.
+    """
+    raw = os.environ.get("PROCRAFILER_TRANSCRIBE_SPEED", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_TRANSCRIBE_SPEED
+    return min(max(value, 1.0), MAX_TRANSCRIBE_SPEED)
+
+
+def _audio_filters(speed: float) -> list[str]:
+    if speed <= 1.0 or not (_ATEMPO_MIN <= speed <= _ATEMPO_MAX):
+        return []
+    return ["-filter:a", f"atempo={speed:g}"]
+
+
+def extract_audio(
+    source: Path,
+    destination: Path,
+    *,
+    max_seconds: int | None = None,
+    speed: float = 1.0,
+    start_seconds: float | None = None,
+) -> bool:
     """Pull the audio track out as a small mono 16 kHz MP3.
 
     Downmixed and downsampled on purpose: speech recognition gains nothing from
     stereo or from 48 kHz, and the upload is what costs time on a slow connection.
     A two-hour recording becomes a few megabytes.
+
+    `speed` above 1.0 makes the file SHORTER, and transcription is billed by the
+    second submitted — so it is a straight discount. The price is that every
+    timestamp coming back is in the sped-up timeline and must be multiplied by this
+    same factor to mean anything about the original; see
+    `ai_transcribe.rescale_to_source_time`, which exists solely to make that hard to
+    forget.
+
+    `start_seconds` uses ffmpeg's fast seek (before `-i`), so sampling a window
+    deep inside a two-hour file costs a jump rather than a decode.
     """
     if not ffmpeg_available() or not source.is_file():
         return False
-    command = ["ffmpeg", "-v", "error", "-y", "-i", str(source)]
+    command = ["ffmpeg", "-v", "error", "-y"]
+    if start_seconds is not None and start_seconds > 0:
+        command += ["-ss", f"{start_seconds:.3f}"]
+    command += ["-i", str(source)]
     if max_seconds and max_seconds > 0:
         command += ["-t", str(int(max_seconds))]
-    command += ["-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", str(destination)]
+    command += ["-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k"]
+    command += _audio_filters(speed)
+    command.append(str(destination))
 
     code, _out, _err = _run(command, timeout=_EXTRACT_TIMEOUT)
     # ffmpeg can exit 0 having written nothing at all (a video whose "audio track"
