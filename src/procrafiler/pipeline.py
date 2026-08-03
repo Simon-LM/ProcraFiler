@@ -40,11 +40,13 @@ from procrafiler.ai_grouping import propose_grouping  # type: ignore[reportMissi
 from procrafiler.ai_estimate import estimate_ai_calls, format_estimate  # type: ignore[reportMissingImports]
 from procrafiler.cost_forecast import (  # type: ignore[reportMissingImports]
     CostForecast,
+    _config_dir,
     forecast_cost,
     format_cost_forecast,
     max_run_cost,
 )
 from procrafiler.pricing import format_amount  # type: ignore[reportMissingImports]
+from procrafiler.pricing_refresh import refresh_if_due  # type: ignore[reportMissingImports]
 from procrafiler.usage_meter import (  # type: ignore[reportMissingImports]
     RunUsage,
     format_usage_report,
@@ -3532,6 +3534,14 @@ def _process_all_inbox_files(
             f"   ⚠ {inbox_total} files in the Inbox to read & classify — "
             "this may take a while and use AI (API cost, or local CPU/GPU)."
         )
+
+    # Current rates, at most once a week, never blocking: a fetch that fails leaves
+    # the run on the table it already has. Done HERE rather than lazily inside the
+    # price lookup so the network call happens once, in one known place, before any
+    # figure is quoted — and so nothing that merely reads a price can ever block.
+    refreshed = refresh_if_due(_config_dir(paths))
+    if refreshed is not None:
+        emit(f"   prices refreshed — rates of {refreshed.as_of()}")
 
     # What this will cost, before spending it. Extensions only, no file opened.
     estimate = estimate_ai_calls(work_sets)

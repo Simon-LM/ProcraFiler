@@ -12,8 +12,9 @@ Three sources, first match wins:
 1. **the user's own file** — `<config>/pricing.json`. Always wins, for negotiated
    rates, another provider, or simply because they read the page more recently
    than we did;
-2. **a refreshed copy** — reserved for the companion repository described in
-   `docs/ai-pricing-source.md`; absent today;
+2. **a refreshed copy** — `<config>/pricing.cached.json`, downloaded weekly from
+   the companion repository described in `docs/ai-pricing-source.md` (see
+   `pricing_refresh`). Present only once a refresh has succeeded;
 3. **the table shipped in the package** — always present, works offline, dated.
 
 An unknown model yields **no price at all**, never zero. A run whose model is
@@ -178,11 +179,22 @@ def _load_file(path: Path, origin: str) -> PriceTable | None:
 
 def load_price_table(config_dir: Path | None = None) -> PriceTable | None:
     """The table in force. None only if even the packaged copy is unusable, in
-    which case the app must report costs as unavailable rather than as zero."""
+    which case the app must report costs as unavailable rather than as zero.
+
+    Reads only; the download lives in `pricing_refresh`. Keeping the network out of
+    this function means every consumer of a price — a forecast, a usage report, the
+    spend ceiling — can call it freely without any of them wondering whether it will
+    block.
+    """
     if config_dir is not None:
         user_table = _load_file(config_dir / "pricing.json", "your own pricing.json")
         if user_table is not None:
             return user_table
+        # The user's own file outranks it: someone who wrote down a negotiated rate
+        # must not have it overwritten by a public one, however fresh.
+        cached = _load_file(config_dir / "pricing.cached.json", "downloaded")
+        if cached is not None:
+            return cached
     return _load_file(_PACKAGED_TABLE, "shipped with the app")
 
 

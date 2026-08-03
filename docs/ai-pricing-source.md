@@ -87,11 +87,16 @@ Field by field, and why each exists:
 | `display_name` | The marketing name, kept only so a diff is readable by a human. Never used for matching. |
 
 Units are explicit in the key name (`in_per_mtok`, `out_per_mtok`,
-`per_1k_pages`) so a consumer cannot silently apply a per-token price to a
-per-page model. **Do not** add a generic `price` field.
+`per_1k_pages`, `per_audio_minute`) so a consumer cannot silently apply a
+per-token price to a per-page model. **Do not** add a generic `price` field.
 
-Only models actually consumed need to be present. ProcraFiler uses three today:
-`mistral-medium-latest`, `mistral-small-latest`, `mistral-ocr-latest`.
+A model may carry **several units at once**. `voxtral-small-latest` bills per
+minute of audio *and* per million text tokens; any consumer assuming one unit per
+model silently drops half its bill.
+
+Only models actually consumed need to be present. ProcraFiler uses five:
+`mistral-medium-latest`, `mistral-small-latest`, `mistral-ocr-latest`,
+`voxtral-mini-latest`, `voxtral-small-latest`.
 
 ## 3. The trap that will eventually bite: aliases
 
@@ -185,10 +190,21 @@ file has to survive:
 1. A copy of `pricing.json` **ships inside the ProcraFiler package**, so a machine
    with no network still has dated figures.
 2. A refresh from the URL above, **at most weekly**, cached locally, **never
-   blocking a run**, and disableable outright.
+   blocking a run**, and disableable outright. Implemented in `pricing_refresh`:
+   5-second timeout, every failure swallowed, the attempt recorded whether or not
+   it succeeded (so an offline machine tries once a week rather than every run).
 3. A user-level override file that wins over both, for negotiated rates or another
    provider.
 4. Conversion happens only at display time, always with the date attached.
+
+The consumer **validates before it trusts**, and two of those checks are worth
+knowing about on the publishing side:
+
+- a `schema_version` it does not recognise means the file is ignored entirely,
+  never read optimistically;
+- a file whose figures are all rejected as implausible is **refused as a whole**
+  rather than accepted with its prices stripped — otherwise a published mistake
+  would replace a working copy with one that cannot price anything.
 
 Consequently: **the file may be fetched by an old client at any time.** Never
 remove a field within a `schema_version`; add, and bump when you must break.
