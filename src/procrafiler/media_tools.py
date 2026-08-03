@@ -198,6 +198,55 @@ def extract_audio(
     return code == 0 and destination.is_file() and destination.stat().st_size > 0
 
 
+def extract_audio_windows(
+    source: Path,
+    destination: Path,
+    offsets: list[float],
+    *,
+    window_seconds: int,
+    speed: float = 1.0,
+    work_dir: Path | None = None,
+) -> bool:
+    """Several short excerpts of one recording, joined into a SINGLE audio file.
+
+    One file means one upload and one request, however many places are sampled.
+    That matters more than it sounds: a batch of fifty recordings sampled in five
+    places each would otherwise be two hundred and fifty requests against a rate
+    limit, for excerpts totalling a few minutes.
+
+    Each excerpt is cut with a fast seek, so reaching into the middle of a
+    two-hour file costs a jump rather than a decode, and they are concatenated with
+    `-c copy` — no re-encoding, since they already share an encoder and its
+    settings. An excerpt that fails to extract is skipped rather than fatal: four
+    windows out of five still answer the question.
+    """
+    if not ffmpeg_available() or not source.is_file() or not offsets:
+        return False
+    scratch = work_dir or destination.parent
+    scratch.mkdir(parents=True, exist_ok=True)
+
+    pieces: list[Path] = []
+    for index, offset in enumerate(offsets):
+        piece = scratch / f"window_{index:02d}{destination.suffix}"
+        if extract_audio(
+            source, piece, max_seconds=window_seconds, speed=speed, start_seconds=offset
+        ):
+            pieces.append(piece)
+    if not pieces:
+        return False
+
+    listing = scratch / "windows.txt"
+    listing.write_text(
+        "".join(f"file '{piece.as_posix()}'\n" for piece in pieces), encoding="utf-8"
+    )
+    code, _out, _err = _run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0",
+         "-i", str(listing), "-c", "copy", str(destination)],
+        timeout=_EXTRACT_TIMEOUT,
+    )
+    return code == 0 and destination.is_file() and destination.stat().st_size > 0
+
+
 def container_creation_time(path: Path) -> datetime | None:
     """When the container says the recording was made, or None.
 

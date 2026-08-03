@@ -20,6 +20,8 @@ named function with its own tests, and why several of them are here.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,6 +35,7 @@ from procrafiler.ai_transcribe import (
 )
 from procrafiler.av_reader import (
     MIN_PROBE_DURATION,
+    PROBE_SPEED,
     PROBE_SOURCE_SPAN,
     PROBE_WINDOWS,
     PROBE_WINDOW_SECONDS,
@@ -45,6 +48,7 @@ from procrafiler.media_tools import (
     MAX_TRANSCRIBE_SPEED,
     MediaProbe,
     _audio_filters,
+    extract_audio_windows,
     transcribe_speed,
 )
 
@@ -173,54 +177,65 @@ class ProbeWindowTests(unittest.TestCase):
 
 
 class ProbeBehaviourTests(unittest.TestCase):
+    """One request, whatever the number of places sampled.
+
+    Asking five times in a row would sample the recording no better and would
+    multiply requests against a rate limit by five across a batch. So the probe
+    pays a fixed, modest amount rather than a variable, sometimes-cheaper one —
+    the right trade when the alternative is being throttled mid-run.
+    """
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.work = Path(self.tmp.name)
 
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
     @staticmethod
-    def _extractor(_src, dst, **_kwargs):  # noqa: ANN001, ANN205
+    def _windows(_src, dst, offsets, **_kwargs):  # noqa: ANN001, ANN205
+        dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(b"audio")
         return True
 
-    def test_speech_in_the_first_window_stops_the_probe_there(self) -> None:
-        """The common case must be the cheap one: most spoken recordings say
-        something in their first seconds, and paying for three windows to confirm
-        what one already showed would eat the saving."""
-        with patch.object(av_reader, "extract_audio", self._extractor), \
-             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()) as call:
-            found, _billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
-        self.assertTrue(found)
-        self.assertEqual(call.call_count, 1)
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
 
-    def test_silence_everywhere_costs_three_windows_and_answers_no(self) -> None:
-        with patch.object(av_reader, "extract_audio", self._extractor), \
+    def test_every_sample_goes_up_in_a_single_request(self) -> None:
+        seen: list[list[float]] = []
+
+        def _windows(_src, dst, offsets, **_kwargs):  # noqa: ANN001
+            seen.append(list(offsets))
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(b"audio")
+            return True
+
+        with patch.object(av_reader, "extract_audio_windows", _windows), \
              patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()) as call:
             found, _billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
-        self.assertFalse(found)
-        self.assertEqual(call.call_count, PROBE_WINDOWS)
 
-    def test_speech_late_in_the_recording_is_still_found(self) -> None:
-        """A film that opens on five minutes of score."""
-        replies = [_silent(), _silent(), _speaks()]
-        with patch.object(av_reader, "extract_audio", self._extractor), \
-             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: replies.pop(0)):
+        self.assertFalse(found)
+        self.assertEqual(call.call_count, 1, "one upload, one request")
+        self.assertEqual(len(seen[0]), PROBE_WINDOWS, "all the places sampled in that one file")
+
+    def test_speech_anywhere_in_the_samples_is_found(self) -> None:
+        """The excerpts are joined, so a speaker appearing only in the last one is
+        in the same transcript as the rest."""
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
             found, _billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
         self.assertTrue(found)
 
     def test_a_failed_extraction_assumes_there_IS_speech(self) -> None:
         """The probe exists to save money, never to lose a recording. Anything it
         cannot answer must fall through to the real transcription."""
-        with patch.object(av_reader, "extract_audio", lambda *a, **k: False), \
-             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()):
-            found, _billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
+        with patch.object(av_reader, "extract_audio_windows", lambda *a, **k: False), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()) as call:
+            found, billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
         self.assertTrue(found)
+        self.assertEqual(billed, 0)
+        call.assert_not_called()
 
     def test_a_provider_error_assumes_there_IS_speech(self) -> None:
         error = TranscriptResult(reason="transcription_failed:503")
-        with patch.object(av_reader, "extract_audio", self._extractor), \
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
              patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: error):
             found, _billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
         self.assertTrue(found)
@@ -228,14 +243,92 @@ class ProbeBehaviourTests(unittest.TestCase):
     def test_what_the_probe_cost_is_reported(self) -> None:
         """It is billed audio like any other, and a run that hides it under-reports
         what it spent."""
-        with patch.object(av_reader, "extract_audio", self._extractor), \
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
              patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()):
             _found, billed = has_any_speech(Path("x.mp3"), 1800.0, self.work)
-        self.assertEqual(billed, 8 * PROBE_WINDOWS)
+        self.assertEqual(billed, 8)
+
+
+@unittest.skipUnless(
+    shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None,
+    "ffmpeg/ffprobe not installed",
+)
+class ConcatenationTests(unittest.TestCase):
+    """The joining itself, against real ffmpeg — a mock would prove nothing here.
+
+    `-c copy` across separately-encoded MP3s is the kind of thing that works right
+    up until it does not, and the failure would be a truncated or unreadable
+    excerpt file that still exists on disk and still gets uploaded and paid for.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.source = self.dir / "tone.mp3"
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+             "-i", "sine=frequency=440:duration=300", str(self.source)],
+            check=True, capture_output=True,
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _duration(path: Path) -> float:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(path)],
+            check=True, capture_output=True,
+        ).stdout
+        return float(out.decode().strip())
+
+    def test_the_windows_arrive_as_one_playable_file(self) -> None:
+        joined = self.dir / "probe.mp3"
+        self.assertTrue(
+            extract_audio_windows(
+                self.source, joined, _probe_offsets(300.0),
+                window_seconds=PROBE_WINDOW_SECONDS, speed=PROBE_SPEED,
+                work_dir=self.dir / "w",
+            )
+        )
+        # Every window submits PROBE_WINDOW_SECONDS; MP3 frame boundaries make the
+        # total land near, not exactly on, the arithmetic.
+        expected = PROBE_WINDOWS * PROBE_WINDOW_SECONDS
+        self.assertAlmostEqual(self._duration(joined), expected, delta=2.0)
+
+    def test_it_covers_more_of_the_recording_than_it_submits(self) -> None:
+        """The speed-up buys coverage, not a cheaper probe: eight seconds uploaded
+        is twelve seconds of the recording heard."""
+        self.assertGreater(PROBE_SOURCE_SPAN, PROBE_WINDOW_SECONDS)
+
+    def test_a_source_that_cannot_be_read_yields_nothing(self) -> None:
+        broken = self.dir / "broken.mp3"
+        broken.write_bytes(b"\x00\x01 not audio")
+        self.assertFalse(
+            extract_audio_windows(
+                broken, self.dir / "out.mp3", [1.0, 2.0],
+                window_seconds=4, work_dir=self.dir / "w2",
+            )
+        )
+
+    def test_no_offsets_is_not_a_request(self) -> None:
+        self.assertFalse(
+            extract_audio_windows(
+                self.source, self.dir / "out.mp3", [],
+                window_seconds=4, work_dir=self.dir / "w3",
+            )
+        )
 
 
 class ReaderIntegrationTests(unittest.TestCase):
     """The two features where they actually meet the reader."""
+
+    @staticmethod
+    def _windows(_src, dst, offsets, **_kwargs):  # noqa: ANN001, ANN205
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"audio")
+        return True
 
     def tearDown(self) -> None:
         av_reader.extract_audio = media_tools.extract_audio
@@ -251,19 +344,19 @@ class ReaderIntegrationTests(unittest.TestCase):
         """The measured failure this exists for: ten minutes of music transcribed
         end to end for an empty fiche."""
         self._audio_of(600.0)
-        calls: list[float | None] = []
+        full_passes: list[Path] = []
 
-        def _extract(_src, dst, *, max_seconds=None, speed=1.0, start_seconds=None):  # noqa: ANN001
-            calls.append(start_seconds)
+        def _extract(_src, dst, **_kwargs):  # noqa: ANN001
+            full_passes.append(dst)
             dst.write_bytes(b"audio")
             return True
 
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()):
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()):
             result = read_audio_video(Path("music.mp3"))
 
-        self.assertTrue(all(offset is not None for offset in calls),
-                        "the whole file was extracted for transcription")
+        self.assertEqual(full_passes, [], "the whole file was extracted for transcription")
         self.assertTrue(any("no recognisable speech" in note for note in result.notes))
 
     def test_a_spoken_recording_is_transcribed_in_full_after_the_probe(self) -> None:
@@ -276,7 +369,8 @@ class ReaderIntegrationTests(unittest.TestCase):
             return True
 
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
             read_audio_video(Path("talk.mp3"))
         self.assertTrue(any(full), "the probe found speech but the full pass never ran")
 
@@ -291,10 +385,15 @@ class ReaderIntegrationTests(unittest.TestCase):
             dst.write_bytes(b"audio")
             return True
 
+        probed: list[bool] = []
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
+        with patch.object(
+            av_reader, "extract_audio_windows",
+            lambda *a, **k: probed.append(True) or self._windows(*a, **k),
+        ), patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
             read_audio_video(Path("short.mp3"))
-        self.assertEqual(offsets, [None], "a short clip was probed")
+        self.assertEqual(probed, [], "a short clip was probed")
+        self.assertEqual(offsets, [None])
 
     def test_the_full_pass_is_sent_sped_up(self) -> None:
         self._audio_of(600.0)
@@ -307,7 +406,8 @@ class ReaderIntegrationTests(unittest.TestCase):
             return True
 
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
             read_audio_video(Path("talk.mp3"))
         self.assertEqual(speeds, [DEFAULT_TRANSCRIBE_SPEED])
 
@@ -322,7 +422,8 @@ class ReaderIntegrationTests(unittest.TestCase):
             return True
 
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
             result = read_audio_video(Path("talk.mp3"))
 
         assert result.transcript is not None
@@ -336,11 +437,12 @@ class ReaderIntegrationTests(unittest.TestCase):
             return True
 
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _speaks()):
             result = read_audio_video(Path("talk.mp3"))
 
         assert result.transcript is not None
-        # 8 s of probe (one window, speech found immediately) + 8 s of full pass.
+        # 8 s of probe (one grouped call) + 8 s of full pass.
         self.assertEqual(result.transcript.audio_seconds, 16)
 
     def test_a_silent_result_still_reports_what_the_probe_cost(self) -> None:
@@ -353,11 +455,12 @@ class ReaderIntegrationTests(unittest.TestCase):
             return True
 
         av_reader.extract_audio = _extract
-        with patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()):
+        with patch.object(av_reader, "extract_audio_windows", self._windows), \
+             patch.object(av_reader, "transcribe", side_effect=lambda *a, **k: _silent()):
             result = read_audio_video(Path("music.mp3"))
 
         assert result.transcript is not None
-        self.assertEqual(result.transcript.audio_seconds, 8 * PROBE_WINDOWS)
+        self.assertEqual(result.transcript.audio_seconds, 8)
 
 
 class ForecastTests(unittest.TestCase):
