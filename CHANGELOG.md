@@ -19,6 +19,16 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **Prices are read per seller, because the same model costs different amounts — in different currencies — depending on who serves it.** The published price file now describes several providers (Mistral in USD, OVH in EUR) and ProcraFiler reads that shape. A flat table could not express it at all: currency, source page and freshness date belong to the **seller**, not to the model, and a single top-level `currency` cannot be true for both.
+
+  A lookup now matches provider **and** model exactly. Asking OVH for `mistral-small-latest` yields nothing rather than Mistral's price silently reinterpreted as euros. Two units were added as published rather than converted — `per_audio_second` (OVH prices Whisper by the second where Mistral prices Voxtral by the minute; converting is a factor-of-sixty waiting to happen) and `free: true`, which is the one legitimate zero: *"this costs nothing"* must never look like *"I have no price for this"*.
+
+  A run priced across two currencies **refuses to produce a total** rather than inventing an exchange rate — it names both and says so. It cannot happen today, since the only billed provider the app can call is Mistral, but the table already describes sellers who publish in different money.
+
+  Two dates are now reported from the **oldest** seller, not the newest: a table is only as trustworthy as its stalest part, and a Mistral check made today must not vouch for an OVH page nobody has looked at in a year.
+
+  A `pricing.json` of your own written in the old format is still read — its models are taken as applying whoever serves them, which is what such a file meant. Without that, every hand-written rate in a config directory would have stopped being read the day the app learned about providers.
+
 - **A git repository is catalogued as one entry instead of file by file.** Dropping a repository into the library used to cost one paid AI call per readable file — 33 on ProcraFiler's own tree, one for each `.md`, `.txt`, `.sh` and `.pdf` under 2 MB. The figure is entirely a property of the repository: a project with a committed `node_modules` runs to thousands. And every one of those calls produced a fiche nobody would ever search for, because people look for the project, not for the third paragraph of a helper module.
 
   A repository is one object. It now gets one catalog entry, built from its folder name, its README — the one file written to say what a project *is* — and the shape of its working tree (how many files, which extensions dominate). Measured on a real copy of this repository: **33 calls → 1**, and nothing on the second rescan.

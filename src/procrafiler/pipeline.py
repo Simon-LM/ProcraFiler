@@ -3521,10 +3521,10 @@ def _cost_ceiling_accepted(
     ceiling = max_run_cost()
     if forecast is None or ceiling is None or forecast.high <= ceiling:
         return True
-    symbol = forecast.table.currency_symbol
+    symbol = forecast.currency_symbol
     question = (
-        f"This run is estimated at up to {format_amount(forecast.high, forecast.table)} "
-        f"{forecast.table.currency}, above your {symbol}{ceiling:.2f} limit. Continue?"
+        f"This run is estimated at up to {format_amount(forecast.high, symbol)} "
+        f"{forecast.currency}, above your {symbol}{ceiling:.2f} limit. Continue?"
     )
     if confirm is None:
         emit(f"   ⚠ {question} (no prompt available — continuing)")

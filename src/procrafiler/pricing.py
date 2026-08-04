@@ -17,15 +17,22 @@ Three sources, first match wins:
    `pricing_refresh`). Present only once a refresh has succeeded;
 3. **the table shipped in the package** — always present, works offline, dated.
 
+Prices are held **per provider**, because the same model is sold by more than
+one. `mistral-small-latest` served by Mistral and a Mistral model served by OVH
+are different prices, and — the part a flat table cannot express at all —
+different CURRENCIES: Mistral publishes in USD, OVH in EUR. Currency, source page
+and freshness date all belong to the seller, not to the model.
+
 An unknown model yields **no price at all**, never zero. A run whose model is
 missing from the table must say it cannot price itself; quietly reporting $0.00
-would be the one failure that actively misleads.
+would be the one failure that actively misleads. The single legitimate zero is a
+model the provider declares FREE, which is a fact rather than an absence.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,37 +51,93 @@ class ModelPrice:
     in_per_mtok: float | None = None
     out_per_mtok: float | None = None
     per_1k_pages: float | None = None
-    # Transcription bills by recording length. Voxtral's reply also carries token
-    # counts, which are NOT what it charges for — a model with this field set is
-    # priced on duration, and its tokens are ignored.
+    # Transcription bills by recording length. A model may declare this AND token
+    # prices — Voxtral Small does — and is then charged for both.
     per_audio_minute: float | None = None
+    # The same unit, per second: OVH prices Whisper that way. Kept as published
+    # rather than converted, so a figure can be checked against its source page.
+    per_audio_second: float | None = None
+    # Declared free by the provider. NOT the same as absent: "this costs nothing"
+    # is a fact, "I have no price for this" is an admission, and the whole point of
+    # this module is that the two never look alike.
+    free: bool = False
 
     @property
     def is_priceable(self) -> bool:
+        if self.free:
+            return True
         return any(
             value is not None
-            for value in (self.in_per_mtok, self.out_per_mtok, self.per_1k_pages, self.per_audio_minute)
+            for value in (
+                self.in_per_mtok, self.out_per_mtok, self.per_1k_pages,
+                self.per_audio_minute, self.per_audio_second,
+            )
         )
 
 
+# A price that applies whatever the seller. This is what a schema-1 file means:
+# it listed model ids with no notion of who serves them, so its figures are taken
+# as valid for any provider. It is also what a user's own hand-written file means
+# when they simply wrote down a rate they were quoted.
+ANY_PROVIDER = "*"
+
+
 @dataclass(frozen=True)
-class PriceTable:
+class ProviderPrices:
+    """What one seller charges, in its own currency, read from its own page."""
+
     currency: str = "USD"
     currency_symbol: str = "$"
     updated: str = ""
     checked_utc: str = ""
     source: str = ""
-    origin: str = "packaged"
-    models: dict[str, ModelPrice] | None = None
+    models: dict[str, ModelPrice] = field(default_factory=dict)
 
-    def price_for(self, model: str) -> ModelPrice | None:
-        """Exact key match only. `mistral-medium-latest` is an ALIAS that will one
-        day resolve to a different model at a different price, so guessing from a
-        prefix would mean confidently pricing something we have never seen."""
-        return (self.models or {}).get(model)
+
+@dataclass(frozen=True)
+class PriceTable:
+    origin: str = "packaged"
+    providers: dict[str, ProviderPrices] = field(default_factory=dict)
+
+    def provider(self, provider: str) -> ProviderPrices | None:
+        return self.providers.get(provider)
+
+    def price_for(self, provider: str, model: str) -> ModelPrice | None:
+        """Exact match on BOTH, with one deliberate fallback.
+
+        `mistral-medium-latest` is an ALIAS that will one day resolve to a
+        different model at a different price, so guessing from a prefix would mean
+        confidently pricing something we have never seen. The seller is matched
+        just as exactly, because the same model id costs different amounts — and is
+        billed in a different currency — depending on who serves it.
+
+        The fallback is the `*` bucket: a schema-1 file, or a rate the user wrote
+        down themselves, names a model without naming a seller, and refusing to use
+        it would throw away the one figure they explicitly asked for.
+        """
+        for name in (provider, ANY_PROVIDER):
+            prices = self.providers.get(name)
+            if prices is not None and model in prices.models:
+                return prices.models[model]
+        return None
+
+    def currency_of(self, provider: str) -> str:
+        for name in (provider, ANY_PROVIDER):
+            prices = self.providers.get(name)
+            if prices is not None:
+                return prices.currency
+        return "USD"
+
+    def symbol_of(self, provider: str) -> str:
+        for name in (provider, ANY_PROVIDER):
+            prices = self.providers.get(name)
+            if prices is not None:
+                return prices.currency_symbol
+        return "$"
 
     def cost(
         self,
+        provider: str,
         model: str,
         *,
         tokens_in: int = 0,
@@ -82,10 +145,18 @@ class PriceTable:
         pages: int = 0,
         audio_seconds: int = 0,
     ) -> float | None:
-        """Cost of one model's consumption, or None when it cannot be priced."""
-        price = self.price_for(model)
+        """Cost of one model's consumption, or None when it cannot be priced.
+
+        The figure is in `currency_of(provider)`. Nothing here converts anything:
+        summing a USD line and a EUR line is the caller's problem, and the caller
+        is expected to refuse rather than guess an exchange rate.
+        """
+        price = self.price_for(provider, model)
         if price is None or not price.is_priceable:
             return None
+        if price.free:
+            # The one legitimate zero in this module.
+            return 0.0
         total = 0.0
         if price.in_per_mtok is not None:
             total += tokens_in / 1_000_000 * price.in_per_mtok
@@ -95,6 +166,8 @@ class PriceTable:
             total += pages / 1_000 * price.per_1k_pages
         if price.per_audio_minute is not None:
             total += audio_seconds / 60 * price.per_audio_minute
+        if price.per_audio_second is not None:
+            total += audio_seconds * price.per_audio_second
         # Each unit is charged if and only if the TABLE declares a price for it.
         # That is what keeps a transcription honest: Voxtral Mini's reply reports
         # token counts, but its entry carries no token price, so they cost nothing.
@@ -103,34 +176,53 @@ class PriceTable:
         # "duration means duration only" here looked safer and was simply wrong.
         return total
 
+    @property
+    def models(self) -> dict[str, ModelPrice]:
+        """Every model of every provider, flattened. For inspection only — a lookup
+        must go through `price_for`, or two sellers of the same id collapse into
+        one arbitrary price."""
+        merged: dict[str, ModelPrice] = {}
+        for prices in self.providers.values():
+            merged.update(prices.models)
+        return merged
+
     def age_days(self, today: date | None = None) -> int | None:
-        if not self.updated:
-            return None
-        try:
-            checked = datetime.strptime(self.updated, "%Y-%m-%d").date()
-        except ValueError:
-            return None
-        return ((today or datetime.now(timezone.utc).date()) - checked).days
+        """How old the OLDEST provider's figures are.
+
+        The oldest rather than the newest: a table is only as trustworthy as its
+        stalest part, and a fresh Mistral date must not vouch for an OVH one nobody
+        has checked in a year.
+        """
+        ages: list[int] = []
+        for prices in self.providers.values():
+            if not prices.updated:
+                continue
+            try:
+                checked = datetime.strptime(prices.updated, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            ages.append(((today or datetime.now(timezone.utc).date()) - checked).days)
+        return max(ages) if ages else None
 
     def is_stale(self, today: date | None = None) -> bool:
         age = self.age_days(today)
         return age is not None and age > STALE_AFTER_DAYS
 
     def as_of(self) -> str:
-        return self.updated or "unknown date"
+        """The oldest provider date, for the same reason as `age_days`."""
+        dates = [p.updated for p in self.providers.values() if p.updated]
+        return min(dates) if dates else "unknown date"
 
 
-def _parse_table(payload: Any, origin: str) -> PriceTable | None:
-    if not isinstance(payload, dict):
-        return None
-    # A file from a newer schema is IGNORED rather than read optimistically: a
-    # field that changed meaning would be applied silently to real money.
-    if payload.get("schema_version") not in (None, 1):
-        return None
-    raw_models = payload.get("models")
+# Schemas this app knows how to read. A file announcing anything else is IGNORED
+# rather than read optimistically: a field that changed meaning would be applied
+# silently to real money.
+SUPPORTED_SCHEMAS = (1, 2)
+
+
+def _parse_models(raw_models: Any) -> dict[str, ModelPrice]:
     if not isinstance(raw_models, dict):
-        return None
-
+        return {}
     models: dict[str, ModelPrice] = {}
     for model_id, spec in raw_models.items():
         if not isinstance(spec, dict):
@@ -141,18 +233,64 @@ def _parse_table(payload: Any, origin: str) -> PriceTable | None:
             out_per_mtok=_as_price(spec.get("out_per_mtok")),
             per_1k_pages=_as_price(spec.get("per_1k_pages")),
             per_audio_minute=_as_price(spec.get("per_audio_minute")),
+            per_audio_second=_as_price(spec.get("per_audio_second")),
+            free=spec.get("free") is True,
         )
+    return models
+
+
+# Currencies the app can print a symbol for. Anything else is shown by its code,
+# which is correct and readable — inventing a symbol for a currency we do not know
+# would be worse than "12.30 CHF".
+_SYMBOLS = {"USD": "$", "EUR": "\u20ac", "GBP": "\u00a3"}
+
+
+def _parse_provider(spec: Any) -> ProviderPrices | None:
+    if not isinstance(spec, dict):
+        return None
+    models = _parse_models(spec.get("models"))
     if not models:
         return None
-    return PriceTable(
-        currency=str(payload.get("currency") or "USD"),
-        currency_symbol=str(payload.get("currency_symbol") or "$"),
-        updated=str(payload.get("updated") or ""),
-        checked_utc=str(payload.get("checked_utc") or ""),
-        source=str(payload.get("source") or ""),
-        origin=origin,
+    currency = str(spec.get("currency") or "USD")
+    return ProviderPrices(
+        currency=currency,
+        currency_symbol=str(spec.get("currency_symbol") or _SYMBOLS.get(currency, currency + " ")),
+        updated=str(spec.get("updated") or ""),
+        checked_utc=str(spec.get("checked_utc") or ""),
+        source=str(spec.get("source") or ""),
         models=models,
     )
+
+
+def _parse_table(payload: Any, origin: str) -> PriceTable | None:
+    """Read a price file of either schema.
+
+    **Schema 2** keys everything by provider, because currency, source page and
+    freshness belong to the seller: Mistral publishes in USD and OVH in EUR, and no
+    single top-level `currency` can be true for both.
+
+    **Schema 1** had no notion of a seller. Its models are kept under the `*`
+    bucket — "these figures apply whoever serves them" — which is exactly what such
+    a file meant, and what a user's own hand-written rate still means. Without it,
+    every existing `pricing.json` in a config directory would stop being read the
+    day the app learned about providers.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema_version") not in (None, *SUPPORTED_SCHEMAS):
+        return None
+
+    raw_providers = payload.get("providers")
+    if isinstance(raw_providers, dict):
+        providers: dict[str, ProviderPrices] = {}
+        for name, spec in raw_providers.items():
+            parsed = _parse_provider(spec)
+            if parsed is not None:
+                providers[str(name)] = parsed
+        return PriceTable(origin=origin, providers=providers) if providers else None
+
+    legacy = _parse_provider(payload)
+    return PriceTable(origin=origin, providers={ANY_PROVIDER: legacy}) if legacy else None
 
 
 def _as_price(value: Any) -> float | None:
@@ -198,9 +336,14 @@ def load_price_table(config_dir: Path | None = None) -> PriceTable | None:
     return _load_file(_PACKAGED_TABLE, "shipped with the app")
 
 
-def format_amount(amount: float, table: PriceTable) -> str:
+def format_amount(amount: float, symbol: str = "$") -> str:
     """Small amounts are the normal case — a handful of files is cents — and
-    rounding them to two decimals would show `$0.00` for a real charge."""
+    rounding them to two decimals would show `$0.00` for a real charge.
+
+    Takes the SYMBOL rather than the table, because a table no longer has one
+    currency: what a figure is denominated in depends on which provider produced
+    it.
+    """
     if amount and abs(amount) < 0.01:
-        return f"<{table.currency_symbol}0.01"
-    return f"{table.currency_symbol}{amount:.2f}"
+        return f"<{symbol}0.01"
+    return f"{symbol}{amount:.2f}"
