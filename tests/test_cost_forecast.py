@@ -22,6 +22,7 @@ from pathlib import Path
 
 from procrafiler.ai_estimate import estimate_ai_calls
 from procrafiler.cost_forecast import (
+    CostForecast,
     DEFAULT_PROFILES,
     TaskProfile,
     forecast_cost,
@@ -30,7 +31,9 @@ from procrafiler.cost_forecast import (
     profiles_from_history,
 )
 from procrafiler.pricing import (
+    ModelPrice,
     PriceTable,
+    ProviderPrices,
     format_amount,
     load_price_table,
 )
@@ -75,11 +78,46 @@ class ShippedTableTests(unittest.TestCase):
         assert table is not None
         for model in ("mistral-medium-latest", "mistral-small-latest", "mistral-ocr-latest"):
             with self.subTest(model=model):
-                price = table.price_for(model)
+                price = table.price_for("mistral", model)
                 self.assertIsNotNone(price, f"{model} missing from the shipped table")
                 assert price is not None
                 self.assertTrue(price.is_priceable)
-        self.assertTrue(table.updated, "a table with no date cannot be displayed honestly")
+        self.assertNotEqual(
+            table.as_of(), "unknown date", "a table with no date cannot be displayed honestly"
+        )
+
+    def test_every_seller_in_the_shipped_table_keeps_its_own_currency(self) -> None:
+        """The whole reason the file is keyed by provider: Mistral publishes in USD
+        and OVH in EUR. A single top-level currency cannot be true for both, and
+        applying the wrong one silently changes what every figure means."""
+        table = load_price_table()
+        assert table is not None
+        self.assertEqual(table.currency_of("mistral"), "USD")
+        if "ovh" in table.providers:
+            self.assertEqual(table.currency_of("ovh"), "EUR")
+
+    def test_a_model_of_one_seller_is_not_priced_for_another(self) -> None:
+        table = load_price_table()
+        assert table is not None
+        if "ovh" not in table.providers:
+            self.skipTest("the shipped table has a single provider")
+        ovh_only = next(iter(table.providers["ovh"].models))
+        self.assertIsNone(table.price_for("mistral", ovh_only))
+
+    def test_a_free_model_costs_zero_and_an_unknown_one_costs_nothing_known(self) -> None:
+        """The one legitimate zero. "This is free" is a fact the provider declares;
+        "I have no price for this" is an admission — and the whole point of this
+        module is that the two never look alike."""
+        table = load_price_table()
+        assert table is not None
+        free = [
+            name for name, price in table.providers.get("ovh", ProviderPrices()).models.items()
+            if price.free
+        ]
+        if not free:
+            self.skipTest("no free model in the shipped table")
+        self.assertEqual(table.cost("ovh", free[0], tokens_in=10_000_000), 0.0)
+        self.assertIsNone(table.cost("ovh", "no-such-model", tokens_in=10_000_000))
 
     def test_a_user_file_overrides_the_shipped_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,8 +136,10 @@ class ShippedTableTests(unittest.TestCase):
             )
             table = load_price_table(config)
         assert table is not None
-        self.assertEqual(table.currency, "EUR")
-        price = table.price_for("mistral-medium-latest")
+        # A schema-1 file names no seller, so it lands in the `*` bucket and must
+        # still answer for whichever provider the run actually uses.
+        self.assertEqual(table.currency_of("mistral"), "EUR")
+        price = table.price_for("mistral", "mistral-medium-latest")
         assert price is not None
         self.assertEqual(price.in_per_mtok, 99.0)
 
@@ -117,25 +157,23 @@ class ShippedTableTests(unittest.TestCase):
 
 class PriceArithmeticTests(unittest.TestCase):
     TABLE = PriceTable(
-        currency="USD",
-        currency_symbol="$",
-        updated="2026-07-30",
-        models={
-            "chat": __import__("procrafiler.pricing", fromlist=["ModelPrice"]).ModelPrice(
-                in_per_mtok=1.5, out_per_mtok=7.5
-            ),
-            "ocr": __import__("procrafiler.pricing", fromlist=["ModelPrice"]).ModelPrice(
-                per_1k_pages=4.0
-            ),
-        },
+        providers={
+            "mistral": ProviderPrices(
+                currency="USD", currency_symbol="$", updated="2026-07-30",
+                models={
+                    "chat": ModelPrice(in_per_mtok=1.5, out_per_mtok=7.5),
+                    "ocr": ModelPrice(per_1k_pages=4.0),
+                },
+            )
+        }
     )
 
     def test_tokens_are_priced_per_million_each_way(self) -> None:
-        cost = self.TABLE.cost("chat", tokens_in=1_000_000, tokens_out=1_000_000)
+        cost = self.TABLE.cost("mistral", "chat", tokens_in=1_000_000, tokens_out=1_000_000)
         self.assertAlmostEqual(cost or 0.0, 9.0)
 
     def test_pages_are_priced_per_thousand(self) -> None:
-        self.assertAlmostEqual(self.TABLE.cost("ocr", pages=500) or 0.0, 2.0)
+        self.assertAlmostEqual(self.TABLE.cost("mistral", "ocr", pages=500) or 0.0, 2.0)
 
     def test_only_the_units_the_table_prices_are_charged(self) -> None:
         """Voxtral Mini bills per minute of audio, and its reply ALSO reports token
@@ -147,8 +185,8 @@ class PriceArithmeticTests(unittest.TestCase):
 
         table = load_price_table()
         assert table is not None
-        audio_only = table.cost("voxtral-mini-latest", audio_seconds=600)
-        with_tokens = table.cost("voxtral-mini-latest", audio_seconds=600, tokens_in=5_000_000)
+        audio_only = table.cost("mistral", "voxtral-mini-latest", audio_seconds=600)
+        with_tokens = table.cost("mistral", "voxtral-mini-latest", audio_seconds=600, tokens_in=5_000_000)
         self.assertEqual(audio_only, with_tokens, "a unit with no price in the table is free")
         self.assertAlmostEqual(audio_only or 0.0, 600 / 60 * 0.003)
 
@@ -159,18 +197,18 @@ class PriceArithmeticTests(unittest.TestCase):
 
         table = load_price_table()
         assert table is not None
-        both = table.cost("voxtral-small-latest", audio_seconds=600, tokens_in=1_000_000)
+        both = table.cost("mistral", "voxtral-small-latest", audio_seconds=600, tokens_in=1_000_000)
         audio_part = 600 / 60 * 0.004
         self.assertGreater(both or 0.0, audio_part, "the token price must be added too")
         self.assertAlmostEqual(both or 0.0, audio_part + 0.1)
 
     def test_an_unknown_model_has_no_price_rather_than_a_free_one(self) -> None:
-        self.assertIsNone(self.TABLE.cost("who-knows", tokens_in=10_000_000))
+        self.assertIsNone(self.TABLE.cost("mistral", "who-knows", tokens_in=10_000_000))
 
     def test_an_alias_is_never_matched_by_prefix(self) -> None:
         """`mistral-medium-latest` will one day point at another model at another
         price; guessing from a prefix would price something we have never seen."""
-        self.assertIsNone(self.TABLE.price_for("chat-v2"))
+        self.assertIsNone(self.TABLE.price_for("mistral", "chat-v2"))
 
     def test_absurd_or_malformed_prices_are_rejected(self) -> None:
         from procrafiler.pricing import _parse_table
@@ -190,19 +228,19 @@ class PriceArithmeticTests(unittest.TestCase):
         assert table is not None
         for model in ("a", "b", "c"):
             with self.subTest(model=model):
-                price = table.price_for(model)
+                price = table.price_for("mistral", model)
                 assert price is not None
                 self.assertFalse(price.is_priceable, f"{model} should have been rejected")
-        good = table.price_for("d")
+        good = table.price_for("mistral", "d")
         assert good is not None
         self.assertEqual(good.in_per_mtok, 2.0)
 
     def test_a_real_charge_is_never_displayed_as_zero(self) -> None:
         """Most runs are cents. Rounding to two decimals would print $0.00 for a
         charge that is about to happen."""
-        self.assertEqual(format_amount(0.004, self.TABLE), "<$0.01")
-        self.assertEqual(format_amount(0.0, self.TABLE), "$0.00")
-        self.assertEqual(format_amount(1.239, self.TABLE), "$1.24")
+        self.assertEqual(format_amount(0.004, "$"), "<$0.01")
+        self.assertEqual(format_amount(0.0, "$"), "$0.00")
+        self.assertEqual(format_amount(1.239, "$"), "$1.24")
 
     def test_staleness_is_measured_from_the_table_date(self) -> None:
         self.assertFalse(self.TABLE.is_stale(date(2026, 8, 30)))
@@ -234,6 +272,29 @@ class ForecastTests(_EnvIsolated):
         self.assertGreater(forecast.high, forecast.low, "the OCR maybe-call is the range")
         line = format_cost_forecast(forecast)
         self.assertIn("rates of", line, "a price without its date is a claim we cannot support")
+
+    def test_the_displayed_currency_is_the_SELLERS_not_a_default(self) -> None:
+        """A forecast that forgot which currency it priced in would fall back to
+        USD and print dollars for a euro bill — the same figure, silently meaning
+        something else."""
+        for key in CHAIN_VARS:
+            os.environ.pop(key, None)
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "ovh:chat"
+        table = PriceTable(
+            providers={
+                "ovh": ProviderPrices(
+                    currency="EUR", currency_symbol="\u20ac", updated="2026-08-04",
+                    models={"chat": ModelPrice(in_per_mtok=1.0, out_per_mtok=2.0)},
+                )
+            }
+        )
+        forecast = forecast_cost(estimate_ai_calls(self._work()), table=table)
+        assert forecast is not None
+        self.assertEqual(forecast.currencies, frozenset({"EUR"}))
+        line = format_cost_forecast(forecast)
+        self.assertIn("EUR", line)
+        self.assertIn("\u20ac", line)
+        self.assertNotIn("USD", line)
 
     def test_more_photos_cost_more(self) -> None:
         os.environ.update(PAID)
@@ -365,7 +426,7 @@ class CeilingTests(_EnvIsolated):
         from procrafiler.pricing import PriceTable
         from procrafiler.cost_forecast import CostForecast
 
-        table = PriceTable(updated="2026-07-30", models={})
+        table = PriceTable(providers={"mistral": ProviderPrices(updated="2026-07-30")})
         forecast = CostForecast(table=table, low=0.5, high=9.0, billed_calls_high=100)
         os.environ["PROCRAFILER_MAX_RUN_COST"] = "5"
 
@@ -383,7 +444,7 @@ class CeilingTests(_EnvIsolated):
         from procrafiler.pipeline import _cost_ceiling_accepted
         from procrafiler.cost_forecast import CostForecast
 
-        forecast = CostForecast(table=PriceTable(models={}), low=9.0, high=9.0)
+        forecast = CostForecast(table=PriceTable(), low=9.0, high=9.0)
         os.environ["PROCRAFILER_MAX_RUN_COST"] = "5"
         self.assertTrue(_cost_ceiling_accepted(forecast, confirm=lambda _q: True, emit=lambda _m: None))
 
@@ -392,7 +453,7 @@ class CeilingTests(_EnvIsolated):
         from procrafiler.pipeline import _cost_ceiling_accepted
         from procrafiler.cost_forecast import CostForecast
 
-        forecast = CostForecast(table=PriceTable(models={}), low=0.1, high=0.2)
+        forecast = CostForecast(table=PriceTable(), low=0.1, high=0.2)
         os.environ["PROCRAFILER_MAX_RUN_COST"] = "5"
 
         def _explode(_question: str) -> bool:
@@ -405,7 +466,7 @@ class CeilingTests(_EnvIsolated):
         from procrafiler.pipeline import _cost_ceiling_accepted
         from procrafiler.cost_forecast import CostForecast
 
-        forecast = CostForecast(table=PriceTable(models={}), low=9.0, high=9.0)
+        forecast = CostForecast(table=PriceTable(), low=9.0, high=9.0)
         os.environ["PROCRAFILER_MAX_RUN_COST"] = "5"
         warned: list[str] = []
         self.assertTrue(_cost_ceiling_accepted(forecast, confirm=None, emit=warned.append))
@@ -513,3 +574,126 @@ class CeilingStopsTheRunTests(_EnvIsolated):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MixedCurrencyTests(unittest.TestCase):
+    """Two sellers, two currencies, and no exchange rate anywhere in this app.
+
+    It cannot happen today — the only billed provider the app can call is Mistral —
+    but the price table already describes sellers who publish in different money,
+    and the moment a second one is callable a run can price one task in dollars and
+    another in euros. Adding those together is not arithmetic.
+    """
+
+    TABLE = PriceTable(
+        providers={
+            "mistral": ProviderPrices(
+                currency="USD", currency_symbol="$", updated="2026-08-04",
+                models={"chat": ModelPrice(in_per_mtok=1.0)},
+            ),
+            "ovh": ProviderPrices(
+                currency="EUR", currency_symbol="\u20ac", updated="2026-08-04",
+                models={"chat": ModelPrice(in_per_mtok=1.0)},
+            ),
+        }
+    )
+
+    def test_one_currency_is_shown_normally(self) -> None:
+        forecast = CostForecast(
+            table=self.TABLE, low=1.0, high=2.0, billed_calls_high=4,
+            currencies=frozenset({"USD"}), currency_symbol="$",
+        )
+        line = format_cost_forecast(forecast)
+        self.assertIn("$1.00 to $2.00", line)
+        self.assertIn("USD", line)
+
+    def test_two_currencies_refuse_to_produce_a_total(self) -> None:
+        """Naming both and declining beats printing a number that means nothing."""
+        forecast = CostForecast(
+            table=self.TABLE, low=1.0, high=2.0, billed_calls_high=4,
+            currencies=frozenset({"USD", "EUR"}), currency_symbol="$",
+        )
+        line = format_cost_forecast(forecast)
+        self.assertIn("not summable", line)
+        self.assertIn("EUR", line)
+        self.assertIn("USD", line)
+        self.assertNotIn("2.00", line, "a total was printed across two currencies")
+
+    def test_the_symbol_follows_the_seller(self) -> None:
+        self.assertEqual(self.TABLE.symbol_of("mistral"), "$")
+        self.assertEqual(self.TABLE.symbol_of("ovh"), "\u20ac")
+
+    def test_an_unknown_currency_is_shown_by_its_code_not_a_guessed_symbol(self) -> None:
+        from procrafiler.pricing import _parse_table
+
+        table = _parse_table(
+            {
+                "schema_version": 2,
+                "providers": {
+                    "somebody": {
+                        "currency": "CHF", "updated": "2026-08-04",
+                        "models": {"m": {"in_per_mtok": 1.0}},
+                    }
+                },
+            },
+            "test",
+        )
+        assert table is not None
+        self.assertIn("CHF", table.symbol_of("somebody"))
+
+
+class ProviderUnitTests(unittest.TestCase):
+    """Units and dates that only appear once there is more than one seller."""
+
+    TABLE = PriceTable(
+        providers={
+            "mistral": ProviderPrices(
+                currency="USD", currency_symbol="$",
+                updated="2026-08-04", checked_utc="2026-08-04T00:00:00Z",
+                models={"voxtral": ModelPrice(per_audio_minute=0.003)},
+            ),
+            "ovh": ProviderPrices(
+                currency="EUR", currency_symbol="\u20ac",
+                updated="2025-01-15", checked_utc="2025-01-15T00:00:00Z",
+                models={
+                    "whisper": ModelPrice(per_audio_second=1.278e-05),
+                    "gratuit": ModelPrice(free=True),
+                    # A contradictory entry: declared free AND carrying a price.
+                    "gratuit-mais-tarifé": ModelPrice(free=True, in_per_mtok=5.0),
+                },
+            ),
+        }
+    )
+
+    def test_audio_priced_by_the_second_is_charged_by_the_second(self) -> None:
+        """OVH prices Whisper per second where Mistral prices Voxtral per minute.
+        Both are kept as published, so a figure can be checked against its source
+        page; treating one as the other is a factor-of-sixty error."""
+        self.assertAlmostEqual(
+            self.TABLE.cost("ovh", "whisper", audio_seconds=600) or 0.0, 600 * 1.278e-05
+        )
+
+    def test_the_two_audio_units_do_not_price_the_same(self) -> None:
+        per_minute = self.TABLE.cost("mistral", "voxtral", audio_seconds=600)
+        per_second = self.TABLE.cost("ovh", "whisper", audio_seconds=600)
+        self.assertNotAlmostEqual(per_minute or 0.0, per_second or 0.0)
+
+    def test_free_wins_over_any_price_in_the_same_entry(self) -> None:
+        """A published file that says both is wrong somewhere. Charging is the
+        expensive way to be wrong, so `free` decides."""
+        self.assertEqual(
+            self.TABLE.cost("ovh", "gratuit-mais-tarifé", tokens_in=10_000_000), 0.0
+        )
+
+    def test_a_free_model_costs_zero_whatever_it_consumed(self) -> None:
+        self.assertEqual(self.TABLE.cost("ovh", "gratuit", tokens_in=10_000_000, pages=500), 0.0)
+
+    def test_the_displayed_date_is_the_OLDEST_sellers(self) -> None:
+        """A table is only as trustworthy as its stalest part. Showing the freshest
+        date would let a Mistral check made today vouch for an OVH page nobody has
+        looked at since last year."""
+        self.assertEqual(self.TABLE.as_of(), "2025-01-15")
+
+    def test_staleness_is_measured_on_the_OLDEST_seller_too(self) -> None:
+        self.assertEqual(self.TABLE.age_days(date(2025, 1, 20)), 5, "measured from the oldest")
+        self.assertTrue(self.TABLE.is_stale(date(2026, 8, 4)), "the OVH figures are 18 months old")

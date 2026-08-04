@@ -50,53 +50,88 @@ https://raw.githubusercontent.com/<owner>/ai-pricing/main/pricing.json
 
 ```json
 {
-  "schema_version": 1,
-  "checked_utc": "2026-07-30T04:00:00Z",
-  "updated": "2026-07-30",
-  "source": "https://mistral.ai/pricing/api",
-  "currency": "USD",
-  "models": {
-    "mistral-medium-latest": {
-      "in_per_mtok": 1.5,
-      "out_per_mtok": 7.5,
-      "display_name": "Mistral Medium 3.5"
+  "schema_version": 2,
+  "providers": {
+    "mistral": {
+      "checked_utc": "2026-08-04T00:00:00Z",
+      "updated": "2026-08-04",
+      "source": "https://mistral.ai/pricing/api",
+      "currency": "USD",
+      "models": {
+        "mistral-small-latest": {
+          "in_per_mtok": 0.15,
+          "out_per_mtok": 0.6,
+          "display_name": "Mistral Small 4"
+        }
+      }
     },
-    "mistral-small-latest": {
-      "in_per_mtok": 0.15,
-      "out_per_mtok": 0.6,
-      "display_name": "Mistral Small 4"
-    },
-    "mistral-ocr-latest": {
-      "per_1k_pages": 4.0,
-      "display_name": "OCR 4"
+    "ovh": {
+      "checked_utc": "2026-08-04T00:00:00Z",
+      "updated": "2026-08-04",
+      "source": "https://www.ovhcloud.com/fr/public-cloud/ai-endpoints/catalog/",
+      "currency": "EUR",
+      "models": {
+        "whisper-large-v3-turbo": {
+          "per_audio_second": 1.278e-05,
+          "display_name": "whisper-large-v3-turbo"
+        }
+      }
     }
   }
 }
 ```
+
+**Prices are keyed by SELLER first.** The same model is sold by more than one
+provider, at different prices — and, the part a flat table cannot express at all,
+in different **currencies**: Mistral publishes in USD, OVH in EUR. Currency, the
+source page and the freshness date all belong to the seller, not to the model,
+which is why they sit inside the provider rather than at the top of the file.
+
+Model ids are the seller's own. OVH does not call a model
+`mistral-small-latest`, so these are genuinely different keys rather than two
+prices for one key.
 
 Field by field, and why each exists:
 
 | field | meaning |
 | --- | --- |
 | `schema_version` | A consumer that does not recognise it must ignore the file and fall back, rather than misread it. Bump on any breaking change. |
-| `checked_utc` | When the scraper last **verified** the figures. Distinct from `updated`, and the difference matters: "confirmed unchanged today" is a much stronger statement than "last edited in May". |
-| `updated` | When a figure last actually **changed**. |
+| `providers` | Keyed by a short seller id (`mistral`, `ovh`). Consumers match it against their own provider name. |
+| `checked_utc` | When the scraper last **verified** that seller's figures. Distinct from `updated`, and the difference matters: "confirmed unchanged today" is a much stronger statement than "last edited in May". |
+| `updated` | When one of that seller's figures last actually **changed**. |
 | `source` | The page the numbers came from, so a human can check in one click. |
-| `currency` | Never assume. Mistral publishes in USD; a consumer showing € must convert or say USD. |
-| `models` | Keyed by the **API model id**, not the marketing name — see §3. |
+| `currency` | Per seller. Never assume, and never convert. |
+| `models` | Keyed by the **API model id** as that seller names it — see §3. |
 | `display_name` | The marketing name, kept only so a diff is readable by a human. Never used for matching. |
 
-Units are explicit in the key name (`in_per_mtok`, `out_per_mtok`,
-`per_1k_pages`, `per_audio_minute`) so a consumer cannot silently apply a
-per-token price to a per-page model. **Do not** add a generic `price` field.
+### Units
+
+Explicit in the key name so a consumer cannot silently apply a per-token price to
+a per-page model:
+
+| key | unit |
+| --- | --- |
+| `in_per_mtok` / `out_per_mtok` | per million tokens |
+| `per_1k_pages` | per thousand pages |
+| `per_audio_minute` | per minute of audio |
+| `per_audio_second` | per second of audio |
+| `free: true` | the seller charges nothing |
+
+**Do not** add a generic `price` field, and **do not** normalise units: publish
+what the page publishes, so any figure can be checked against its source. Mistral
+prices Voxtral per minute and OVH prices Whisper per second; converting one into
+the other is a factor-of-sixty waiting to happen.
 
 A model may carry **several units at once**. `voxtral-small-latest` bills per
 minute of audio *and* per million text tokens; any consumer assuming one unit per
 model silently drops half its bill.
 
-Only models actually consumed need to be present. ProcraFiler uses five:
-`mistral-medium-latest`, `mistral-small-latest`, `mistral-ocr-latest`,
-`voxtral-mini-latest`, `voxtral-small-latest`.
+`free: true` is a **fact**, not an absence. A consumer must be able to tell "this
+costs nothing" from "I have no price for this" — the second must never be shown
+as zero.
+
+Only models actually consumed need to be present, but publishing a seller's whole
+catalogue costs nothing and spares a release when a project switches model.
 
 ## 3. The trap that will eventually bite: aliases
 
@@ -201,7 +236,9 @@ The consumer **validates before it trusts**, and two of those checks are worth
 knowing about on the publishing side:
 
 - a `schema_version` it does not recognise means the file is ignored entirely,
-  never read optimistically;
+  never read optimistically. ProcraFiler reads **1 and 2**; a schema-1 file is
+  still accepted and its models are treated as applying to any seller, which is
+  what such a file meant;
 - a file whose figures are all rejected as implausible is **refused as a whole**
   rather than accepted with its prices stripped — otherwise a published mistake
   would replace a working copy with one that cannot price anything.

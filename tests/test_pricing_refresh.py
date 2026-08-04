@@ -41,14 +41,25 @@ from procrafiler.pricing_refresh import (
 )
 
 VALID = {
-    "schema_version": 1,
-    "checked_utc": "2026-08-03T00:52:25Z",
-    "updated": "2026-08-03",
-    "source": "https://mistral.ai/pricing/api",
-    "currency": "USD",
-    "models": {
-        "mistral-small-latest": {"in_per_mtok": 0.15, "out_per_mtok": 0.6},
-        "voxtral-mini-latest": {"per_audio_minute": 0.003},
+    "schema_version": 2,
+    "providers": {
+        "mistral": {
+            "checked_utc": "2026-08-03T00:52:25Z",
+            "updated": "2026-08-03",
+            "source": "https://mistral.ai/pricing/api",
+            "currency": "USD",
+            "models": {
+                "mistral-small-latest": {"in_per_mtok": 0.15, "out_per_mtok": 0.6},
+                "voxtral-mini-latest": {"per_audio_minute": 0.003},
+            },
+        },
+        "ovh": {
+            "checked_utc": "2026-08-03T00:52:25Z",
+            "updated": "2026-08-03",
+            "source": "https://www.ovhcloud.com/fr/public-cloud/ai-endpoints/catalog/",
+            "currency": "EUR",
+            "models": {"whisper-large-v3-turbo": {"per_audio_second": 1.278e-05}},
+        },
     },
 }
 
@@ -110,28 +121,52 @@ class ServedTests(unittest.TestCase):
     def test_a_good_file_is_fetched_and_parsed(self) -> None:
         table, text = fetch_price_table()
         assert table is not None
-        self.assertEqual(table.updated, "2026-08-03")
-        self.assertIn("voxtral-mini-latest", table.models or {})
+        self.assertEqual(table.as_of(), "2026-08-03")
+        self.assertIn("voxtral-mini-latest", table.providers["mistral"].models)
         self.assertIn("voxtral", text)
+
+    def test_each_seller_keeps_its_own_currency(self) -> None:
+        """The reason the file is keyed by provider at all: Mistral publishes in
+        USD and OVH in EUR, and no single top-level currency can be true for both."""
+        table, _text = fetch_price_table()
+        assert table is not None
+        self.assertEqual(table.currency_of("mistral"), "USD")
+        self.assertEqual(table.currency_of("ovh"), "EUR")
+
+    def test_the_same_model_id_is_not_shared_between_sellers(self) -> None:
+        """`mistral-small-latest` is Mistral's here. Asking OVH for it must yield
+        nothing rather than Mistral's price in the wrong currency."""
+        table, _text = fetch_price_table()
+        assert table is not None
+        self.assertIsNotNone(table.price_for("mistral", "mistral-small-latest"))
+        self.assertIsNone(table.price_for("ovh", "mistral-small-latest"))
 
     def test_the_refreshed_table_becomes_the_one_in_force(self) -> None:
         """The whole point: what was downloaded is what prices the next run."""
         self.assertIsNotNone(refresh_if_due(self.config))
         in_force = load_price_table(self.config)
         assert in_force is not None
-        self.assertEqual(in_force.updated, "2026-08-03")
+        self.assertEqual(in_force.as_of(), "2026-08-03")
         self.assertEqual(in_force.origin, "downloaded")
 
     def test_the_users_own_file_still_wins(self) -> None:
         """Someone who wrote down a negotiated rate must not have it overwritten by
         a public one, however fresh."""
-        mine = dict(VALID, updated="2020-01-01", models={"mistral-small-latest": {"in_per_mtok": 0.01}})
+        # Written in the OLD schema on purpose: someone's hand-written file is not
+        # going to be reshaped every time the contract moves.
+        mine = {
+            "schema_version": 1, "updated": "2020-01-01", "currency": "EUR",
+            "models": {"mistral-small-latest": {"in_per_mtok": 0.01}},
+        }
         (self.config / "pricing.json").write_text(json.dumps(mine), encoding="utf-8")
         refresh_if_due(self.config)
 
         in_force = load_price_table(self.config)
         assert in_force is not None
-        self.assertEqual(in_force.updated, "2020-01-01")
+        self.assertEqual(in_force.as_of(), "2020-01-01")
+        price = in_force.price_for("mistral", "mistral-small-latest")
+        assert price is not None
+        self.assertEqual(price.in_per_mtok, 0.01)
 
     def test_an_html_error_page_is_refused(self) -> None:
         """A redirect to a login or a 404 page returns 200 with HTML. Parsed
@@ -164,14 +199,18 @@ class ServedTests(unittest.TestCase):
         figure to None, and yields a table that answers "I cannot price this" for
         everything. Accepting that would replace a working copy with a useless one.
         """
-        _Handler.body = json.dumps(
-            dict(VALID, models={"mistral-small-latest": {"in_per_mtok": 999_999}})
-        ).encode()
+        _Handler.body = json.dumps({
+            "schema_version": 2,
+            "providers": {"mistral": {
+                "currency": "USD", "updated": "2026-08-03",
+                "models": {"mistral-small-latest": {"in_per_mtok": 999_999}},
+            }},
+        }).encode()
         self.assertIsNone(fetch_price_table()[0])
 
     def test_a_newer_schema_is_ignored_rather_than_read_optimistically(self) -> None:
         """A field that changed meaning would be applied silently to real money."""
-        _Handler.body = json.dumps(dict(VALID, schema_version=2)).encode()
+        _Handler.body = json.dumps(dict(VALID, schema_version=99)).encode()
         self.assertIsNone(fetch_price_table()[0])
 
     def test_a_slow_server_does_not_hold_up_a_run(self) -> None:

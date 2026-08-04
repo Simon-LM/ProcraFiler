@@ -81,6 +81,22 @@ class CostForecast:
     unpriced_models: frozenset[str] = frozenset()
     billed_calls_low: int = 0
     billed_calls_high: int = 0
+    # Which currencies the priced lines were denominated in. Normally one; more
+    # than one means a run spread across sellers who publish in different money,
+    # and the total is then refused rather than guessed — see `format_cost_forecast`.
+    currencies: frozenset[str] = frozenset()
+    currency_symbol: str = "$"
+
+    @property
+    def currency(self) -> str:
+        return next(iter(sorted(self.currencies)), "USD")
+
+    @property
+    def is_mixed_currency(self) -> bool:
+        """Adding a dollar to a euro is not arithmetic. The spec forbids
+        converting, so a run that priced lines in two currencies has no single
+        total, and saying so beats printing a number that means nothing."""
+        return len(self.currencies) > 1
 
     @property
     def is_free(self) -> bool:
@@ -172,6 +188,10 @@ def forecast_cost(
     measured = profiles if profiles is not None else (profiles_from_history(paths) if paths else {})
 
     low = high = 0.0
+    # currency code -> the symbol its provider publishes it with. A dict rather
+    # than two sets because the two are looked up together and drift apart the
+    # moment they are not.
+    currencies: dict[str, str] = {}
     calibrated: set[str] = set()
     coarse: set[str] = set()
     unpriced: set[str] = set()
@@ -187,29 +207,31 @@ def forecast_cost(
             chain = task_chain_from_env(task)
             if not chain:
                 continue
-            model = chain[0].model
-            amount = price_table.cost(model, audio_seconds=estimate.audio_seconds)
+            provider, model = chain[0].provider, chain[0].model
+            amount = price_table.cost(provider, model, audio_seconds=estimate.audio_seconds)
             if amount is None:
-                if chain[0].provider != "ollama":
+                if provider != "ollama":
                     unpriced.add(model)
                 continue
             calls_low += task_low
             calls_high += task_high
+            currencies[price_table.currency_of(provider)] = price_table.symbol_of(provider)
             low += amount
             high += amount
             continue
         chain = task_chain_from_env(task)
         if not chain:
             continue
-        model = chain[0].model
-        price = price_table.price_for(model)
+        provider, model = chain[0].provider, chain[0].model
+        price = price_table.price_for(provider, model)
         if price is None or not price.is_priceable:
             # Not billable at all (a local model is simply absent from the table)
             # versus billable but unknown — only the second is a problem, and only
             # the second is reported.
-            if chain[0].provider != "ollama":
+            if provider != "ollama":
                 unpriced.add(model)
             continue
+        currencies[price_table.currency_of(provider)] = price_table.symbol_of(provider)
 
         calls_low += task_low
         calls_high += task_high
@@ -223,7 +245,7 @@ def forecast_cost(
 
         for count, bucket in ((task_low, "low"), (task_high, "high")):
             amount = price_table.cost(
-                model,
+                provider, model,
                 tokens_in=int(profile.tokens_in * count),
                 tokens_out=int(profile.tokens_out * count),
                 pages=int(profile.pages * count),
@@ -242,6 +264,8 @@ def forecast_cost(
         unpriced_models=frozenset(unpriced),
         billed_calls_low=calls_low,
         billed_calls_high=calls_high,
+        currencies=frozenset(currencies),
+        currency_symbol=currencies.get(next(iter(sorted(currencies)), ""), "$"),
     )
 
 
@@ -277,12 +301,22 @@ def format_cost_forecast(forecast: CostForecast | None) -> str:
         return "Estimated cost: nothing — every configured task runs locally."
 
     table = forecast.table
-    if forecast.low >= forecast.high:
-        amount = f"≈ {format_amount(forecast.high, table)}"
-    else:
-        amount = f"≈ {format_amount(forecast.low, table)} to {format_amount(forecast.high, table)}"
+    if forecast.is_mixed_currency:
+        # No exchange rate is invented here, ever. Naming the currencies and
+        # refusing the sum is the only honest answer.
+        return (
+            "Estimated cost: not summable — this run prices tasks in "
+            f"{' and '.join(sorted(forecast.currencies))}, and no rate is applied "
+            f"between them (rates of {table.as_of()})."
+        )
 
-    line = f"Estimated cost: {amount} {table.currency} (rates of {table.as_of()})"
+    symbol = forecast.currency_symbol
+    if forecast.low >= forecast.high:
+        amount = f"≈ {format_amount(forecast.high, symbol)}"
+    else:
+        amount = f"≈ {format_amount(forecast.low, symbol)} to {format_amount(forecast.high, symbol)}"
+
+    line = f"Estimated cost: {amount} {forecast.currency} (rates of {table.as_of()})"
     if not forecast.is_complete:
         line += (
             f" — AT LEAST, no price known for {', '.join(sorted(forecast.unpriced_models))}"
