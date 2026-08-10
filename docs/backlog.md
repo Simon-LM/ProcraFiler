@@ -142,7 +142,12 @@ page redesign yields a wrong number rather than an error, everywhere at once).
       backup · selective by capacity · cloud inbox + read-mirror to avoid conflicts · 3
       copies · self-contained restorable units): see [durability.md](durability.md).
 - [ ] **SUPERVISOR** — the optional AI control pass over ambiguous outputs (spec §9).
-- [ ] **VIDEO + audio analysis** — phase 2, after the rest is validated on real files.
+- [x] **VIDEO + audio analysis** — **SHIPPED** in v0.10.0. Listen first (Voxtral,
+      timestamped), let a text pass name the moments worth seeing, cut stills only
+      there. A speech probe samples five short excerpts before paying for a whole
+      recording, the audio is sped up before it is sent, and near-identical stills
+      are dropped locally. Music and films go to `Media/`, where the metadata and
+      the folder name are read and not one byte of media is opened.
 - [ ] **Automatic processing** — a watcher (systemd user service + inotify) or a cron
       job, so dropping a file in the Inbox processes it without a manual command.
       Today processing is on-demand only (`process-once` / `process-all`).
