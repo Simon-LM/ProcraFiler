@@ -35,7 +35,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 _PACKAGED_TABLE = Path(__file__).resolve().parent / "data" / "pricing.json"
 
@@ -186,15 +186,46 @@ class PriceTable:
             merged.update(prices.models)
         return merged
 
-    def age_days(self, today: date | None = None) -> int | None:
-        """How old the OLDEST provider's figures are.
+    def _selected(self, providers: Iterable[str] | None) -> list[ProviderPrices]:
+        """The sellers a question is being asked about.
+
+        `None` means the whole table, which is the right answer only when the
+        caller genuinely has no idea who it buys from. Everything about freshness
+        is per seller, so a caller that knows should say so — see `age_days`.
+
+        A name the table does not carry falls through to the `*` bucket, then is
+        dropped. If NOTHING matches, the whole table is used rather than nothing:
+        an answer about a table we cannot price from is moot either way, and
+        "unknown date" would read as a defect rather than as an irrelevance.
+        """
+        if providers is None:
+            return list(self.providers.values())
+        chosen: list[ProviderPrices] = []
+        for name in providers:
+            for key in (name, ANY_PROVIDER):
+                prices = self.providers.get(key)
+                if prices is not None and prices not in chosen:
+                    chosen.append(prices)
+                    break
+        return chosen or list(self.providers.values())
+
+    def age_days(
+        self, today: date | None = None, *, providers: Iterable[str] | None = None
+    ) -> int | None:
+        """How old the OLDEST of the given providers' figures are.
 
         The oldest rather than the newest: a table is only as trustworthy as its
         stalest part, and a fresh Mistral date must not vouch for an OVH one nobody
         has checked in a year.
+
+        `providers` scopes that to the sellers the run actually buys from, and
+        leaving it out is a real mistake once the table carries sellers this app
+        cannot even call. The published table now lists four; ProcraFiler talks to
+        one. Unscoped, an unmaintained EdenAI block would date — and eventually
+        declare stale — a forecast priced entirely against fresh Mistral figures.
         """
         ages: list[int] = []
-        for prices in self.providers.values():
+        for prices in self._selected(providers):
             if not prices.updated:
                 continue
             try:
@@ -204,14 +235,29 @@ class PriceTable:
             ages.append(((today or datetime.now(timezone.utc).date()) - checked).days)
         return max(ages) if ages else None
 
-    def is_stale(self, today: date | None = None) -> bool:
-        age = self.age_days(today)
+    def is_stale(
+        self, today: date | None = None, *, providers: Iterable[str] | None = None
+    ) -> bool:
+        age = self.age_days(today, providers=providers)
         return age is not None and age > STALE_AFTER_DAYS
 
-    def as_of(self) -> str:
-        """The oldest provider date, for the same reason as `age_days`."""
-        dates = [p.updated for p in self.providers.values() if p.updated]
+    def as_of(self, providers: Iterable[str] | None = None) -> str:
+        """The oldest date among those providers, for the same reason as `age_days`."""
+        dates = [p.updated for p in self._selected(providers) if p.updated]
         return min(dates) if dates else "unknown date"
+
+    def sources_of(self, providers: Iterable[str] | None = None) -> str:
+        """The pages these figures were read off, for a message that tells the user
+        where to go and check them.
+
+        Per seller, like everything else here: sending someone to Mistral's pricing
+        page about a rate that came from OVH's catalog is worse than sending them
+        nowhere."""
+        seen: list[str] = []
+        for prices in self._selected(providers):
+            if prices.source and prices.source not in seen:
+                seen.append(prices.source)
+        return " and ".join(seen)
 
 
 # Schemas this app knows how to read. A file announcing anything else is IGNORED

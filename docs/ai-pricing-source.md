@@ -243,6 +243,16 @@ knowing about on the publishing side:
   rather than accepted with its prices stripped — otherwise a published mistake
   would replace a working copy with one that cannot price anything.
 
+**Adding a seller is always safe; a consumer only ever validates its own.** The
+file may list providers a given consumer cannot even call, so both checks above
+are scoped to the sellers that consumer is configured to buy from. Asked globally
+they stop meaning anything the moment the file describes more than one seller: a
+completely mangled Mistral block passes a "some model somewhere is priceable"
+test on the strength of a hundred healthy EdenAI ones. The same goes for the date
+shown to a user — freshness is read off the sellers a figure was actually priced
+against, so a provider nobody maintains cannot put an old date on somebody else's
+bill.
+
 Consequently: **the file may be fetched by an old client at any time.** Never
 remove a field within a `schema_version`; add, and bump when you must break.
 

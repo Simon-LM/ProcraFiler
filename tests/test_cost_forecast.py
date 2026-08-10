@@ -86,6 +86,27 @@ class ShippedTableTests(unittest.TestCase):
             table.as_of(), "unknown date", "a table with no date cannot be displayed honestly"
         )
 
+    def test_the_shipped_table_carries_every_seller_the_source_publishes(self) -> None:
+        """Sellers ProcraFiler cannot call **yet** are shipped on purpose. The
+        `ai_*` modules speak to Mistral and Ollama today, and the others are the
+        work ahead; a table that only carried today's provider would have to be
+        re-cut for each one, and an offline machine would have no figure at all on
+        the day the code caught up.
+
+        Priced per seller, so carrying them costs nothing but bytes: nothing asks
+        the whole table a question any more (see `test_pricing_scope`).
+        """
+        table = load_price_table()
+        assert table is not None
+        self.assertGreaterEqual(len(table.providers), 2)
+        for name, seller in table.providers.items():
+            with self.subTest(seller=name):
+                self.assertTrue(
+                    any(price.is_priceable for price in seller.models.values()),
+                    f"{name} ships with no usable price at all",
+                )
+                self.assertNotEqual(seller.updated, "", f"{name} ships undated")
+
     def test_every_seller_in_the_shipped_table_keeps_its_own_currency(self) -> None:
         """The whole reason the file is keyed by provider: Mistral publishes in USD
         and OVH in EUR. A single top-level currency cannot be true for both, and

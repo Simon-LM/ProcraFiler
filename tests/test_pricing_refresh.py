@@ -208,6 +208,42 @@ class ServedTests(unittest.TestCase):
         }).encode()
         self.assertIsNone(fetch_price_table()[0])
 
+    def test_absurd_prices_at_OUR_seller_are_refused_even_beside_a_healthy_one(self) -> None:
+        """The same refusal, once the published file carries sellers we never call.
+
+        Asked whether ANY model anywhere survived the bounds check, this file
+        answers yes on OVH's behalf while Mistral — the only block this
+        installation reads — has been stripped to nothing. Accepting it replaces a
+        working table with one that cannot price the next run. Reproduced from the
+        live four-seller file before it was scoped per seller.
+        """
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
+        self.addCleanup(os.environ.pop, "PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
+
+        broken = json.loads(json.dumps(VALID))
+        for spec in broken["providers"]["mistral"]["models"].values():
+            for unit in list(spec):
+                spec[unit] = 999_999  # a decimal point in the wrong place
+        _Handler.body = json.dumps(broken).encode()
+
+        self.assertIsNone(fetch_price_table()[0])
+        # And the healthy neighbour alone does not save it: OVH is untouched here.
+        self.assertIsNotNone(broken["providers"]["ovh"]["models"]["whisper-large-v3-turbo"])
+
+    def test_a_seller_we_never_call_being_broken_does_not_block_the_refresh(self) -> None:
+        """Anti-vacuity: the scoped guard must not refuse every file that has a
+        blemish somewhere. OVH is nobody's concern on a Mistral-only install."""
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
+        self.addCleanup(os.environ.pop, "PROCRAFILER_AI_ANALYSIS_PRIMARY", None)
+
+        broken = json.loads(json.dumps(VALID))
+        broken["providers"]["ovh"]["models"]["whisper-large-v3-turbo"]["per_audio_second"] = -1
+        _Handler.body = json.dumps(broken).encode()
+
+        table, _text = fetch_price_table()
+        assert table is not None
+        self.assertIsNotNone(table.price_for("mistral", "mistral-small-latest"))
+
     def test_a_newer_schema_is_ignored_rather_than_read_optimistically(self) -> None:
         """A field that changed meaning would be applied silently to real money."""
         _Handler.body = json.dumps(dict(VALID, schema_version=99)).encode()

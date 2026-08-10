@@ -86,6 +86,10 @@ class CostForecast:
     # and the total is then refused rather than guessed — see `format_cost_forecast`.
     currencies: frozenset[str] = frozenset()
     currency_symbol: str = "$"
+    # The sellers this forecast was actually priced against. Carried so the date
+    # printed beside the figure describes THOSE rates: the table also holds sellers
+    # ProcraFiler cannot call, and their freshness says nothing about this total.
+    priced_providers: frozenset[str] = frozenset()
 
     @property
     def currency(self) -> str:
@@ -192,6 +196,7 @@ def forecast_cost(
     # than two sets because the two are looked up together and drift apart the
     # moment they are not.
     currencies: dict[str, str] = {}
+    priced: set[str] = set()
     calibrated: set[str] = set()
     coarse: set[str] = set()
     unpriced: set[str] = set()
@@ -216,6 +221,7 @@ def forecast_cost(
             calls_low += task_low
             calls_high += task_high
             currencies[price_table.currency_of(provider)] = price_table.symbol_of(provider)
+            priced.add(provider)
             low += amount
             high += amount
             continue
@@ -232,6 +238,7 @@ def forecast_cost(
                 unpriced.add(model)
             continue
         currencies[price_table.currency_of(provider)] = price_table.symbol_of(provider)
+        priced.add(provider)
 
         calls_low += task_low
         calls_high += task_high
@@ -266,6 +273,7 @@ def forecast_cost(
         billed_calls_high=calls_high,
         currencies=frozenset(currencies),
         currency_symbol=currencies.get(next(iter(sorted(currencies)), ""), "$"),
+        priced_providers=frozenset(priced),
     )
 
 
@@ -301,13 +309,18 @@ def format_cost_forecast(forecast: CostForecast | None) -> str:
         return "Estimated cost: nothing — every configured task runs locally."
 
     table = forecast.table
+    # Every date below is scoped to the sellers this forecast was priced against.
+    # The published table carries sellers ProcraFiler cannot call at all, and one
+    # of them going unmaintained must not put an old date on — or a staleness
+    # warning under — a figure computed entirely from fresh Mistral rates.
+    sellers = forecast.priced_providers or None
     if forecast.is_mixed_currency:
         # No exchange rate is invented here, ever. Naming the currencies and
         # refusing the sum is the only honest answer.
         return (
             "Estimated cost: not summable — this run prices tasks in "
             f"{' and '.join(sorted(forecast.currencies))}, and no rate is applied "
-            f"between them (rates of {table.as_of()})."
+            f"between them (rates of {table.as_of(sellers)})."
         )
 
     symbol = forecast.currency_symbol
@@ -316,7 +329,7 @@ def format_cost_forecast(forecast: CostForecast | None) -> str:
     else:
         amount = f"≈ {format_amount(forecast.low, symbol)} to {format_amount(forecast.high, symbol)}"
 
-    line = f"Estimated cost: {amount} {forecast.currency} (rates of {table.as_of()})"
+    line = f"Estimated cost: {amount} {forecast.currency} (rates of {table.as_of(sellers)})"
     if not forecast.is_complete:
         line += (
             f" — AT LEAST, no price known for {', '.join(sorted(forecast.unpriced_models))}"
@@ -332,9 +345,15 @@ def format_cost_forecast(forecast: CostForecast | None) -> str:
         notes.append(f"the cost of {what} is a rough default until a first run measures yours")
     if forecast.calibrated_tasks:
         notes.append(f"calibrated on your previous runs for {', '.join(sorted(forecast.calibrated_tasks))}")
-    if table.is_stale():
-        age = table.age_days()
-        notes.append(f"these rates are {age} days old — check {table.source or 'the provider'}")
+    if table.is_stale(providers=sellers):
+        # `table.source` here was an AttributeError waiting for the first stale
+        # table: the per-provider rewrite moved `source` onto each seller and this
+        # one call site kept reading it off the table. Nothing caught it because
+        # nothing had aged past the threshold yet — the crash would have arrived
+        # by itself, in front of a user, six months after the last price refresh.
+        age = table.age_days(providers=sellers)
+        where = table.sources_of(sellers) or "the provider"
+        notes.append(f"these rates are {age} days old — check {where}")
     if notes:
         line += " (" + "; ".join(notes) + ".)"
     return line
