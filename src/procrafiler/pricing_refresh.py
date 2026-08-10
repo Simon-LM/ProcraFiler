@@ -23,6 +23,9 @@ machine tries once a week rather than on every single run.
 by `pricing` before it can replace anything. A truncated download, a redirect to an
 HTML error page, or a file whose figures are absurd is discarded and the previous
 copy stays in place — a stale price the user can see the age of beats a wrong one.
+Validated *for the sellers this installation actually uses*: the published table
+covers several, and a file that prices strangers perfectly while mangling ours is
+no use here (see `_prices_what_we_buy`).
 
 **Switchable off.** `PROCRAFILER_PRICING_REFRESH=off` and the app never touches the
 network. Someone running an air-gapped machine, or who simply does not want it,
@@ -38,7 +41,8 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from procrafiler.pricing import PriceTable, _parse_table  # type: ignore[reportMissingImports]
+from procrafiler.ai_naming import LOCAL_PROVIDERS, configured_providers  # type: ignore[reportMissingImports]
+from procrafiler.pricing import ANY_PROVIDER, PriceTable, _parse_table  # type: ignore[reportMissingImports]
 
 DEFAULT_PRICING_URL = "https://raw.githubusercontent.com/Simon-LM/ai-pricing/main/pricing.json"
 
@@ -129,14 +133,48 @@ def fetch_price_table(url: str | None = None, *, timeout: int = FETCH_TIMEOUT_SE
     table = _parse_table(payload, "downloaded")
     if table is None:
         return (None, "")
-    # Parsing succeeds on a file whose figures were all rejected as implausible —
-    # every model survives with its prices stripped to None, which is a table that
-    # answers "I cannot price this" for everything. Accepting it would REPLACE a
-    # working copy with a useless one, so the whole download is refused instead.
-    # Found by serving a file with a price a thousand times too large.
-    if not any(price.is_priceable for price in (table.models or {}).values()):
+    if not _prices_what_we_buy(table):
         return (None, "")
     return (table, text)
+
+
+def _prices_what_we_buy(table: PriceTable) -> bool:
+    """Can this download still price the sellers this installation uses?
+
+    Parsing succeeds on a file whose figures were all rejected as implausible —
+    every model survives with its prices stripped to None, which is a table that
+    answers "I cannot price this" for everything. Accepting it would REPLACE a
+    working copy with a useless one, so the whole download is refused instead.
+    Found by serving a file with a price a thousand times too large.
+
+    The check has to be PER SELLER, and that is the part the published table broke
+    without changing a single field. It carries four providers now — Mistral, OVH,
+    EdenAI, HuggingFace — and ProcraFiler calls one of them. Asked whether ANY
+    model anywhere is priceable, a file with a completely mangled Mistral block
+    still answers yes, on the strength of a hundred EdenAI models we will never
+    buy. Measured: corrupt every Mistral figure in the live file and the old check
+    accepts it, leaving `mistral-small-latest` with no price at all.
+
+    Per seller and not per MODEL, deliberately: a user who pins
+    `mistral:mistral-small-2506` or picks a model the companion repo does not list
+    would otherwise have every future refresh refused, silently and for ever. One
+    priceable model from a seller is enough to say the block arrived intact.
+    """
+    wanted = {p for p in configured_providers() if p not in LOCAL_PROVIDERS}
+    if not wanted:
+        # Nothing configured yet — a fresh install checking prices before choosing
+        # a provider. No seller to be specific about, so fall back to the blunt
+        # question, which still catches a wholly mangled file.
+        return any(price.is_priceable for price in (table.models or {}).values())
+    return all(_can_price(table, provider) for provider in wanted)
+
+
+def _can_price(table: PriceTable, provider: str) -> bool:
+    for name in (provider, ANY_PROVIDER):
+        prices = table.providers.get(name)
+        if prices is not None and any(p.is_priceable for p in prices.models.values()):
+            return True
+    return False
 
 
 def refresh_if_due(config_dir: Path | None, *, now: datetime | None = None) -> PriceTable | None:

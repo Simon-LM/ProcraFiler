@@ -86,19 +86,37 @@ def task_chain_from_env(task: str) -> list[ChainEntry]:
     return chain
 
 
+def configured_providers() -> frozenset[str]:
+    """Every provider this installation routes a task to, primaries AND fallbacks.
+
+    A fallback is billed exactly like a primary the day it fires, so leaving them
+    out would understate who the user buys from.
+
+    This exists because the price table has outgrown us. It now publishes four
+    sellers and will publish more; ProcraFiler calls one. Anything that reasons
+    about "our prices" — how fresh they are, whether a download is usable — has to
+    ask this first, or it reasons about strangers.
+    """
+    return frozenset(
+        entry.provider
+        for task in SUPPORTED_AI_TASKS
+        for entry in task_chain_from_env(task)
+    )
+
+
 # Timeouts are PROVIDER-AWARE, with two separate knobs:
 #   - API (Mistral): `PROCRAFILER_AI_TIMEOUT` (moderate default, 60s) — the API is fast.
 #   - Local (Ollama): `PROCRAFILER_AI_LOCAL_TIMEOUT` (generous default, 900s) — local
 #     inference is far slower + varies with the machine and file size, so a merely-slow
 #     call must not be killed and dropped to manual review.
 # A per-task `PROCRAFILER_AI_<TASK>_TIMEOUT` overrides either (it's the most specific).
-_LOCAL_PROVIDERS = frozenset({"ollama"})
+LOCAL_PROVIDERS = frozenset({"ollama"})
 _LOCAL_DEFAULT_TIMEOUT = 900
 
 
 def _task_timeout_from_env(task: str, default_value: int = 60, *, provider: str | None = None) -> int:
     task_key = task.strip().upper()
-    is_local = provider in _LOCAL_PROVIDERS
+    is_local = provider in LOCAL_PROVIDERS
     provider_var = "PROCRAFILER_AI_LOCAL_TIMEOUT" if is_local else "PROCRAFILER_AI_TIMEOUT"
 
     # Precedence: per-task override (any provider) > the provider's own knob > default.

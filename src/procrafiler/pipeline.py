@@ -55,7 +55,7 @@ from procrafiler.usage_meter import (  # type: ignore[reportMissingImports]
 from procrafiler.ai_organize import organize_set  # type: ignore[reportMissingImports]
 from procrafiler.ai_set_naming import name_set  # type: ignore[reportMissingImports]
 from procrafiler.user_context import load_user_context  # type: ignore[reportMissingImports]
-from procrafiler.ai_naming import task_chain_from_env  # type: ignore[reportMissingImports]
+from procrafiler.ai_naming import configured_providers, task_chain_from_env  # type: ignore[reportMissingImports]
 from procrafiler.ai_reader import read_visual, read_with_ocr, read_with_vision  # type: ignore[reportMissingImports]
 from procrafiler.av_reader import read_audio_video
 from procrafiler.content_reader import extract_text_content
@@ -3745,7 +3745,10 @@ def _process_all_inbox_files(
     # figure is quoted — and so nothing that merely reads a price can ever block.
     refreshed = refresh_if_due(_config_dir(paths))
     if refreshed is not None:
-        emit(f"   prices refreshed — rates of {refreshed.as_of()}")
+        # Dated for the sellers this installation buys from. The file also prices
+        # sellers ProcraFiler cannot call, and announcing their date here would be
+        # announcing a fact about somebody else's bill.
+        emit(f"   prices refreshed — rates of {refreshed.as_of(configured_providers())}")
 
     # What this will cost, before spending it. Extensions only, no file opened.
     estimate = estimate_ai_calls(work_sets)
