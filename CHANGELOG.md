@@ -9,6 +9,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-12 — Install, update, uninstall: an installation that owns itself, and a purge that leaves nothing of yours behind
+
 ### Changed
 
 - **An installation now owns its source, so the folder you installed from is yours to delete.** Installing used to read the code straight out of your clone and record its path. Deleting that folder afterwards — the ordinary thing to do once something is installed — left you with an app that could no longer be updated and could no longer be uninstalled at all, because `uninstall.sh` existed only in the folder you had just removed. Worse, updating ran `git checkout <tag>` **inside** that clone: a developer working there was silently moved onto a detached HEAD by a command that was supposed to touch nothing of theirs.
