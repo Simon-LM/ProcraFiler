@@ -231,11 +231,15 @@ nothing currently says so.
       are exported — which is exactly what this project's own `sandbox/run.sh` does —
       and it purges the catalog and config of whatever they point at, not of the
       installation.
-- [ ] **D4 — installing from a live working tree is allowed, and update.sh then moves
-      its HEAD.** `REPO_ROOT` is simply `scripts/..`, so nothing stops an install from
-      a development clone. `update.sh` afterwards runs `git checkout <latest tag>`
-      **inside that clone**, leaving a developer on a detached HEAD. The dirty-tree
-      check is only a partial guard: a clean tree passes.
+- [ ] **D4 — an update moves the HEAD of the clone it was installed from.** Installing
+      *from* the git tree is a deliberate design, not an oversight:
+      [dev-prod-isolation.md](dev-prod-isolation.md) states it plainly — *"production
+      is installed from the git tree and updates from it"* — and builds on it, which is
+      why the presence of `.git` was rejected there as a way to tell development from
+      production. What follows from it was not intended: `REPO_ROOT` is `scripts/..`,
+      so the clone may be a live working tree, and `update.sh` then runs `git checkout
+      <latest tag>` **inside it**, leaving a developer on a detached HEAD. The
+      dirty-tree check is only a partial guard — a clean tree passes.
 - [ ] **D5 — the purge list has drifted from the code.** It names `search_index.db`
       and misses `procrafiler.lock`, the state directory itself, and every
       subdirectory. The lists are hardcoded in bash while the truth lives in
@@ -244,20 +248,52 @@ nothing currently says so.
 - [ ] **D6 — `install-meta.env` records no version and no commit.** Nothing can say
       what is installed without running it, and no script can check what it is acting
       on.
-- [ ] **D7 — dev and prod share their default paths.** `~/.local/share/procrafiler`
-      and `~/.config/procrafiler` serve both. A development run without the sandbox
-      overrides writes into a production installation's state, and nothing prevents,
-      detects or reports it.
+- [x] **D7 — ~~dev and prod share their default paths~~ — WITHDRAWN, it was wrong.**
+      The original entry claimed a development run writes into a production
+      installation's state and that "nothing prevents, detects or reports it". That
+      is false, and it was written without reading
+      [dev-prod-isolation.md](dev-prod-isolation.md) — a document that opens on the
+      2026-07-28 incident, closes three gates, and states *"Every item is done"*.
+      Three layered guards in [`dev_guard.py`](../src/procrafiler/dev_guard.py) refuse
+      exactly this, from the single choke point every entry path goes through, with 14
+      tests and six verified mutations. The paths are indeed shared; the collision is
+      not. **Left visible rather than deleted**: a defect list that quietly loses an
+      entry teaches nobody why it was there.
+
+      What genuinely remains around it is narrow, and only the third is worth doing:
+
+      - *two installed copies sharing one state* — theoretical. `dev_guard` returns
+        early for anything that is not a source checkout, so a user-mode and a
+        system-mode install of the same version would share `~/.local/share/
+        procrafiler` unremarked. The harm is not the shared path, it is the version
+        skew, which is the point below.
+      - *an installed build writing into a development sandbox* — theoretical, and
+        the sandbox is throwaway by definition. Not worth a guard.
+      - *an older version reading a state a newer one wrote* — **real, small, and
+        untouched by any existing guard.** A schema written by a newer release can
+        hold what an older one will drop on its next write, and downgrading should be
+        a decision rather than a side effect.
 
 ### The plan
 
 - [ ] **A. Make an installation self-contained.** `install.sh` copies `uninstall.sh`
       into `$APP_DIR` and installs a `procrafiler-uninstall` launcher beside
       `procrafiler`. Uninstalling stops depending on the clone. → D1
-- [ ] **B. Install from a snapshot, never from the tree.** `git archive` the tag into
-      a temporary directory and install from there, so `REPO_ROOT` can never name a
-      live repository and `update.sh` can never move anyone's HEAD. Refuse outright on
-      a dirty tree or off a release tag, with an explicit override. → D4
+- [ ] **B. Give the installation its own clone.** `install.sh` clones into
+      `$APP_DIR/src`, checks the release tag out **there**, and installs from it;
+      `update.sh` fetches and checks out in that clone only. The user's tree is read
+      once and never written. Refuse outright on a dirty tree or off a release tag,
+      with an explicit override. → D4, and it completes A.
+
+      *Rejected on the way:* installing from a `git archive` snapshot in a temporary
+      directory. It drops `.git`, so setuptools-scm loses the tag and the package
+      installs as the `0.0.0` fallback — it would destroy the very version F exists to
+      record.
+- [ ] **B2. One installation, and no reinstall over an existing one.** `install.sh`
+      currently has no check at all: it will happily run over a live installation, or
+      over a development checkout's state. It must find an existing installation,
+      report its version and where it came from, and refuse without an explicit
+      `--reinstall`. → the "only one" requirement
 - [ ] **C. Uninstall from recorded facts, not from guesses.** Read `install-meta.env`
       and remove exactly what it lists. Report per target: *removed* / *already
       absent*, never an unconditional tick. Refuse while any `PROCRAFILER_*` path
@@ -265,12 +301,10 @@ nothing currently says so.
 - [ ] **D. One source of truth for paths.** A `procrafiler paths --json` subcommand
       the shell scripts consume, instead of re-stating `config.py` in bash. → D5, and
       it prevents the next drift.
-- [ ] **E. Make cohabitation impossible rather than unlikely.** A marker in
-      `state_root` (`.procrafiler-prod`, modelled on the `.procrafiler-sandbox` that
-      `sandbox/run.sh` already writes), and the app refuses to start when the marker
-      contradicts the mode it is running in. Plus a version stamp: refuse a state
-      directory written by a newer version, ask before adopting an older one. → D7,
-      and it covers stale installations of either kind.
+- [ ] **E. A version stamp on the state directory** — refuse to run over a state a
+      NEWER release wrote, rather than silently dropping what it stored. This is all
+      that survives of the withdrawn D7; **`dev_guard` is not to be touched**, it
+      already covers the collision that mattered. → the third bullet of D7
 - [ ] **F. Record version and commit** in `install-meta.env`, and show them. → D6
 
 ## Open evaluations

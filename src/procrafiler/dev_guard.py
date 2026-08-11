@@ -127,11 +127,11 @@ def _root_env(overrides: dict[str, str]) -> Iterator[None]:
                 os.environ[name] = value
 
 
-def _paths_for(overrides: dict[str, str]) -> RuntimePaths:
+def _paths_for(overrides: dict[str, str], *, force_home_defaults: bool = False) -> RuntimePaths:
     from procrafiler.config import default_runtime_paths  # local: import cycle
 
     with _root_env(overrides):
-        return default_runtime_paths()
+        return default_runtime_paths(force_home_defaults=force_home_defaults)
 
 
 def _roots(paths: RuntimePaths) -> set[Path]:
@@ -156,8 +156,16 @@ def _resolve(path: Path) -> Path:
 
 
 def default_layout_roots() -> set[Path]:
-    """The roots an *unconfigured* run targets: `$HOME/Downloads/...`, `$HOME/...`."""
-    return _roots(_paths_for({}))
+    """The roots an unconfigured PRODUCTION run targets: `$HOME/Downloads/...`.
+
+    `force_home_defaults` is load-bearing and not decoration. A source checkout now
+    defaults to its own sandbox rather than to the home, so asking the ordinary way
+    would have this guard compare a checkout's roots against the checkout's own
+    sandbox — where they always match, and the guard would pass everything. The
+    question here is never "where do I default to", it is "where would a real user's
+    installation be".
+    """
+    return _roots(_paths_for({}, force_home_defaults=True))
 
 
 def installed_layout_roots() -> set[Path]:

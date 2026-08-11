@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from procrafiler.dev_guard import (  # type: ignore[reportMissingImports]
     guard_mutation,
+    is_marked_sandbox,
     mark_sandbox,
     source_checkout_root,
 )
@@ -45,28 +46,68 @@ class RuntimePolicy:
     taxonomy_max_depth: int
 
 
-def default_runtime_paths() -> RuntimePaths:
-    """Build default runtime paths, overridable through environment variables."""
-    workspace_root = Path(
-        os.environ.get(
-            "PROCRAFILER_WORKSPACE_DIR",
-            str(Path.home() / "Downloads" / "ProcraFiler_Inbox"),
-        )
-    )
-    library_root = Path(
-        os.environ.get(
-            "PROCRAFILER_LIBRARY_DIR",
-            str(Path.home() / "ProcraFiler_Library"),
-        )
-    )
-    mirror_root = Path(
-        os.environ.get(
-            "PROCRAFILER_LIBRARY_MIRROR_DIR",
-            str(Path.home() / "ProcraFiler_Library_Mirror"),
-        )
-    )
-    state_root = Path(os.environ.get("PROCRAFILER_HOME", str(Path.home() / ".local" / "share" / "procrafiler")))
-    config_root = Path(os.environ.get("PROCRAFILER_CONFIG_HOME", str(Path.home() / ".config" / "procrafiler")))
+# Where `sandbox/run.sh` puts a development run. Duplicated here rather than read
+# from the script, and a test asserts the two agree: two spellings of "the sandbox"
+# that drifted apart would give a checkout two sandboxes, which is the very
+# collision this is meant to remove.
+SANDBOX_WORKSPACE = ("sandbox", "workspace")
+
+
+def _home_defaults() -> dict[str, Path]:
+    """What an unconfigured PRODUCTION run targets. Always the user's home.
+
+    Kept as its own function because `dev_guard` needs exactly this answer — "are
+    these the roots a real user's installation would use?" — regardless of what the
+    process it is guarding happens to default to.
+    """
+    home = Path.home()
+    return {
+        "workspace": home / "Downloads" / "ProcraFiler_Inbox",
+        "library": home / "ProcraFiler_Library",
+        "mirror": home / "ProcraFiler_Library_Mirror",
+        "state": home / ".local" / "share" / "procrafiler",
+        "config": home / ".config" / "procrafiler",
+    }
+
+
+def _checkout_defaults(checkout: Path) -> dict[str, Path]:
+    """What an unconfigured run FROM A SOURCE CHECKOUT targets: its own sandbox.
+
+    The point is to stop naming the home at all rather than to name it and refuse.
+    Until this existed, a development run with no environment set computed the real
+    library's path and was then turned away by `dev_guard` — safe, but one guard
+    away from the 2026-07-28 incident. Now there is nothing to turn away, and the
+    guards remain underneath as the net (see `dev-prod-isolation.md`).
+
+    Deliberately identical to `sandbox/run.sh`, so a run started through the script
+    and one started without it share one sandbox instead of quietly creating two.
+    """
+    work = checkout.joinpath(*SANDBOX_WORKSPACE)
+    return {
+        "workspace": work / "ProcraFiler_Inbox",
+        "library": work / "ProcraFiler_Library",
+        "mirror": work / "ProcraFiler_Library_Mirror",
+        "state": work / "state",
+        "config": work / "config",
+    }
+
+
+def default_runtime_paths(*, force_home_defaults: bool = False) -> RuntimePaths:
+    """Build default runtime paths, overridable through environment variables.
+
+    `force_home_defaults` asks the production question — "where would a real user's
+    installation put these?" — from a process that may be a source checkout. Only
+    `dev_guard` needs it, and it needs it to keep working: without it, guard C would
+    compare a checkout's roots against the checkout's own sandbox and always agree.
+    """
+    checkout = None if force_home_defaults else source_checkout_root()
+    fallback = _home_defaults() if checkout is None else _checkout_defaults(checkout)
+
+    workspace_root = Path(os.environ.get("PROCRAFILER_WORKSPACE_DIR", str(fallback["workspace"])))
+    library_root = Path(os.environ.get("PROCRAFILER_LIBRARY_DIR", str(fallback["library"])))
+    mirror_root = Path(os.environ.get("PROCRAFILER_LIBRARY_MIRROR_DIR", str(fallback["mirror"])))
+    state_root = Path(os.environ.get("PROCRAFILER_HOME", str(fallback["state"])))
+    config_root = Path(os.environ.get("PROCRAFILER_CONFIG_HOME", str(fallback["config"])))
 
     return RuntimePaths(
         workspace_root=workspace_root,
@@ -322,6 +363,77 @@ def set_feature_flag(paths: RuntimePaths, feature: str, enabled: bool) -> dict[s
     settings["features"][feature] = enabled
     save_feature_settings(paths, settings)
     return settings
+
+
+# What a purge may delete: regenerable state and the app's own configuration.
+# NEVER the library, its mirror, the trashes or the inbox — those are the documents
+# themselves, and no uninstaller has any business reaching them.
+_PURGEABLE_FILES = (
+    "actions_log_file",
+    "catalog_db_file",
+    "catalog_snapshot_file",
+    "search_index_file",
+    "settings_file",
+    "policy_file",
+)
+
+_PRESERVED_ROOTS = (
+    "workspace_root",
+    "library_root",
+    "library_trash_manual_dir",
+    "mirror_root",
+    "mirror_trash_dir",
+)
+
+PATHS_REPORT_SCHEMA = 1
+
+
+def layout_mode(paths: RuntimePaths) -> str:
+    """Which kind of layout this is: `sandbox`, `dev` or `prod`.
+
+    Derived, never configured. `dev_guard` already answers "is this package a source
+    checkout?" by where it was imported from, and that fact is true without anyone
+    having to remember to declare it — unlike a mode flag, which would be wrong
+    precisely when it mattered.
+    """
+    if is_marked_sandbox(paths):
+        return "sandbox"
+    return "dev" if source_checkout_root() is not None else "prod"
+
+
+def paths_report(paths: RuntimePaths) -> dict[str, object]:
+    """Every runtime path, for the install scripts — so they stop restating this
+    module in bash.
+
+    They had no other option and they drifted: the purge list came to name a
+    `search_index.db` a given layout never had, while missing the runtime lock, the
+    state directory itself and every subdirectory under it. A shell script cannot
+    import this module, so it reads the answer instead of reproducing it.
+
+    `purge_dirs` carries the state and config ROOTS, not merely the files inside
+    them. A purge that removes four files and leaves the directory, its lock and
+    four stale subdirectories has not purged anything a user would recognise.
+    """
+    fields = {key: str(value) for key, value in vars(paths).items()}
+    return {
+        "schema": PATHS_REPORT_SCHEMA,
+        "version": _package_version(),
+        "mode": layout_mode(paths),
+        "paths": fields,
+        "purge_files": [fields[name] for name in _PURGEABLE_FILES],
+        "purge_dirs": [str(paths.state_root), str(paths.settings_file.parent)],
+        "preserve": [fields[name] for name in _PRESERVED_ROOTS],
+    }
+
+
+def _package_version() -> str:
+    from procrafiler import __version__  # local: keeps this module import-light
+
+    return __version__
+
+
+def format_paths_json(paths: RuntimePaths) -> str:
+    return json.dumps(paths_report(paths), indent=2, sort_keys=True)
 
 
 def ensure_runtime_layout(paths: RuntimePaths, *, include_mirror: bool = True) -> None:
