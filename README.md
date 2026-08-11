@@ -340,6 +340,13 @@ cd ProcraFiler
 
 The installer creates an isolated virtualenv and, on first install, an env file seeded from `.env.example` (its location is printed at the end of the install).
 
+**The installation owns its source.** The clone above is read once and never written to again: the installer copies it into `~/.local/share/procrafiler/app/src`, checks out the latest release tag **there**, and installs from it. Two consequences worth knowing:
+
+- **you can delete the clone afterwards.** Updating and uninstalling keep working — the installation carries its own source and its own copy of the uninstaller, and `procrafiler-uninstall` is installed next to `procrafiler`.
+- **installing from a working tree is safe.** Nothing ever checks a tag out inside your clone or moves its HEAD.
+
+Installing a second time over a live installation is **refused**: it reports the version and revision it found, and points at `update.sh`. Pass `--reinstall` to replace it deliberately.
+
 **2. Run the guided setup** — choose where your files live, then tell the app who you are (one guided first run):
 
 ```bash
@@ -398,22 +405,27 @@ From the Git clone on the machine:
 # or: sudo ./scripts/update.sh --mode system
 ```
 
-The updater fetches the tags and moves the clone to the **latest release tag** (`vX.Y.Z`) — never an in-progress branch HEAD — then reinstalls in the venv. It prints `old → new` version and refuses to run if the clone has local changes. **Your library, catalog, settings and env file are never touched**, and the catalog migrates in place — so an update never forces you to reorganize anything. `procrafiler --version` always matches the installed release.
+The updater fetches the tags and moves to the **latest release tag** (`vX.Y.Z`) — never an in-progress branch HEAD — then reinstalls in the venv. All of that happens inside the installation's own source copy, so **your clone is never fetched into, checked out, or moved**, and updating still works after you have deleted it. An installation made by an older installer — which recorded only your clone — is **repaired on the spot**: its source is copied out of that clone once, and never read from it again. It prints `old → new`. **Your library, catalog, settings and env file are never touched**, and the catalog migrates in place — so an update never forces you to reorganize anything. `procrafiler --version` always matches the installed release.
 
 ## Uninstall
 
 ```bash
-./scripts/uninstall.sh --mode user
+procrafiler-uninstall                 # installed next to `procrafiler`
+# from a clone instead: ./scripts/uninstall.sh --mode user
 # or: sudo ./scripts/uninstall.sh --mode system
 ```
 
-This removes the app (launcher + venv + code) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your keys) — printing exactly what is kept and where. **Your organized files are never deleted.**
+This removes the app (both launchers + venv + source) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your keys) — printing exactly what is kept and where. **Your organized files are never deleted.**
 
-To also remove the config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library or your context file — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt):
+Each target is reported as *removed* or *already absent*, and finding nothing to remove is an error rather than a tick: uninstalling `--mode user` an installation made `--mode system` used to report success while leaving it in place. `--purge` **refuses** while any `PROCRAFILER_*` path variable is set in your shell — those redirect the catalog and config elsewhere, so a purge would erase that instead of the installation.
+
+To also remove the config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt):
 
 ```bash
 ./scripts/uninstall.sh --mode user --purge
 ```
+
+A purge also removes **your context file** — the one describing who you are, your work and your household. Leaving personal notes behind in `~/.config` on a machine you have just wiped the app from is a leak, not caution. So it goes, but never silently: you are asked first whether to keep a copy outside ProcraFiler, and told the exact path if you say yes. The offer defaults to **no** and `--yes` alone writes no copy at all — an unrequested copy of your personal notes is the same leak under another name. Answer up front with `--keep-context` or `--drop-context`. If the copy cannot be written, the original is kept rather than deleted.
 
 ## Project Status
 

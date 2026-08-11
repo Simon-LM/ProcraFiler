@@ -385,7 +385,15 @@ _PRESERVED_ROOTS = (
     "mirror_trash_dir",
 )
 
-PATHS_REPORT_SCHEMA = 1
+# The user's own writing, sitting in the app's config directory: who they are, what
+# they do, the names that mean their work. A purge removes it — leaving personal
+# notes behind on a machine somebody has just wiped the app from is not caution, it
+# is a leak. But it is theirs, so the uninstaller OFFERS to copy it out first and
+# says where the copy went. Offered, never imposed: a copy nobody asked for is the
+# same leak under another name.
+_PERSONAL_FILENAMES = ("context.txt", "context.md")
+
+PATHS_REPORT_SCHEMA = 2
 
 
 def layout_mode(paths: RuntimePaths) -> str:
@@ -415,13 +423,23 @@ def paths_report(paths: RuntimePaths) -> dict[str, object]:
     four stale subdirectories has not purged anything a user would recognise.
     """
     fields = {key: str(value) for key, value in vars(paths).items()}
+    config_root = paths.settings_file.parent
     return {
         "schema": PATHS_REPORT_SCHEMA,
         "version": _package_version(),
         "mode": layout_mode(paths),
         "paths": fields,
         "purge_files": [fields[name] for name in _PURGEABLE_FILES],
-        "purge_dirs": [str(paths.state_root), str(paths.settings_file.parent)],
+        # The state root goes whole — everything under it is the app's own memory,
+        # and this is where the stale subdirectories of old versions accumulate.
+        # The CONFIG root does NOT: it also holds the user's own context file, which
+        # must not be swept away by a directory-wide `rm -rf` without them being
+        # asked. Its files are named one by one, and the directory is removed only
+        # if it ends up empty.
+        "purge_dirs": [str(paths.state_root)],
+        # Purged like the rest, but only after the user has been offered a copy.
+        # Listed apart precisely so the uninstaller cannot delete them silently.
+        "personal_files": [str(config_root / name) for name in _PERSONAL_FILENAMES],
         "preserve": [fields[name] for name in _PRESERVED_ROOTS],
     }
 

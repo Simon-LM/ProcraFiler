@@ -78,25 +78,28 @@ It asks where your **Inbox**, **Library** and an optional **Mirror** (a backup c
 ## 4) Update to the latest release
 
 ```bash
-cd ProcraFiler
-sudo ./scripts/update.sh --mode system
+sudo /opt/procrafiler/app/update.sh --mode system
+# from a clone instead: sudo ./scripts/update.sh --mode system
 ```
 
-`update.sh` fetches the tags and checks out the **latest release tag** (`vX.Y.Z`) from the remote — never a branch HEAD — then reinstalls. It prints the old → new version and refuses to run if the clone has local changes. Your library, catalog, settings and env file are never touched. The reported version is derived from the tag itself (setuptools-scm), so `procrafiler --version` always matches the installed release.
+`update.sh` fetches the tags and checks out the **latest release tag** (`vX.Y.Z`) — never a branch HEAD — then reinstalls. All of it happens inside the installation's **own** source copy (`<app>/src`), so the clone you installed from is never fetched into, checked out or moved, and updating keeps working after you delete it. It prints the old → new version and refuses to run if that source copy has local changes. Your library, catalog, settings and env file are never touched. The reported version is derived from the tag itself (setuptools-scm), so `procrafiler --version` always matches the installed release.
 
 ## 5) Uninstall
 
 ```bash
-sudo ./scripts/uninstall.sh --mode system
+sudo procrafiler-uninstall --mode system
+# from a clone instead: sudo ./scripts/uninstall.sh --mode system
 ```
 
-This removes the app (launcher + venv + code) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your API key). It prints exactly what is kept and where. **Your organized files are never deleted.**
+This removes the app (both launchers + venv + source) and **keeps everything else** — your library, the catalog/state, and your config (incl. the env file with your API key). Each target is reported as *removed* or *already absent*, and finding nothing to remove is an error, not a tick. **Your organized files are never deleted.**
 
-To also remove the app's config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library or your context file — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt):
+To also remove the app's config and regenerable state (env file, settings, policy, catalog, logs, search index) — but **never** your library — add `--purge` (it lists the files and asks for confirmation; `--yes` skips the prompt). It **refuses** while any `PROCRAFILER_*` path variable is set in your shell, since those would redirect it away from the installation:
 
 ```bash
 ./scripts/uninstall.sh --mode user --purge
 ```
+
+A purge also removes **your context file**, after offering to copy it out first (default: no copy; `--keep-context` / `--drop-context` answer up front). See the README for why.
 
 ## Notes
 
