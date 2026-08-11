@@ -9,6 +9,32 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Changed
+
+- **An installation now owns its source, so the folder you installed from is yours to delete.** Installing used to read the code straight out of your clone and record its path. Deleting that folder afterwards — the ordinary thing to do once something is installed — left you with an app that could no longer be updated and could no longer be uninstalled at all, because `uninstall.sh` existed only in the folder you had just removed. Worse, updating ran `git checkout <tag>` **inside** that clone: a developer working there was silently moved onto a detached HEAD by a command that was supposed to touch nothing of theirs.
+
+  `install.sh` now clones into the installation's own directory, checks the release tag out there, and installs from it; your tree is read once and never written to. `uninstall.sh` is copied in beside it, with a `procrafiler-uninstall` launcher next to `procrafiler`. The uninstaller is deliberately the one from the **installed release**, not from any newer working tree — a script that removes paths the installed version never created is not a fix, it is a different bug.
+
+  An installation made by the older installer is **repaired in place** on the next update rather than rejected: its source is copied out of the old clone once, the metadata is completed, and that clone is never read again. Only when it has already been deleted is there nothing to work from, and only then does the updater point at `install.sh --reinstall`.
+
+- **Installing over an existing installation is refused, not done quietly.** `install.sh` reports what is already there — version, revision, where it came from — and stops unless you pass `--reinstall`. Two installations of different versions sharing one catalog is not a configuration anybody chooses on purpose.
+
+- **A development checkout defaults to its own sandbox instead of being refused.** A run with no environment set used to compute the real library's path in your home and rely on `dev_guard` to turn it away — safe, but one guard away from the incident that motivated those guards. A source checkout now defaults to `<repo>/sandbox/workspace/`, identical to what `sandbox/run.sh` exports (a test reads the script to prove the two spellings cannot drift), so there is nothing left to refuse and the three guards stay underneath as a net rather than as the only line.
+
+- **`procrafiler paths` prints every runtime path as JSON**, read-only, creating nothing. The install scripts read it instead of restating `config.py` in bash — the drift that had the purge list naming a file no longer created, while missing the lock, the state directory itself and the leftover subdirectories of older versions.
+
+### Fixed
+
+- **A purge no longer leaves your context file behind.** It was spared on the grounds that it is your own writing, which is true and led to the wrong conclusion: it describes who you are, what you do for a living and the names that matter to you, and it stayed in `~/.config/procrafiler` on a machine you had just wiped the app from. A purge that leaves personal notes is a leak, not caution.
+
+  It is now removed with the rest — but never silently. You are asked first whether to keep a copy outside ProcraFiler, and told the exact path of that copy. The offer defaults to **no**, and `--yes` alone writes no copy at all: an unrequested copy of somebody's personal notes is the same leak under another name. `--keep-context` and `--drop-context` answer it up front, the copy is written readable only by you, and a copy that fails to write leaves the original in place rather than deleting it.
+
+- **Uninstalling reports what it actually removed.** Every target is now printed as *removed* or *already absent*, and finding nothing at all is an error that names the other `--mode` to try. It used to print `✓ Removed the ProcraFiler app` unconditionally, after `rm -f` and `rm -rf` that say nothing about a missing target — so uninstalling `--mode user` an installation made `--mode system` deleted two paths that were never there, declared victory, and left the real installation running.
+
+- **`--purge` refuses while a `PROCRAFILER_*` path variable is set in your shell.** Those variables redirect the catalog and config elsewhere — this project's own `sandbox/run.sh` exports them — so a purge obeyed them and erased *that* instead of the installation, while reporting the installation as purged. It now names the offending variable and stops rather than guess which one you meant.
+
+- **`install-meta.env` records the version, the commit, the revision and where the source came from.** Nothing could previously say what was installed without running it, and no script could check what it was acting on.
+
 ## [0.10.0] - 2026-08-11 — Video, audio and media: what a run will cost, and how to take it back
 
 ### Added

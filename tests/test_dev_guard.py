@@ -93,14 +93,19 @@ class TestGuardRefusals(unittest.TestCase):
     # --- guard 3: the built-in defaults ---------------------------------
 
     def test_the_default_layout_is_refused(self) -> None:
-        """This is the exact call that caused the incident."""
+        """This is the exact call that caused the incident.
+
+        Reached now through `force_home_defaults`, because a source checkout no
+        longer *defaults* to the home at all — see the test below. The guard is
+        unchanged and still refuses; what changed is who arrives at its door.
+        """
         home = self.root / "home"
         home.mkdir()
         with patch.object(Path, "home", return_value=home):
             with patch.dict(os.environ, {}, clear=False):
                 for name in dev_guard.ROOT_ENV_VARS:
                     os.environ.pop(name, None)
-                paths = default_runtime_paths()
+                paths = default_runtime_paths(force_home_defaults=True)
                 with self.assertRaises(ProductionWriteRefused) as caught:
                     guard_mutation(paths)
         # A refusal that does not say where it was pointed cannot be acted on.
@@ -108,6 +113,60 @@ class TestGuardRefusals(unittest.TestCase):
         self.assertIn("PROCRAFILER_ALLOW_REAL_DATA", str(caught.exception))
         # …and it really did not create it.
         self.assertFalse(paths.library_root.exists())
+
+    def test_a_checkout_no_longer_even_names_the_home(self) -> None:
+        """The improvement layered on top of the three guards.
+
+        Before: an unconfigured development run computed the real library's path
+        and was turned away. Safe, but one guard away from the incident. Now it
+        computes its own sandbox, so there is nothing to turn away — and the guards
+        stay underneath as the net, as the test above proves.
+        """
+        home = self.root / "home"
+        home.mkdir()
+        checkout = dev_guard.source_checkout_root()
+        assert checkout is not None, "this suite runs from a checkout"
+
+        with patch.object(Path, "home", return_value=home):
+            with patch.dict(os.environ, {}, clear=False):
+                for name in dev_guard.ROOT_ENV_VARS:
+                    os.environ.pop(name, None)
+                paths = default_runtime_paths()
+
+        sandbox = checkout / "sandbox" / "workspace"
+        for root in (paths.workspace_root, paths.library_root, paths.mirror_root,
+                     paths.state_root, paths.settings_file.parent):
+            with self.subTest(root=root):
+                self.assertTrue(root.is_relative_to(sandbox), f"{root} escaped the sandbox")
+                self.assertFalse(root.is_relative_to(home), f"{root} still points into the home")
+
+    def test_the_checkout_defaults_match_sandbox_run_sh_exactly(self) -> None:
+        """Two spellings of "the sandbox" that drifted would give a checkout TWO
+        sandboxes — the very collision this removes. The script and the code must
+        name the same five directories, so the same test data is seen whether a run
+        went through `sandbox/run.sh` or not."""
+        checkout = dev_guard.source_checkout_root()
+        assert checkout is not None
+        script = (checkout / "sandbox" / "run.sh").read_text(encoding="utf-8")
+        work = checkout / "sandbox" / "workspace"
+
+        with patch.dict(os.environ, {}, clear=False):
+            for name in dev_guard.ROOT_ENV_VARS:
+                os.environ.pop(name, None)
+            paths = default_runtime_paths()
+
+        expected = {
+            'PROCRAFILER_WORKSPACE_DIR="$WORK/ProcraFiler_Inbox"': paths.workspace_root,
+            'PROCRAFILER_LIBRARY_DIR="$WORK/ProcraFiler_Library"': paths.library_root,
+            'PROCRAFILER_LIBRARY_MIRROR_DIR="$WORK/ProcraFiler_Library_Mirror"': paths.mirror_root,
+            'PROCRAFILER_HOME="$WORK/state"': paths.state_root,
+            'PROCRAFILER_CONFIG_HOME="$WORK/config"': paths.settings_file.parent,
+        }
+        for line, computed in expected.items():
+            with self.subTest(line=line):
+                self.assertIn(line, script, "sandbox/run.sh no longer exports this")
+                suffix = line.split('"$WORK/')[1].rstrip('"')
+                self.assertEqual(computed, work / suffix)
 
     # --- guard 1: the installed layout ----------------------------------
 
@@ -201,12 +260,18 @@ class TestGuardIsWiredIntoLayoutCreation(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_ensure_runtime_layout_refuses_the_default_layout(self) -> None:
+        """The wiring: the guard sits at the one function ~30 entry points call.
+
+        `force_home_defaults` reaches the production layout from a checkout, which
+        is what this asserts is refused — a checkout's own default is now its
+        sandbox, and that case is covered in `TestGuardRefusals`.
+        """
         home = self.root / "home"
         home.mkdir()
         with patch.object(Path, "home", return_value=home):
             for name in dev_guard.ROOT_ENV_VARS:
                 os.environ.pop(name, None)
-            paths = default_runtime_paths()
+            paths = default_runtime_paths(force_home_defaults=True)
             with self.assertRaises(ProductionWriteRefused):
                 ensure_runtime_layout(paths)
         self.assertEqual(

@@ -35,6 +35,7 @@ from procrafiler.config import (
     FEATURE_NAMES,
     RuntimePaths,
     default_runtime_paths,
+    format_paths_json,
     get_deletion_mode,
     get_user_language,
     load_runtime_policy,
@@ -45,6 +46,7 @@ from procrafiler.config import (
     set_user_language,
 )
 from procrafiler.doctor import format_report, overall_exit_code, run_doctor
+
 from procrafiler.mirror import purge_mirror_trash  # type: ignore[reportMissingImports]
 from procrafiler.pipeline import (
     LibraryTrashError,
@@ -96,6 +98,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("status", help="Show workspace and state paths with feature status")
+    subparsers.add_parser(
+        "paths",
+        help="Print every runtime path as JSON (what the install scripts read)",
+    )
     subparsers.add_parser("init-layout", help="Create workspace, state folders, and metadata files")
     subparsers.add_parser("features", help="List feature flags")
     subparsers.add_parser("policy-effective", help="Show effective runtime policy values")
@@ -258,6 +264,17 @@ def build_parser() -> argparse.ArgumentParser:
     deleted_history.add_argument("--limit", type=int, default=50, help="Most recent N entries (default: 50)")
 
     return parser
+
+
+def cmd_paths() -> int:
+    """Machine-readable paths, for `install.sh` / `uninstall.sh`.
+
+    Read-only, and it must stay that way: an uninstaller asks this question with
+    the intention of deleting the answer, so creating anything here would have it
+    build the very directories it is about to remove.
+    """
+    print(format_paths_json(default_runtime_paths()))
+    return 0
 
 
 def cmd_status() -> int:
@@ -970,6 +987,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         return cmd_status()
+    if args.command == "paths":
+        return cmd_paths()
     if args.command == "init-layout":
         return cmd_init_layout()
     if args.command == "features":

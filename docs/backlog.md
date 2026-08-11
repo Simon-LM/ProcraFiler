@@ -212,7 +212,7 @@ The whole distribution channel today is `git clone` + `scripts/install.sh`
 reasonable choice before 1.0, but it makes the clone part of the installation, and
 nothing currently says so.
 
-- [ ] **D1 — the clone is load-bearing and undocumented.** `install.sh` records
+- [x] **D1 — the clone is load-bearing and undocumented — FIXED.** `install.sh` records
       `REPO_ROOT` in `install-meta.env`; `update.sh` re-reads it, `git fetch`es and
       re-installs, and **refuses when the directory is gone**. `uninstall.sh` exists
       only inside the clone, is never copied out, and there is no `procrafiler
@@ -220,58 +220,112 @@ nothing currently says so.
       tidies their downloads — an entirely ordinary thing to do — keeps a working app
       with **no way to update and no way to uninstall**, and no indication of what to
       delete by hand.
-- [ ] **D2 — `uninstall.sh` reports a success it never verified.** The
+- [x] **D2 — `uninstall.sh` reports a success it never verified — FIXED.** The
       `✓ Removed the ProcraFiler app` is unconditional, printed after `rm -f` / `rm -rf`
       that stay silent on a missing target. Install with `--mode system`, uninstall
       without options (the default is `user`), and it deletes two non-existent paths
       under `~`, declares victory, and leaves `/opt/procrafiler/app` and
       `/usr/local/bin/procrafiler` in place.
-- [ ] **D3 — `--purge` obeys the environment.** `STATE_DIR="${PROCRAFILER_HOME:-…}"`
+- [x] **D3 — `--purge` obeys the environment — FIXED.** `STATE_DIR="${PROCRAFILER_HOME:-…}"`
       and `CONFIG_DIR="${PROCRAFILER_CONFIG_HOME:-…}"`. Run it in a shell where those
       are exported — which is exactly what this project's own `sandbox/run.sh` does —
       and it purges the catalog and config of whatever they point at, not of the
       installation.
-- [ ] **D4 — installing from a live working tree is allowed, and update.sh then moves
-      its HEAD.** `REPO_ROOT` is simply `scripts/..`, so nothing stops an install from
-      a development clone. `update.sh` afterwards runs `git checkout <latest tag>`
-      **inside that clone**, leaving a developer on a detached HEAD. The dirty-tree
-      check is only a partial guard: a clean tree passes.
-- [ ] **D5 — the purge list has drifted from the code.** It names `search_index.db`
+- [x] **D4 — an update moves the HEAD of the clone it was installed from — FIXED.** Installing
+      *from* the git tree is a deliberate design, not an oversight:
+      [dev-prod-isolation.md](dev-prod-isolation.md) states it plainly — *"production
+      is installed from the git tree and updates from it"* — and builds on it, which is
+      why the presence of `.git` was rejected there as a way to tell development from
+      production. What follows from it was not intended: `REPO_ROOT` is `scripts/..`,
+      so the clone may be a live working tree, and `update.sh` then runs `git checkout
+      <latest tag>` **inside it**, leaving a developer on a detached HEAD. The
+      dirty-tree check is only a partial guard — a clean tree passes.
+- [x] **D5 — the purge list has drifted from the code — FIXED.** It names `search_index.db`
       and misses `procrafiler.lock`, the state directory itself, and every
       subdirectory. The lists are hardcoded in bash while the truth lives in
       `config.default_runtime_paths()`, so they drift silently and a "purged"
       installation leaves a tree behind in `~/.local/share`.
-- [ ] **D6 — `install-meta.env` records no version and no commit.** Nothing can say
+- [x] **D6 — `install-meta.env` records no version and no commit — FIXED.** Nothing can say
       what is installed without running it, and no script can check what it is acting
       on.
-- [ ] **D7 — dev and prod share their default paths.** `~/.local/share/procrafiler`
-      and `~/.config/procrafiler` serve both. A development run without the sandbox
-      overrides writes into a production installation's state, and nothing prevents,
-      detects or reports it.
+- [x] **D7 — ~~dev and prod share their default paths~~ — WITHDRAWN, it was wrong.**
+      The original entry claimed a development run writes into a production
+      installation's state and that "nothing prevents, detects or reports it". That
+      is false, and it was written without reading
+      [dev-prod-isolation.md](dev-prod-isolation.md) — a document that opens on the
+      2026-07-28 incident, closes three gates, and states *"Every item is done"*.
+      Three layered guards in [`dev_guard.py`](../src/procrafiler/dev_guard.py) refuse
+      exactly this, from the single choke point every entry path goes through, with 14
+      tests and six verified mutations. The paths are indeed shared; the collision is
+      not. **Left visible rather than deleted**: a defect list that quietly loses an
+      entry teaches nobody why it was there.
+
+      What genuinely remains around it is narrow, and only the third is worth doing:
+
+      - *two installed copies sharing one state* — theoretical. `dev_guard` returns
+        early for anything that is not a source checkout, so a user-mode and a
+        system-mode install of the same version would share `~/.local/share/
+        procrafiler` unremarked. The harm is not the shared path, it is the version
+        skew, which is the point below.
+      - *an installed build writing into a development sandbox* — theoretical, and
+        the sandbox is throwaway by definition. Not worth a guard.
+      - *an older version reading a state a newer one wrote* — **real, small, and
+        untouched by any existing guard.** A schema written by a newer release can
+        hold what an older one will drop on its next write, and downgrading should be
+        a decision rather than a side effect.
+
+- [x] **D8 — a purge leaves the user's context file behind — FIXED.** It was spared on
+      the grounds that it is the user's own writing, which is true and led to the
+      wrong conclusion: it holds who they are, what they do for a living and the names
+      that matter to them, and it stayed in `~/.config/procrafiler` on a machine they
+      had just wiped the app from. A purge that leaves personal notes is a leak, not
+      caution. It is now removed with the rest — but only after the user has been
+      **offered** a copy and told where it went. Offered, never imposed: the offer
+      defaults to *no*, `--yes` alone writes no copy at all (an unrequested copy is
+      the same leak under a new name), `--keep-context` / `--drop-context` answer it
+      up front, and a copy that fails to write leaves the original in place rather
+      than deleting it.
+- [x] **D9 — an installation made by the older installer cannot be updated — FIXED.**
+      Those record only `REPO_ROOT`, the user's own clone. Using it again would
+      re-inflict D4 on exactly the people who already have it, so `update.sh` refused
+      and sent them to a full reinstall — a fix for us, a dead end for them. It now
+      **repairs in place**: the source is copied out of that clone once into
+      `$APP_DIR/src`, the metadata is completed, and the clone is never read again.
+      Only when that clone is gone is there nothing to work from, and only then does
+      it point at `install.sh --reinstall`.
 
 ### The plan
 
-- [ ] **A. Make an installation self-contained.** `install.sh` copies `uninstall.sh`
+- [x] **A. Make an installation self-contained — DONE.** `install.sh` copies `uninstall.sh`
       into `$APP_DIR` and installs a `procrafiler-uninstall` launcher beside
       `procrafiler`. Uninstalling stops depending on the clone. → D1
-- [ ] **B. Install from a snapshot, never from the tree.** `git archive` the tag into
-      a temporary directory and install from there, so `REPO_ROOT` can never name a
-      live repository and `update.sh` can never move anyone's HEAD. Refuse outright on
-      a dirty tree or off a release tag, with an explicit override. → D4
-- [ ] **C. Uninstall from recorded facts, not from guesses.** Read `install-meta.env`
+- [x] **B. Give the installation its own clone — DONE.** `install.sh` clones into
+      `$APP_DIR/src`, checks the release tag out **there**, and installs from it;
+      `update.sh` fetches and checks out in that clone only. The user's tree is read
+      once and never written. Refuse outright on a dirty tree or off a release tag,
+      with an explicit override. → D4, and it completes A.
+
+      *Rejected on the way:* installing from a `git archive` snapshot in a temporary
+      directory. It drops `.git`, so setuptools-scm loses the tag and the package
+      installs as the `0.0.0` fallback — it would destroy the very version F exists to
+      record.
+- [x] **B2. One installation, and no reinstall over an existing one — DONE.** `install.sh`
+      currently has no check at all: it will happily run over a live installation, or
+      over a development checkout's state. It must find an existing installation,
+      report its version and where it came from, and refuse without an explicit
+      `--reinstall`. → the "only one" requirement
+- [x] **C. Uninstall from recorded facts, not from guesses — DONE.** Read `install-meta.env`
       and remove exactly what it lists. Report per target: *removed* / *already
       absent*, never an unconditional tick. Refuse while any `PROCRAFILER_*` path
       variable is exported. → D2, D3
-- [ ] **D. One source of truth for paths.** A `procrafiler paths --json` subcommand
+- [x] **D. One source of truth for paths — DONE.** A `procrafiler paths --json` subcommand
       the shell scripts consume, instead of re-stating `config.py` in bash. → D5, and
       it prevents the next drift.
-- [ ] **E. Make cohabitation impossible rather than unlikely.** A marker in
-      `state_root` (`.procrafiler-prod`, modelled on the `.procrafiler-sandbox` that
-      `sandbox/run.sh` already writes), and the app refuses to start when the marker
-      contradicts the mode it is running in. Plus a version stamp: refuse a state
-      directory written by a newer version, ask before adopting an older one. → D7,
-      and it covers stale installations of either kind.
-- [ ] **F. Record version and commit** in `install-meta.env`, and show them. → D6
+- [ ] **E. A version stamp on the state directory** — refuse to run over a state a
+      NEWER release wrote, rather than silently dropping what it stored. This is all
+      that survives of the withdrawn D7; **`dev_guard` is not to be touched**, it
+      already covers the collision that mattered. → the third bullet of D7
+- [x] **F. Record version and commit — DONE.** in `install-meta.env`, and show them. → D6
 
 ## Open evaluations
 
