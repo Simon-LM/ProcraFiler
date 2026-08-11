@@ -200,6 +200,79 @@ page redesign yields a wrong number rather than an error, everywhere at once).
       "file-then-fix" Option A in disguise; we harden the run's steps instead). Reevaluate
       only if several real runs show the in-flow filing staying insufficient.
 
+## Install / update / uninstall — seven defects found 2026-08-11
+
+Found while removing an installation made on 2026-04-02, the day the repository was
+created. Nothing here is a bug in the application: it is the **lifecycle around it**
+— how it gets onto a machine, how it is updated, and how it comes off. Each defect
+is stated with the harm it does to someone who is not the author.
+
+The whole distribution channel today is `git clone` + `scripts/install.sh`
+([README.md](../README.md)) — no wheel, no PyPI package, no `.deb`. That is a
+reasonable choice before 1.0, but it makes the clone part of the installation, and
+nothing currently says so.
+
+- [ ] **D1 — the clone is load-bearing and undocumented.** `install.sh` records
+      `REPO_ROOT` in `install-meta.env`; `update.sh` re-reads it, `git fetch`es and
+      re-installs, and **refuses when the directory is gone**. `uninstall.sh` exists
+      only inside the clone, is never copied out, and there is no `procrafiler
+      uninstall` subcommand. So a user who clones into `~/Downloads`, installs, then
+      tidies their downloads — an entirely ordinary thing to do — keeps a working app
+      with **no way to update and no way to uninstall**, and no indication of what to
+      delete by hand.
+- [ ] **D2 — `uninstall.sh` reports a success it never verified.** The
+      `✓ Removed the ProcraFiler app` is unconditional, printed after `rm -f` / `rm -rf`
+      that stay silent on a missing target. Install with `--mode system`, uninstall
+      without options (the default is `user`), and it deletes two non-existent paths
+      under `~`, declares victory, and leaves `/opt/procrafiler/app` and
+      `/usr/local/bin/procrafiler` in place.
+- [ ] **D3 — `--purge` obeys the environment.** `STATE_DIR="${PROCRAFILER_HOME:-…}"`
+      and `CONFIG_DIR="${PROCRAFILER_CONFIG_HOME:-…}"`. Run it in a shell where those
+      are exported — which is exactly what this project's own `sandbox/run.sh` does —
+      and it purges the catalog and config of whatever they point at, not of the
+      installation.
+- [ ] **D4 — installing from a live working tree is allowed, and update.sh then moves
+      its HEAD.** `REPO_ROOT` is simply `scripts/..`, so nothing stops an install from
+      a development clone. `update.sh` afterwards runs `git checkout <latest tag>`
+      **inside that clone**, leaving a developer on a detached HEAD. The dirty-tree
+      check is only a partial guard: a clean tree passes.
+- [ ] **D5 — the purge list has drifted from the code.** It names `search_index.db`
+      and misses `procrafiler.lock`, the state directory itself, and every
+      subdirectory. The lists are hardcoded in bash while the truth lives in
+      `config.default_runtime_paths()`, so they drift silently and a "purged"
+      installation leaves a tree behind in `~/.local/share`.
+- [ ] **D6 — `install-meta.env` records no version and no commit.** Nothing can say
+      what is installed without running it, and no script can check what it is acting
+      on.
+- [ ] **D7 — dev and prod share their default paths.** `~/.local/share/procrafiler`
+      and `~/.config/procrafiler` serve both. A development run without the sandbox
+      overrides writes into a production installation's state, and nothing prevents,
+      detects or reports it.
+
+### The plan
+
+- [ ] **A. Make an installation self-contained.** `install.sh` copies `uninstall.sh`
+      into `$APP_DIR` and installs a `procrafiler-uninstall` launcher beside
+      `procrafiler`. Uninstalling stops depending on the clone. → D1
+- [ ] **B. Install from a snapshot, never from the tree.** `git archive` the tag into
+      a temporary directory and install from there, so `REPO_ROOT` can never name a
+      live repository and `update.sh` can never move anyone's HEAD. Refuse outright on
+      a dirty tree or off a release tag, with an explicit override. → D4
+- [ ] **C. Uninstall from recorded facts, not from guesses.** Read `install-meta.env`
+      and remove exactly what it lists. Report per target: *removed* / *already
+      absent*, never an unconditional tick. Refuse while any `PROCRAFILER_*` path
+      variable is exported. → D2, D3
+- [ ] **D. One source of truth for paths.** A `procrafiler paths --json` subcommand
+      the shell scripts consume, instead of re-stating `config.py` in bash. → D5, and
+      it prevents the next drift.
+- [ ] **E. Make cohabitation impossible rather than unlikely.** A marker in
+      `state_root` (`.procrafiler-prod`, modelled on the `.procrafiler-sandbox` that
+      `sandbox/run.sh` already writes), and the app refuses to start when the marker
+      contradicts the mode it is running in. Plus a version stamp: refuse a state
+      directory written by a newer version, ask before adopting an older one. → D7,
+      and it covers stale installations of either kind.
+- [ ] **F. Record version and commit** in `install-meta.env`, and show them. → D6
+
 ## Open evaluations
 
 - [ ] **Real-key smoke test of OCR (`/v1/ocr`) and vision contracts** — the text path
