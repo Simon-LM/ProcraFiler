@@ -42,9 +42,13 @@ class TestInstallScript(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def _run(self, *args: str, **extra_env: str) -> subprocess.CompletedProcess[str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("PROCRAFILER_")}
         env["HOME"] = str(self.home)
+        # Were the suite itself run under sudo, install.sh would resolve the user
+        # installation into the real invoking user's home instead of this fake one.
+        env.pop("SUDO_USER", None)
+        env.update(extra_env)
         return subprocess.run(
             ["bash", str(_INSTALL), *args],
             env=env, capture_output=True, text=True,
@@ -277,6 +281,130 @@ class TestInstallScript(unittest.TestCase):
 
     def test_help_exits_zero(self) -> None:
         self.assertEqual(self._run("--help").returncode, 0)
+
+
+@unittest.skipUnless(shutil.which("bash") and _INSTALL.is_file(), "bash / install.sh unavailable")
+class TestOneInstallationPerMachine(unittest.TestCase):
+    """One installation per machine, not one per mode.
+
+    The two modes put the CODE in different places — `~/.local/share/procrafiler`
+    and `/opt/procrafiler` — but the catalog is derived from `Path.home()`, from WHO
+    runs the command rather than from where the code lives. So two installations of
+    different versions share one state, and the older binary writes into what the
+    newer one keeps. The existing-installation check only looked where the mode
+    being installed writes, so each mode was invisible to the other.
+
+    System paths are absolute by nature, so these tests give install.sh a fake root
+    (`PROCRAFILER_TEST_ROOT`) rather than writing to the real /opt and /etc.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name) / "home"
+        self.home.mkdir()
+        self.fake_root = Path(self.tmp.name) / "fakeroot"
+        self.stub = Path(self.tmp.name) / "stub-python"
+        self.stub.write_text(_STUB_PYTHON, encoding="utf-8")
+        self.stub.chmod(0o755)
+
+        self.system_app = self.fake_root / "opt/procrafiler/app"
+        self.system_env = self.fake_root / "etc/procrafiler/procrafiler.env"
+        self.system_bin = self.fake_root / "usr/local/bin"
+        self.user_app = self.home / ".local/share/procrafiler/app"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PROCRAFILER_")}
+        env["HOME"] = str(self.home)
+        env.pop("SUDO_USER", None)
+        env["PROCRAFILER_TEST_ROOT"] = str(self.fake_root)
+        return subprocess.run(["bash", str(_INSTALL), *args],
+                              env=env, capture_output=True, text=True)
+
+    def _install_user(self, *extra: str) -> subprocess.CompletedProcess[str]:
+        return self._run("--mode", "user", "--python", str(self.stub), *extra)
+
+    def _install_system(self, *extra: str) -> subprocess.CompletedProcess[str]:
+        return self._run("--mode", "system", "--python", str(self.stub),
+                         "--prefix", str(self.fake_root / "usr/local"), *extra)
+
+    def _fake_system_installation(self) -> None:
+        # The version and the revision are deliberately unalike. Written as 0.9.0
+        # and v0.9.0, either line satisfies a search for the other, and dropping one
+        # of them from the refusal would go unnoticed.
+        self.system_app.mkdir(parents=True)
+        (self.system_app / "install-meta.env").write_text(
+            "MODE=system\nVERSION=0.9.0\nSOURCE_REF=abc1234\n", encoding="utf-8")
+
+    # --- neither mode may be installed beside the other ---------------------
+
+    def test_a_user_install_is_refused_when_a_system_one_exists(self) -> None:
+        self._fake_system_installation()
+
+        result = self._install_user()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("in the other mode", result.stderr)
+        self.assertIn("0.9.0", result.stderr, "it must say which version is already there")
+        self.assertIn("abc1234", result.stderr, "it must say which revision is already there")
+        self.assertIn("--mode system", result.stderr, "it must name how to remove it")
+        self.assertFalse(self.user_app.exists(), "it installed anyway")
+
+    def test_a_system_install_is_refused_when_a_user_one_exists(self) -> None:
+        self.assertEqual(self._install_user().returncode, 0)
+
+        result = self._install_system()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("in the other mode", result.stderr)
+        self.assertIn("--mode user", result.stderr)
+        self.assertFalse(self.system_app.exists(), "it installed anyway")
+
+    def test_reinstall_does_not_authorise_a_second_installation(self) -> None:
+        """`--reinstall` means "replace this installation". Putting a second one
+        beside an existing one is not that, so it must not be a way through."""
+        self._fake_system_installation()
+
+        result = self._install_user("--reinstall")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("in the other mode", result.stderr)
+        self.assertFalse(self.user_app.exists())
+
+    def test_a_lone_install_is_unaffected(self) -> None:
+        """Anti-vacuity: with nothing in the other mode, both must install."""
+        self.assertEqual(self._install_user().returncode, 0)
+        shutil.rmtree(self.user_app.parent)
+        self.assertEqual(self._install_system().returncode, 0, "system mode became uninstallable")
+
+    # --- system mode must not point every account at one person's library ---
+
+    def test_the_system_launcher_forces_no_env_file_on_anybody(self) -> None:
+        """The leak between users. `/etc/procrafiler/procrafiler.env` is one file for
+        the whole machine, and `setup` writes PROCRAFILER_LIBRARY_DIR into it as an
+        absolute path — so forcing it pointed every other account's inbox and library
+        at the home of whoever ran `setup` first."""
+        self.assertEqual(self._install_system().returncode, 0)
+
+        launcher = (self.system_bin / "procrafiler").read_text(encoding="utf-8")
+        self.assertNotIn("PROCRAFILER_ENV_FILE", launcher)
+        self.assertIn("/opt/procrafiler/app/.venv/bin/procrafiler", launcher, "it must still run the app")
+
+    def test_the_user_launcher_still_names_its_own_env_file(self) -> None:
+        """Anti-vacuity: in user mode that file belongs to the only person who can
+        run the launcher, so naming it is help, not a leak."""
+        self.assertEqual(self._install_user().returncode, 0)
+
+        launcher = (self.home / ".local/bin/procrafiler").read_text(encoding="utf-8")
+        self.assertIn(f'PROCRAFILER_ENV_FILE="{self.home}/.config/procrafiler/procrafiler.env"', launcher)
+
+    def test_system_mode_still_seeds_a_machine_wide_env_file(self) -> None:
+        """It stops being an override and becomes what the app already treats it as:
+        the last candidate, used by an account that has no env file of its own."""
+        self.assertEqual(self._install_system().returncode, 0)
+        self.assertTrue(self.system_env.exists())
 
 
 if __name__ == "__main__":

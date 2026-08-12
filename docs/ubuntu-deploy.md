@@ -41,9 +41,9 @@ procrafiler init-layout
 
 ## 3.1) Configure runtime environment
 
-System install mode creates `/etc/procrafiler/procrafiler.env` automatically on first install.
+System install mode creates `/etc/procrafiler/procrafiler.env` automatically on first install. It is a **machine-wide default, not an override**: each account resolves its own `~/.config/procrafiler/procrafiler.env` first, and falls back to this one only when it has none. That is deliberate — `procrafiler setup` writes the Inbox and Library paths as absolute paths, so a single forced file would have pointed every account on the machine at one person's home.
 
-Edit it and fill your API keys/settings:
+On a machine used by several people, each of them runs `procrafiler setup` once and gets their own paths, their own API key and their own bill. Fill in `/etc/procrafiler/procrafiler.env` only for the defaults you want a fresh account to inherit:
 
 ```bash
 sudo nano /etc/procrafiler/procrafiler.env

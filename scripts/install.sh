@@ -62,18 +62,46 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# A fake root, for tests only. System-mode paths are absolute by nature and no
+# test can write to /opt or /etc. Empty in real use, so the two below are exactly
+# /opt/procrafiler/app and /etc/procrafiler.
+FAKE_ROOT="${PROCRAFILER_TEST_ROOT:-}"
+SYSTEM_APP_DIR="$FAKE_ROOT/opt/procrafiler/app"
+SYSTEM_ENV_DIR="$FAKE_ROOT/etc/procrafiler"
+
+# Under `sudo`, $HOME may be root's. A --mode user installation lives in the home
+# of the person who TYPED the command, which is what SUDO_USER records.
+invoking_home() {
+  if [[ -n "${SUDO_USER:-}" ]] && command -v getent >/dev/null 2>&1; then
+    local home
+    home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    if [[ -n "$home" ]]; then
+      printf '%s' "$home"
+      return
+    fi
+  fi
+  printf '%s' "${HOME:-/root}"
+}
+USER_APP_DIR="$(invoking_home)/.local/share/procrafiler/app"
+
 if [[ "$MODE" == "system" ]]; then
-  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  # The privilege is required because /opt and /etc are root-owned. Under a fake
+  # root neither is touched, so the requirement would be a test obstacle only.
+  if [[ -z "$FAKE_ROOT" && ${EUID:-$(id -u)} -ne 0 ]]; then
     echo "System mode requires root privileges. Run with sudo." >&2
     exit 1
   fi
-  APP_DIR="/opt/procrafiler/app"
+  APP_DIR="$SYSTEM_APP_DIR"
   BIN_DIR="$PREFIX/bin"
-  ENV_DIR="/etc/procrafiler"
+  ENV_DIR="$SYSTEM_ENV_DIR"
+  OTHER_MODE="user"
+  OTHER_APP_DIR="$USER_APP_DIR"
 else
   APP_DIR="$HOME/.local/share/procrafiler/app"
   BIN_DIR="$HOME/.local/bin"
   ENV_DIR="$HOME/.config/procrafiler"
+  OTHER_MODE="system"
+  OTHER_APP_DIR="$SYSTEM_APP_DIR"
 fi
 
 VENV_DIR="$APP_DIR/.venv"
@@ -83,8 +111,8 @@ ENV_FILE="$ENV_DIR/procrafiler.env"
 
 read_meta() {
   # Parsed rather than sourced: this file must never be able to execute anything.
-  local key="$1" line
-  line="$(grep -E "^${key}=" "$META_FILE" 2>/dev/null | tail -n 1 || true)"
+  local key="$1" file="${2:-$META_FILE}" line
+  line="$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n 1 || true)"
   [[ -n "$line" ]] || return 1
   printf '%s' "${line#"${key}"=}"
 }
@@ -105,6 +133,34 @@ if [[ -f "$META_FILE" && "$REINSTALL" != "true" ]]; then
   echo "  $SCRIPT_DIR/update.sh --mode $MODE" >&2
   echo "To replace this installation from scratch:" >&2
   echo "  $SCRIPT_DIR/install.sh --mode $MODE --reinstall" >&2
+  exit 1
+fi
+
+# --- ...and not a second one in the OTHER mode -------------------------------
+#
+# The check above only looks where THIS mode installs, so `--mode system` sailed
+# straight past a `--mode user` installation, and the other way round. The two
+# then share one catalog: the state directory comes from `Path.home()` — from WHO
+# runs the command, not from where the code lives — so whichever binary is on the
+# PATH writes into the same state, and an older one writes into a newer one's.
+#
+# `--reinstall` deliberately does NOT lift this. It means "replace this
+# installation", and installing a second one beside an existing one is not that.
+if [[ -f "$OTHER_APP_DIR/install-meta.env" ]]; then
+  other_meta="$OTHER_APP_DIR/install-meta.env"
+  echo "ProcraFiler is already installed on this machine, in the other mode." >&2
+  echo "  app:      $OTHER_APP_DIR  (--mode $OTHER_MODE)" >&2
+  echo "  version:  $(read_meta VERSION "$other_meta" || echo unknown)" >&2
+  echo "  revision: $(read_meta SOURCE_REF "$other_meta" || echo unknown)" >&2
+  echo >&2
+  echo "Both would use the same catalog, in the home of whoever runs them, so the" >&2
+  echo "older of the two would write into the state the newer one keeps. Remove that" >&2
+  echo "installation first:" >&2
+  if [[ "$OTHER_MODE" == "system" ]]; then
+    echo "  sudo $SCRIPT_DIR/uninstall.sh --mode system" >&2
+  else
+    echo "  $SCRIPT_DIR/uninstall.sh --mode user" >&2
+  fi
   exit 1
 fi
 
@@ -179,11 +235,28 @@ else
   chmod 600 "$ENV_FILE"
 fi
 
-cat > "$BIN_DIR/procrafiler" <<EOF
+# In USER mode the env file belongs to the one person who can run this launcher,
+# so naming it is help. In SYSTEM mode it is /etc/procrafiler/procrafiler.env —
+# ONE file for every account on the machine — and forcing it on everybody was a
+# real leak between users: `setup` writes PROCRAFILER_LIBRARY_DIR into it as an
+# ABSOLUTE path, so whoever ran `setup` first pointed every other account's inbox
+# and library at their own home.
+#
+# Left unset, each account resolves its own ~/.config/procrafiler/procrafiler.env
+# and falls back to /etc/procrafiler only when it has none — which is what a
+# machine-wide default should be, rather than an override nobody can escape.
+if [[ "$MODE" == "system" ]]; then
+  cat > "$BIN_DIR/procrafiler" <<EOF
+#!/usr/bin/env bash
+exec "$VENV_DIR/bin/procrafiler" "\$@"
+EOF
+else
+  cat > "$BIN_DIR/procrafiler" <<EOF
 #!/usr/bin/env bash
 export PROCRAFILER_ENV_FILE="$ENV_FILE"
 exec "$VENV_DIR/bin/procrafiler" "\$@"
 EOF
+fi
 chmod +x "$BIN_DIR/procrafiler"
 
 # --- The uninstaller travels with the installation ---------------------------

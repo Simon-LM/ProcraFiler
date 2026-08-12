@@ -340,6 +340,10 @@ cd ProcraFiler
 
 The installer creates an isolated virtualenv and, on first install, an env file seeded from `.env.example` (its location is printed at the end of the install).
 
+**One installation per machine, not one per mode.** The two modes put the *code* in different places, but the catalog is always in the home of whoever runs the command — so two installations of different versions would share one catalog, and the older binary would write into what the newer one keeps. Installing either mode while the other exists is therefore refused, naming what is already there and how to remove it. `--reinstall` replaces *that* installation; it is not a way to add a second one.
+
+**In `--mode system`, the configuration stays personal.** The code is shared by every account on the machine; the env file is not forced on anybody. Each user gets their own `~/.config/procrafiler/procrafiler.env` — their own paths, their own API key, their own bill — and `/etc/procrafiler/procrafiler.env` is read only by an account that has none of its own. Each user runs `procrafiler setup` once.
+
 **The installation owns its source.** The clone above is read once and never written to again: the installer copies it into `~/.local/share/procrafiler/app/src`, checks out the latest release tag **there**, and installs from it. Two consequences worth knowing:
 
 - **you can delete the clone afterwards.** Updating and uninstalling keep working — the installation carries its own source and its own copy of the uninstaller, and `procrafiler-uninstall` is installed next to `procrafiler`.
