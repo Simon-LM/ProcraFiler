@@ -9,6 +9,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-08-12 — One installation per machine, and a system install that stays personal
+
 ### Fixed
 
 - **One installation per machine, not one per mode.** The refusal shipped in 0.11.0 looked for an existing installation only where *the mode being installed* writes, so `--mode system` sailed straight past a `--mode user` installation and the other way round. Both then use the same catalog — it lives in the home of whoever runs the command, not beside the code — so whichever binary is first on the `PATH` writes into it, and an older one writes into what a newer one keeps. Installing either mode is now refused while the other exists, naming the version found and the command that removes it. `--reinstall` does not lift it: replacing an installation is not the same act as adding a second one beside it.
