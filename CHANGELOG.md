@@ -9,6 +9,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-12 — An older release refuses to write over a newer release's state
+
 ### Added
 
 - **The state directory now says which release wrote it, and an older one refuses to write over it.** Going back a version is a legitimate thing to do — a release that breaks something for you should not trap you on it — so `update.sh --ref` keeps letting you. What was missing is the warning at that moment: nothing recorded which release had written the catalog, so an older build opened a newer one's state and wrote into it without a word.
