@@ -379,6 +379,29 @@ class TestOneInstallationPerMachine(unittest.TestCase):
         shutil.rmtree(self.user_app.parent)
         self.assertEqual(self._install_system().returncode, 0, "system mode became uninstallable")
 
+    def test_two_users_may_each_have_their_own_user_mode_installation(self) -> None:
+        """The refusal must not have become "one installation per MACHINE" in the
+        literal sense. Jean and Sophie each install in their own home: two
+        installations, two catalogs, two libraries, nothing shared. The check looks
+        at the OTHER mode's location, and a user-mode installation lives in the home
+        of whoever installed it — so neither is visible to the other."""
+        sophie = Path(self.tmp.name) / "sophie"
+        sophie.mkdir()
+
+        jean = self._install_user()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PROCRAFILER_")}
+        env["HOME"] = str(sophie)
+        env.pop("SUDO_USER", None)
+        env["PROCRAFILER_TEST_ROOT"] = str(self.fake_root)
+        hers = subprocess.run(
+            ["bash", str(_INSTALL), "--mode", "user", "--python", str(self.stub)],
+            env=env, capture_output=True, text=True)
+
+        self.assertEqual(jean.returncode, 0, jean.stderr)
+        self.assertEqual(hers.returncode, 0, hers.stderr)
+        self.assertTrue((self.home / ".local/share/procrafiler/app/install-meta.env").exists())
+        self.assertTrue((sophie / ".local/share/procrafiler/app/install-meta.env").exists())
+
     # --- system mode must not point every account at one person's library ---
 
     def test_the_system_launcher_forces_no_env_file_on_anybody(self) -> None:
