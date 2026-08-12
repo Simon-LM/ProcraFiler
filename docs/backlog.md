@@ -347,10 +347,29 @@ nothing currently says so.
 - [x] **D. One source of truth for paths — DONE.** A `procrafiler paths --json` subcommand
       the shell scripts consume, instead of re-stating `config.py` in bash. → D5, and
       it prevents the next drift.
-- [ ] **E. A version stamp on the state directory** — refuse to run over a state a
-      NEWER release wrote, rather than silently dropping what it stored. This is all
-      that survives of the withdrawn D7; **`dev_guard` is not to be touched**, it
-      already covers the collision that mattered. → the third bullet of D7
+- [x] **E. A version stamp on the state directory — DONE.**
+      [`state_version.py`](../src/procrafiler/state_version.py) writes
+      `state-version.json` in the state root and refuses to run over a state a NEWER
+      release wrote. `dev_guard` was not touched.
+
+      *Measured before building it, and it changed the shape of the fix.* The harm
+      today is far smaller than this entry once claimed: `upsert_document` names its
+      columns in `ON CONFLICT DO UPDATE SET`, so a column an older build knows
+      nothing about keeps its value on an existing row and is merely NULL on a new
+      one — which a newer build already reads as "not computed yet". **Nothing is
+      destroyed.** That safety is a property of the migrations written so far, all of
+      which merely ADD. The guard exists for the day one changes the *meaning* of an
+      existing column, where an older build would write the old shape under the new
+      name — silent corruption, undetectable after the fact.
+
+      Deliberately the release version rather than a schema number: a number has to
+      be bumped by whoever writes the migration, and is wrong precisely when they
+      forget, while setuptools-scm derives the version from the git tag. Silent when
+      either side is unreadable or is the `0.0.0` untagged fallback, never blocks a
+      newer build over an older state (that is what the migrations are for), and
+      `PROCRAFILER_ALLOW_OLDER_VERSION=1` forces it — without moving the stamp
+      backwards, so the next older run still meets the refusal. → the third bullet of
+      D7
 - [x] **F. Record version and commit — DONE.** in `install-meta.env`, and show them. → D6
 
 ## Open evaluations

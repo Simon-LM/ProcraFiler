@@ -464,6 +464,16 @@ def ensure_runtime_layout(paths: RuntimePaths, *, include_mirror: bool = True) -
     choke point, no entry point to forget. See `dev_guard`.
     """
     guard_mutation(paths)
+    # Imported here, not at module level: `state_version` needs `RuntimePaths`, and
+    # this module is what defines it.
+    from procrafiler.state_version import (  # type: ignore[reportMissingImports]
+        guard_state_version,
+        record_state_version,
+    )
+
+    # Before anything is created or touched, for the same reason `guard_mutation`
+    # runs first: a refusal that arrives after the writing has begun is not one.
+    guard_state_version(paths)
 
     directories = [
         paths.workspace_root,
@@ -499,3 +509,7 @@ def ensure_runtime_layout(paths: RuntimePaths, *, include_mirror: bool = True) -
     # "already holds real work" guard would start refusing it on the second run.
     if source_checkout_root() is not None:
         mark_sandbox(paths)
+
+    # Last, and only once the state root exists: say which release owns this state,
+    # so the next older one meets a refusal instead of an open door.
+    record_state_version(paths)
