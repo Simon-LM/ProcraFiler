@@ -981,6 +981,25 @@ def cmd_deleted_history(limit: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run a command, turning a guard's refusal into a message rather than a stack.
+
+    Both refusals below are addressed to a person and say what to do next. Printed
+    as a traceback, that text arrives under a wall of frames nobody reads, and the
+    exit code is the interpreter's rather than ours.
+    """
+    from procrafiler.dev_guard import ProductionWriteRefused  # type: ignore[reportMissingImports]
+    from procrafiler.state_version import (  # type: ignore[reportMissingImports]
+        StateWrittenByNewerVersion,
+    )
+
+    try:
+        return _dispatch(argv)
+    except (ProductionWriteRefused, StateWrittenByNewerVersion) as err:
+        print(str(err), file=sys.stderr)
+        return 1
+
+
+def _dispatch(argv: list[str] | None = None) -> int:
     load_runtime_env()
     parser = build_parser()
     args = parser.parse_args(argv)

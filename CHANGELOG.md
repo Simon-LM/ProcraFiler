@@ -9,6 +9,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **The state directory now says which release wrote it, and an older one refuses to write over it.** Going back a version is a legitimate thing to do — a release that breaks something for you should not trap you on it — so `update.sh --ref` keeps letting you. What was missing is the warning at that moment: nothing recorded which release had written the catalog, so an older build opened a newer one's state and wrote into it without a word.
+
+  Measured before building it, and the finding is worth stating plainly: **the harm today is small.** The catalog's writes name their columns, so a column an older build knows nothing about keeps its value on an existing row and is simply empty on a new one — which a newer build already reads as "not computed yet". Nothing is destroyed. But that safety is a property of the migrations written so far, all of which merely *add* a column. The day one changes the *meaning* of an existing field, an older build would write the old shape under the new name, leaving two formats with nothing to tell them apart — silent, and undetectable after the fact.
+
+  So the refusal is a guard for that day, not a repair for today. It names the two versions and the state it declined to touch, and `PROCRAFILER_ALLOW_OLDER_VERSION=1` runs anyway — without moving the stamp backwards, so the next older run still meets it. It never blocks a newer release over an older state: that direction is what the migrations are for. It stays silent on an unstamped state, on an unreadable one, and on the `0.0.0` untagged fallback, so a checkout without tags never starts refusing its own sandbox.
+
+### Changed
+
+- **A guard's refusal is now a message, not a stack trace.** Both `dev_guard`'s refusals and the new one are addressed to a person and say what to do next; printed as a traceback that text arrived under a wall of frames, and the exit code was the interpreter's rather than the app's.
+
 ## [0.11.1] - 2026-08-12 — One installation per machine, and a system install that stays personal
 
 ### Fixed
