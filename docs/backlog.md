@@ -294,6 +294,32 @@ nothing currently says so.
       Only when that clone is gone is there nothing to work from, and only then does
       it point at `install.sh --reinstall`.
 
+- [x] **D10 — "only one installation" was enforced per mode, not per machine — FIXED.**
+      The check introduced with B2 looked for `install-meta.env` where *the mode
+      being installed* writes, so `--mode system` sailed straight past a `--mode
+      user` installation and the other way round. Both then use one catalog: the
+      state root comes from `Path.home()` — from **who** runs the command, not from
+      where the code lives — so whichever binary is on the PATH writes into the same
+      state, and an older one writes into a newer one's. It now probes both
+      locations and refuses, naming the version found and the command that removes
+      it. `--reinstall` deliberately does not lift it: replacing an installation is
+      not the same act as adding one beside it.
+- [x] **D11 — system mode pointed every account at one person's library — FIXED.**
+      In `--mode system` the launcher exported `PROCRAFILER_ENV_FILE=/etc/procrafiler/
+      procrafiler.env` for **every** account on the machine, and `procrafiler setup`
+      writes `PROCRAFILER_WORKSPACE_DIR` and `PROCRAFILER_LIBRARY_DIR` into that file
+      as **absolute** paths. So whoever ran `setup` first silently redirected
+      everybody else's inbox and library into their own home — and, since an explicit
+      `PROCRAFILER_ENV_FILE` is authoritative by design, no other account could
+      escape it. The system launcher now exports nothing: `runtime_env` already
+      resolves `~/.config/procrafiler/procrafiler.env` first and `/etc/procrafiler`
+      last, which turns that file into the machine-wide default it should always have
+      been. Each user runs `setup` once and keeps their own paths, key and bill.
+
+      *Note on scope:* the shared code was never the problem, so `--mode system` is
+      kept rather than removed. Deleting a documented mode would also have stranded
+      anyone already installed that way.
+
 ### The plan
 
 - [x] **A. Make an installation self-contained — DONE.** `install.sh` copies `uninstall.sh`

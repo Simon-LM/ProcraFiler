@@ -9,6 +9,14 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Fixed
+
+- **One installation per machine, not one per mode.** The refusal shipped in 0.11.0 looked for an existing installation only where *the mode being installed* writes, so `--mode system` sailed straight past a `--mode user` installation and the other way round. Both then use the same catalog — it lives in the home of whoever runs the command, not beside the code — so whichever binary is first on the `PATH` writes into it, and an older one writes into what a newer one keeps. Installing either mode is now refused while the other exists, naming the version found and the command that removes it. `--reinstall` does not lift it: replacing an installation is not the same act as adding a second one beside it.
+
+- **`--mode system` no longer points every account on the machine at one person's library.** The system launcher exported `PROCRAFILER_ENV_FILE=/etc/procrafiler/procrafiler.env` for everybody, and `procrafiler setup` writes the Inbox and Library paths into that file as **absolute** paths. So whoever ran `setup` first silently redirected every other account's inbox and library into their own home — and since an explicit `PROCRAFILER_ENV_FILE` is authoritative by design, no other account could escape it.
+
+  The system launcher now exports nothing. Each account resolves its own `~/.config/procrafiler/procrafiler.env` first and falls back to `/etc/procrafiler/procrafiler.env` only when it has none — which turns that file into the machine-wide *default* it should always have been rather than an override. On a shared machine each person runs `procrafiler setup` once and keeps their own paths, their own API key and their own bill. The shared code was never the problem, so system mode is kept rather than removed.
+
 ## [0.11.0] - 2026-08-12 — Install, update, uninstall: an installation that owns itself, and a purge that leaves nothing of yours behind
 
 ### Changed
