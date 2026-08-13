@@ -132,6 +132,41 @@ python -m unittest tests.test_pipeline.TestPipeline.test_x    # one test
 - If you set any env var, restore it in `tearDown` (or use
   `unittest.mock.patch.dict`).
 
+## Mutation testing — the signal that actually matters
+
+A green suite says the code runs, not that the tests would object if it stopped
+being correct. `scripts/mutate.py` introduces one deliberate defect at a time and
+checks a test notices. **A mutant that SURVIVES names a guarantee nobody asserts** —
+that is the finding, and it is worth more than a coverage percentage.
+
+```bash
+python scripts/mutate.py mutants.json                    # the whole campaign
+python scripts/mutate.py mutants.json --start 0 --stop 4 # one batch
+```
+
+`mutants.json` is a list of `{label, file, old, new, test}`; `old` must match
+**exactly once** in the file, and an anchor matching zero or several times is
+reported rather than scored — a mutant that was never applied proves nothing, and
+counting it as caught is how a campaign reports coverage it does not have.
+
+**Run it in batches.** Every mutant starts a fresh interpreter and re-runs a whole
+test module, so a long campaign keeps a core busy for minutes.
+
+### The bytecode trap it protects you from
+
+Python validates a cached `.pyc` on the source's **size and mtime**. A mutation of
+the *same byte length* — `30` → `90`, `<=` → `>=` — restored within the same second
+leaves the file with exactly the size and mtime the cache was built from, so Python
+keeps serving the **mutated** bytecode after the restore. Silently, and for every
+later run in that directory.
+
+It cost a real debugging session: a passing test began failing with the source
+visibly correct on disk. Two protections, both needed, both pinned by
+`tests/test_mutate_script.py` — every write drops that module's cached `.pyc`, and
+the test subprocess runs with `PYTHONDONTWRITEBYTECODE=1` so a mutated module never
+produces one. If you write your own tooling that rewrites sources in place, it needs
+the same care.
+
 ## Manual end-to-end testing (the sandbox)
 
 `make test` covers the **automated, offline** suite. To exercise the real
