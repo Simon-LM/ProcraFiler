@@ -149,16 +149,34 @@ page redesign yields a wrong number rather than an error, everywhere at once).
       when the same document was edited in two places** (newest wins, always ask, or
       manual merge, and how `review` presents it).
 
-- [ ] **Nothing ever reminds you to run the integrity check** — the next durability
-      step, and the smallest. `scrub` exists, `scrub --repair` heals from the mirror,
-      and the catalog already records `last_verified_utc` per document. But `status`
-      watches only the BACKUP: it prints `last_offline_backup` and nudges past the
-      threshold, and says nothing about verification. A user who never types
-      `procrafiler scrub` therefore never verifies anything, and a corruption surfaces
-      the day a restore fails — which is the one day it is too late. **A protection
-      nobody triggers is not a protection.** The fix is small because the data and the
-      display pattern both exist: report the oldest verification and how many
-      documents have never been checked, and nudge on the same model as the backup.
+- [x] **Nothing ever reminds you to run the integrity check — DONE.** `status` now
+      reports how many documents have gone unchecked and for how long, and nudges past
+      `scrub.REMIND_AFTER_DAYS`. **A protection nobody triggers is not a protection.**
+
+      *Two things were decided while building it, and both are load-bearing.*
+
+      **Every document is aged the same way**, verified or not: `last_verified_utc`
+      when a scrub has seen it, else `updated_at_utc` — filing computed the sha256
+      FROM the file, so that moment did confirm it. The first design counted
+      never-verified documents in a separate bucket, which would have put exactly the
+      stale ones outside the rule meant to cover them.
+
+      **30 days, bounded by the mirror's own retention, not by a guess at disk
+      failure rates.** A replaced mirror copy is quarantined in `Mirror_Trash` and
+      purged after `mirror_retention_days` (30), so past that window the faulty file
+      may be the only version left and `scrub --repair` has nothing to restore from.
+      The offline-backup reminder moved from 90 to the same 30 for the same reason:
+      at 90, every copy in hand could already carry a fault introduced early in the
+      window.
+
+- [ ] **`status` creates the catalog file it only means to read** — found while
+      building the reminder above, and NOT caused by it. `cmd_status` documents itself
+      as read-only, but `get_user_language` consults the catalog unconditionally to
+      auto-detect the library's language, and `sqlite3.connect` creates the file. On a
+      fresh layout the file already exists (empty), so nothing visible breaks today —
+      but the guarantee is stated and untrue, and `status` is one of the read-only
+      commands that must stay usable when a guard refuses a run. The fix is to skip
+      the detection when the catalog holds nothing yet.
 
 - [ ] **The destination manifest** — the last open item of durability Phase 1, and
       deliberately **left open**. A `manifest.json` per destination (`relative_path`,

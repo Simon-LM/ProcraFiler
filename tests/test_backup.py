@@ -13,6 +13,7 @@ from procrafiler.backup import (
     create_backup,
     is_encrypted_archive,
     last_backup_utc,
+    record_backup,
     restore_from_archive,
 )
 from procrafiler.catalog import CatalogRepository
@@ -101,6 +102,19 @@ class TestBackup(_BackupEnv):
         create_backup(self.src, self.backup_dir, now_utc=_NOW)
         self.assertIsNone(backup_reminder(self.src, now_utc=_NOW))  # just backed up
         self.assertIn("days ago", str(backup_reminder(self.src, now_utc="2026-12-01T00:00:00+00:00")))
+
+    def test_the_reminder_threshold_is_thirty_days(self) -> None:
+        """Bounded by how long a good copy survives to repair from, not by how often
+        disks fail: the mirror quarantines a replaced copy for `mirror_retention_days`
+        (30), and past that the faulty file may be the only version left. The same
+        figure as `scrub.REMIND_AFTER_DAYS`, so there is one number to remember."""
+        record_backup(self.src, "2026-06-01T00:00:00+00:00")
+        self.assertIsNone(
+            backup_reminder(self.src, now_utc="2026-06-30T00:00:00+00:00"), "29 days is not overdue"
+        )
+        self.assertIsNotNone(
+            backup_reminder(self.src, now_utc="2026-07-01T00:00:00+00:00"), "30 days is overdue"
+        )
 
     def test_restore_missing_archive_raises(self) -> None:
         with self.assertRaises(FileNotFoundError):

@@ -9,7 +9,12 @@ from uuid import uuid4
 
 from procrafiler.catalog import CatalogRepository
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout, set_feature_flag
-from procrafiler.scrub import format_report, scrub
+from procrafiler.scrub import (
+    format_report,
+    integrity_reminder,
+    integrity_status,
+    scrub,
+)
 
 _NOW = "2026-06-24T12:00:00+00:00"
 
@@ -188,3 +193,83 @@ class TestHeal(_Env):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIntegrityReminder(_Env):
+    """Nothing ever asked for the integrity check. `scrub` existed and healed, but a
+    protection nobody triggers is not a protection."""
+
+    def _add_at(self, rel: str, content: bytes, *, filed: str) -> str:
+        doc_id = self._add(rel, content)
+        self.catalog.upsert_document(
+            doc_id=doc_id,
+            sha256=hashlib.sha256(content).hexdigest(),
+            current_filename=(self.paths.library_root / rel).name,
+            current_path=str(self.paths.library_root / rel),
+            status="LIBRARY_STORED",
+            updated_at_utc=filed,
+        )
+        return doc_id
+
+    def test_a_document_never_scrubbed_ages_from_the_day_it_was_filed(self) -> None:
+        """The rule that makes every document count. Filing computed the sha256 FROM
+        the file, so that moment did confirm it — a document filed yesterday is not
+        overdue, and one filed two years ago and never re-checked is. A separate
+        "never verified" bucket would put exactly those outside the rule."""
+        self._add_at("Personal/fresh.txt", b"fresh", filed="2026-06-20T00:00:00Z")
+
+        status = integrity_status(self.catalog, now_utc=_NOW)
+
+        self.assertEqual((status.documents, status.overdue), (1, 0))
+        self.assertEqual(status.oldest_days, 4)
+        self.assertIsNone(integrity_reminder(status))
+
+    def test_a_document_filed_long_ago_and_never_checked_is_overdue(self) -> None:
+        self._add_at("Personal/old.txt", b"old", filed="2026-01-01T00:00:00Z")
+
+        status = integrity_status(self.catalog, now_utc=_NOW)
+
+        self.assertEqual((status.documents, status.overdue), (1, 1))
+        self.assertIn("1 of 1 document(s) unverified", str(integrity_reminder(status)))
+        self.assertIn("procrafiler scrub", str(integrity_reminder(status)))
+
+    def test_a_scrub_clears_the_reminder(self) -> None:
+        """Anti-vacuity: the nudge must answer to the command it names."""
+        self._add_at("Personal/old.txt", b"old", filed="2026-01-01T00:00:00Z")
+        self.assertTrue(integrity_status(self.catalog, now_utc=_NOW).is_overdue)
+
+        scrub(self.paths, self.catalog, now_utc=_NOW)
+
+        self.assertFalse(integrity_status(self.catalog, now_utc=_NOW).is_overdue)
+
+    def test_the_two_timestamp_shapes_in_the_catalog_are_both_read(self) -> None:
+        """`updated_at_utc` is written as `…Z` and `last_verified_utc` as `…+00:00`.
+        Comparing them as TEXT in SQL would rank the same instant differently
+        depending on which column it came from."""
+        self._add_at("Personal/z.txt", b"z", filed="2026-06-20T00:00:00Z")
+        offset_doc = self._add_at("Personal/off.txt", b"off", filed="2026-01-01T00:00:00Z")
+        self.catalog.mark_verified([offset_doc], when_utc="2026-06-20T00:00:00+00:00")
+
+        status = integrity_status(self.catalog, now_utc=_NOW)
+
+        self.assertEqual(status.overdue, 0, "one of the two shapes was misread")
+        self.assertEqual(status.oldest_days, 4)
+
+    def test_exactly_at_the_threshold_counts_as_overdue(self) -> None:
+        self._add_at("Personal/edge.txt", b"edge", filed="2026-05-25T12:00:00Z")  # 30 days
+        self.assertEqual(integrity_status(self.catalog, now_utc=_NOW).overdue, 1)
+
+    def test_one_day_short_of_the_threshold_does_not(self) -> None:
+        self._add_at("Personal/edge.txt", b"edge", filed="2026-05-26T12:00:00Z")  # 29 days
+        self.assertEqual(integrity_status(self.catalog, now_utc=_NOW).overdue, 0)
+
+    def test_an_unreadable_timestamp_counts_as_unconfirmed(self) -> None:
+        """Never under-report: a document whose age cannot be established has not
+        been confirmed either."""
+        self._add_at("Personal/bad.txt", b"bad", filed="not-a-date")
+        self.assertEqual(integrity_status(self.catalog, now_utc=_NOW).overdue, 1)
+
+    def test_an_empty_catalog_reports_nothing_to_check(self) -> None:
+        status = integrity_status(self.catalog, now_utc=_NOW)
+        self.assertEqual((status.documents, status.overdue), (0, 0))
+        self.assertIsNone(integrity_reminder(status))

@@ -29,7 +29,11 @@ from procrafiler.pipeline import _write_catalog_snapshot
 from procrafiler.restore import _META_DIR, _SNAPSHOT_NAME, RestoreReport, restore_from_mirror
 
 _LAST_BACKUP_FILE = "last_backup.txt"
-_REMIND_AFTER_DAYS = 90
+# Aligned with the mirror's own retention and with the integrity check
+# (`scrub.REMIND_AFTER_DAYS`): one figure to remember rather than three. 90 days was
+# long enough for every copy in hand to already carry a fault introduced early in
+# the window.
+_REMIND_AFTER_DAYS = 30
 
 # Encrypted-bundle format: magic + scrypt salt + AES-GCM nonce + ciphertext.
 # AES-256-GCM (authenticated) with a scrypt-derived key from the passphrase.

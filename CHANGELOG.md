@@ -9,6 +9,22 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+### Added
+
+- **`status` now tells you when your files were last checked for corruption.** The integrity check already existed and already healed — `scrub` re-hashes every stored document against the fingerprint recorded when it was filed, and `scrub --repair` restores a damaged copy from the mirror. But nothing ever asked you to run it, so a corruption surfaced the day a restore failed, which is the one day it is too late. **A protection nobody triggers is not a protection.**
+
+  `status` reports how many documents have gone unchecked and for how long, and nudges past 30 days. Every stored document is counted, including one no scrub has ever seen: filing computed its fingerprint *from the file*, so that moment did confirm it. A document filed yesterday is therefore not overdue, and one filed two years ago and never re-checked is — where a separate "never verified" bucket would have put exactly those stale documents outside the rule meant to cover them.
+
+### Changed
+
+- **Both durability reminders are now 30 days** — the integrity check, and the offline backup, which was 90.
+
+  The figure is not a guess at how often disks fail. It is bounded by **how long a good copy survives to repair from**: when a library file changes, the mirror does not overwrite its own copy but quarantines it in `Mirror_Trash` with a timestamp, and that quarantine is purged after `mirror_retention_days` — 30 by default. Past that window the faulty file may be the only version left, and there is nothing to heal from. At 90 days, every copy in hand could already carry a fault introduced early in the window. One figure now, not three.
+
+### Fixed
+
+- **A brand-new installation is no longer described as damaged.** The layout creates the catalog file before any table is written to it, so on a first run `status` had a file it could open and nothing inside it to read. Reporting that as `unreadable (no such table: documents)` would have shown every first-time user a fault none of them has. It now reads as what it is: nothing filed yet.
+
 ## [0.12.0] - 2026-08-12 — An older release refuses to write over a newer release's state
 
 ### Added

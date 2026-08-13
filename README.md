@@ -252,6 +252,10 @@ Mutating commands (`process-*`, `rescan`, `scrub`, `backup`, `restore`, `library
 
 **`restore` never destroys a document.** It shows what it would change and **asks** before replacing anything that differs; each replaced document is moved to `Library_Trash_Manual` (recoverable), never overwritten in place. Use `--dry-run` to preview and `--yes` to skip the prompt in a script. A restore **merges** into your library: documents that exist only there are left untouched.
 
+**`status` tells you when your files were last checked.** The integrity check finds silent corruption — an archived file whose disk sector has degraded, or that another program has changed behind your back — by re-hashing each document against the fingerprint recorded when it was filed, and `scrub --repair` restores a damaged copy from the mirror. That protection existed and nothing ever asked you to use it, so a corruption surfaced the day a restore failed. `status` now reports how many documents have gone unchecked and for how long, and nudges past **30 days**.
+
+That figure is bounded by how long a good copy survives to repair from, not by how often disks fail: a replaced mirror copy is quarantined in `Mirror_Trash` and purged after `mirror_retention_days` (30 by default), so past that window the faulty file may be the only version left. The **offline backup** reminder uses the same 30 days for the same reason — one figure to remember, and at 90 every copy you hold could already carry a fault introduced early in the window. A document no scrub has ever seen is aged from the day it was filed, when its fingerprint was computed from the file itself: nothing sits outside the count.
+
 **Your Inbox, Library and Mirror must be separate folders — none inside another.** `setup` refuses an overlapping layout (a mirror inside the library would get swept up by the library scan and corrupt the catalog), and `doctor` fails if it finds one, so a hand-edited env file cannot slip one past.
 
 ## Feature Controls (Terminal)

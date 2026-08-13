@@ -28,6 +28,19 @@ _OK = "ok"
 _CORRUPT = "corrupt"
 _MISSING = "missing"
 
+# How long a document may go unverified before `status` says so.
+#
+# Not chosen from how often disks rot, but from **how long a good copy survives to
+# repair from**. When a library file changes, the mirror does not overwrite its own
+# copy: it QUARANTINES it into `Mirror_Trash` with a timestamp (see `mirror.py`), so
+# the healthy version outlives the corruption — until `purge-mirror-trash` removes
+# it, governed by `mirror_retention_days`, whose default is 30 days.
+#
+# Past that window the corrupt file may be the only version left, and `scrub
+# --repair` has nothing to restore from. Hence 30: the same figure as the mirror
+# retention it is bounded by, and as the backup reminder.
+REMIND_AFTER_DAYS = 30
+
 
 def _hash_file(path: Path) -> str:
     h = hashlib.sha256()
@@ -205,3 +218,67 @@ def format_report(report: ScrubReport) -> str:
         for issue in report.issues:
             lines.append(f"  [{issue.state}] {issue.where}: {issue.relative_path}")
     return "\n".join(lines)
+
+
+@dataclass
+class IntegrityStatus:
+    """How overdue the library's integrity check is, for `status` to report."""
+
+    documents: int = 0
+    overdue: int = 0
+    oldest_days: int | None = None
+
+    @property
+    def is_overdue(self) -> bool:
+        return self.overdue > 0
+
+
+def integrity_status(
+    catalog: CatalogRepository, *, now_utc: str | None = None
+) -> IntegrityStatus:
+    """Count the documents whose content has not been confirmed recently.
+
+    Every stored document counts, verified or not: one whose sha256 was computed at
+    filing and never re-checked since ages the same way as one a scrub confirmed.
+    See `CatalogRepository.content_confirmed_timestamps`.
+    """
+    try:
+        now_dt = datetime.fromisoformat(now_utc) if now_utc else datetime.now(timezone.utc)
+    except ValueError:
+        return IntegrityStatus()
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=timezone.utc)
+
+    status = IntegrityStatus()
+    for stamp in catalog.content_confirmed_timestamps():
+        status.documents += 1
+        try:
+            # Python parses both shapes the catalog holds (`…Z` and `…+00:00`).
+            confirmed = datetime.fromisoformat(stamp)
+        except ValueError:
+            # An unreadable timestamp is not a reason to under-report: a document
+            # whose age cannot be established has not been confirmed either.
+            status.overdue += 1
+            continue
+        if confirmed.tzinfo is None:
+            confirmed = confirmed.replace(tzinfo=timezone.utc)
+        days = (now_dt - confirmed).days
+        if status.oldest_days is None or days > status.oldest_days:
+            status.oldest_days = days
+        if days >= REMIND_AFTER_DAYS:
+            status.overdue += 1
+    return status
+
+
+def integrity_reminder(status: IntegrityStatus) -> str | None:
+    """A nudge when documents have gone unchecked too long, else None.
+
+    Separate from `integrity_status` so `status` can print the figures whether or
+    not they warrant a warning — a number you watch is how you notice it growing.
+    """
+    if not status.is_overdue:
+        return None
+    return (
+        f"{status.overdue} of {status.documents} document(s) unverified for "
+        f"{REMIND_AFTER_DAYS}+ days — run: procrafiler scrub"
+    )
