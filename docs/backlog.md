@@ -141,6 +141,33 @@ page redesign yields a wrong number rather than an error, everywhere at once).
       architecture (destinations: local/LAN/rclone cloud · mirror vs encrypted cold
       backup · selective by capacity · cloud inbox + read-mirror to avoid conflicts · 3
       copies · self-contained restorable units): see [durability.md](durability.md).
+
+      **Phase 1 is done** (scrub · heal · verify-catalog · catalog replicated into the
+      mirror · restore · backup · `--encrypt` · backup reminder). Phases 2–4 —
+      multiple replicas and reconciliation, cloud via rclone, SMART — are untouched,
+      and Phase 2 is gated on a product decision rather than on code: **what happens
+      when the same document was edited in two places** (newest wins, always ask, or
+      manual merge, and how `review` presents it).
+
+- [ ] **Nothing ever reminds you to run the integrity check** — the next durability
+      step, and the smallest. `scrub` exists, `scrub --repair` heals from the mirror,
+      and the catalog already records `last_verified_utc` per document. But `status`
+      watches only the BACKUP: it prints `last_offline_backup` and nudges past the
+      threshold, and says nothing about verification. A user who never types
+      `procrafiler scrub` therefore never verifies anything, and a corruption surfaces
+      the day a restore fails — which is the one day it is too late. **A protection
+      nobody triggers is not a protection.** The fix is small because the data and the
+      display pattern both exist: report the oldest verification and how many
+      documents have never been checked, and nudge on the same model as the backup.
+
+- [ ] **The destination manifest** — the last open item of durability Phase 1, and
+      deliberately **left open**. A `manifest.json` per destination (`relative_path`,
+      `sha256`, `size`, `doc_id`, `updated_at`, `last_verified`) exists to verify a
+      destination WITHOUT downloading it and to be the unit of merge — both Phase 2/3
+      needs. Today `restore --from <mirror>` already rebuilds library and catalog,
+      because the catalog itself is replicated into the mirror. Writing the format now,
+      before its consumer exists, would freeze it against guesses; it belongs with
+      Phase 2.
 - [ ] **SUPERVISOR** — the optional AI control pass over ambiguous outputs (spec §9).
 - [x] **VIDEO + audio analysis** — **SHIPPED** in v0.10.0. Listen first (Voxtral,
       timestamped), let a text pass name the moments worth seeing, cut stills only
@@ -377,12 +404,22 @@ nothing currently says so.
 - [ ] **Real-key smoke test of OCR (`/v1/ocr`) and vision contracts** — the text path
       is validated live (classification + naming). Scanned-PDF OCR and image vision
       still need a real scanned PDF / photo to confirm the request/response shapes.
-- [ ] **`mistral-small` on images** — the user noted it can also process images, with
-      unknown reliability. Worth comparing against `mistral-medium` to see if it can
-      sometimes replace it (cost/quality tradeoff).
-- [ ] **Re-test set grouping in the sandbox** — the per-folder organize rules (one
-      destination per dropped folder, high bar to split out a file, no fragmentation
-      across base categories, single affair name/period) are implemented in the
-      organize prompt + pipeline; confirm on a real run that a multi-file affair
-      (e.g. a water-damage claim) is no longer scattered across Housing/Insurance or
-      multiple dates. (Moved here from the now-deleted plan-b.md.)
+- [ ] **Re-test set grouping in the sandbox** — the drop folder is a **strong
+      hypothesis, never a rule**: by default the set stays together, and a document
+      whose content is FLAGRANTLY a different case is still placed elsewhere (a high
+      bar — a mere nuance is not a reason to split, and different entities are
+      different series that never share a folder). The hint weighs MOST where the
+      content is least reliable: a vision model's description of a photo can be
+      hallucinated, so a set is never scattered on the strength of one shaky image.
+      Implemented in the organize prompt + pipeline, which returns and applies ONE
+      destination PER DOCUMENT — nothing in the code forces a common path. Confirm on
+      a real run that a multi-file affair (e.g. a water-damage claim) is no longer
+      scattered across Housing/Insurance or multiple dates, AND that plainly
+      unrelated administrative documents dropped together are still separated.
+      (Moved here from the now-deleted plan-b.md.)
+
+      *Wording corrected 2026-08-13.* This entry used to open on "one destination per
+      dropped folder", which reads as an imposed rule and is not what the code does.
+      A compressed summary of a nuanced rule is not a summary, it is a different
+      rule — and this one, left in a public backlog, is how a future reader would
+      have learnt the wrong logic.
