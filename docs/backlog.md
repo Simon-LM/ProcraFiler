@@ -169,14 +169,19 @@ page redesign yields a wrong number rather than an error, everywhere at once).
       at 90, every copy in hand could already carry a fault introduced early in the
       window.
 
-- [ ] **`status` creates the catalog file it only means to read** — found while
-      building the reminder above, and NOT caused by it. `cmd_status` documents itself
-      as read-only, but `get_user_language` consults the catalog unconditionally to
-      auto-detect the library's language, and `sqlite3.connect` creates the file. On a
-      fresh layout the file already exists (empty), so nothing visible breaks today —
-      but the guarantee is stated and untrue, and `status` is one of the read-only
-      commands that must stay usable when a guard refuses a run. The fix is to skip
-      the detection when the catalog holds nothing yet.
+- [x] **`status` creates the catalog file it only means to read — FIXED.**
+      `get_user_language` consulted the catalog unconditionally to auto-detect the
+      library's language, and `sqlite3.connect` CREATES the file it opens — so every
+      caller was a writer, including the commands that state in their own code that
+      they must not create the layout, and that have to stay usable precisely when a
+      guard has refused a run. Detection is now skipped when there is no catalog
+      file.
+
+      *Existence is the whole test.* A first attempt also special-cased a file with
+      no schema in it — a branch no test could tell apart, since opening such a file
+      creates nothing and `majority_language` already returns None on any SQLite
+      error. A surviving mutant said so, and the branch was removed rather than
+      wrapped in a test that would only have described it.
 
 - [ ] **The destination manifest** — the last open item of durability Phase 1, and
       deliberately **left open**. A `manifest.json` per destination (`relative_path`,

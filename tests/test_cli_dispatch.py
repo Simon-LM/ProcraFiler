@@ -118,6 +118,21 @@ class TestStatusCli(_CliEnv):
         self.assertNotIn("unreadable", out)
         self.assertIn("no documents filed yet", out)
 
+    def test_status_creates_nothing(self) -> None:
+        """It documents itself as read-only, and it was not: language auto-detection
+        consulted the catalog unconditionally, and `sqlite3.connect` CREATES the file
+        it opens. `status` and `doctor` have to stay usable exactly when a guard has
+        refused a run, which is when writing anything is the wrong move."""
+        db = self.paths.catalog_db_file
+        db.unlink()
+
+        code, out = self._run(["status"])
+
+        self.assertEqual(code, 0)
+        self.assertFalse(db.exists(), "status created the catalog it only meant to read")
+        self.assertIn("no catalog yet", out)
+        self.assertIn("language: en", out, "it must still answer, with the documented default")
+
 
 if __name__ == "__main__":
     unittest.main()

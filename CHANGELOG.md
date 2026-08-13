@@ -23,6 +23,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Fixed
 
+- **`status` and `doctor` no longer create the catalog they only mean to read.** Both state in their own code that they must not create the layout, and both did: language auto-detection consulted the catalog unconditionally, and opening an SQLite file creates it. It matters beyond tidiness — these are the read-only commands that have to stay usable exactly when a guard has refused a run, which is when writing anything is the wrong move.
+
 - **A brand-new installation is no longer described as damaged.** The layout creates the catalog file before any table is written to it, so on a first run `status` had a file it could open and nothing inside it to read. Reporting that as `unreadable (no such table: documents)` would have shown every first-time user a fault none of them has. It now reads as what it is: nothing filed yet.
 
 ## [0.12.0] - 2026-08-12 — An older release refuses to write over a newer release's state

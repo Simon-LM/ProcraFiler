@@ -298,8 +298,20 @@ def get_user_language(paths: RuntimePaths) -> str:
     value = _read_settings_file(paths).get("user_language")
     if isinstance(value, str) and _LANGUAGE_RE.match(value):
         return value
+    # Auto-detection reads the catalog, and `sqlite3.connect` CREATES the file it
+    # opens. That made every caller a writer — including `status` and `doctor`,
+    # which state in their own code that they must not create the layout, and which
+    # have to stay usable precisely when a guard has refused a run.
+    #
+    # Existence is the whole test. A file that exists but holds no schema needs no
+    # special case: opening it creates nothing, and `majority_language` already
+    # returns None on any SQLite error. A size check here would be a branch no test
+    # could ever tell apart — dead weight pretending to be caution.
+    db_file = paths.catalog_db_file
+    if not db_file.is_file():
+        return DEFAULT_USER_LANGUAGE
     from procrafiler.catalog import CatalogRepository  # local import: avoid import cycle
-    detected = CatalogRepository(paths.catalog_db_file).majority_language()
+    detected = CatalogRepository(db_file).majority_language()
     return detected if detected and _LANGUAGE_RE.match(detected) else DEFAULT_USER_LANGUAGE
 
 
