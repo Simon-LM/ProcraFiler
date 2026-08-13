@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,7 +75,9 @@ from procrafiler.restore import format_plan as format_restore_plan
 from procrafiler.restore import replicate_catalog_to_mirror, restore_from_mirror
 from procrafiler.runtime_env import load_runtime_env  # type: ignore[reportMissingImports]
 from procrafiler.runtime_lock import RuntimeLockedError, runtime_lock
+from procrafiler.scrub import REMIND_AFTER_DAYS as SCRUB_REMIND_AFTER_DAYS  # type: ignore[reportMissingImports]
 from procrafiler.scrub import format_report as format_scrub_report
+from procrafiler.scrub import integrity_reminder, integrity_status  # type: ignore[reportMissingImports]
 from procrafiler.undo import (
     apply_undo,
     format_undo_plan,
@@ -318,7 +321,38 @@ def cmd_status() -> int:
     reminder = backup_reminder(paths, now_utc=_resolve_now_utc().isoformat())
     if reminder is not None:
         print(f"  ⚠ {reminder}")
+
+    # The integrity check existed and healed, but nothing ever asked for it: a
+    # protection nobody triggers is not a protection. Read-only like the rest of
+    # `status` — it reads the catalog if there is one, and says so if there is not.
+    print(f"- integrity_check: {_integrity_line(paths)}")
     return 0
+
+
+def _integrity_line(paths: RuntimePaths) -> str:
+    if not paths.catalog_db_file.is_file():
+        return "no catalog yet — nothing has been filed"
+    try:
+        status = integrity_status(
+            CatalogRepository(paths.catalog_db_file), now_utc=_resolve_now_utc().isoformat()
+        )
+    except sqlite3.OperationalError as err:
+        if "no such table" in str(err):
+            # `ensure_runtime_layout` touches catalog.db into existence before any
+            # schema is written, so a fresh and perfectly healthy install lands
+            # here. Reporting it as unreadable would alarm every first-time user.
+            return "no documents filed yet"
+        return f"unreadable ({err})"
+    except sqlite3.Error as err:
+        return f"unreadable ({err})"
+    if status.documents == 0:
+        return "no documents filed yet"
+
+    oldest = f", oldest {status.oldest_days} day(s) ago" if status.oldest_days is not None else ""
+    nudge = integrity_reminder(status)
+    if nudge is None:
+        return f"all {status.documents} document(s) verified within {SCRUB_REMIND_AFTER_DAYS} days{oldest}"
+    return f"{status.documents} document(s){oldest}\n  ⚠ {nudge}"
 
 
 def cmd_deletion_mode(mode: str | None) -> int:

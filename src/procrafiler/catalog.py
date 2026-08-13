@@ -231,6 +231,28 @@ class CatalogRepository:
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
 
+    def content_confirmed_timestamps(self) -> list[str]:
+        """When each stored document's content was last confirmed, as recorded.
+
+        `last_verified_utc` once a scrub has checked it, else `updated_at_utc`: at
+        filing the sha256 was computed FROM the file, so that moment did confirm it.
+        One expression for both keeps every document in the same count — a document
+        filed yesterday is not overdue, and one filed two years ago and never
+        re-checked is. A separate "never verified" bucket would put exactly those
+        stale documents outside the rule meant to cover them.
+
+        Returned raw, and compared in Python on purpose: the two columns are written
+        in DIFFERENT shapes — `updated_at_utc` as `…:00Z`, `last_verified_utc` as
+        `…:00+00:00` — so ordering them as TEXT in SQL would rank the same instant
+        differently depending on which column it came from.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(last_verified_utc, updated_at_utc) AS confirmed "
+                "FROM documents WHERE status = 'LIBRARY_STORED'"
+            ).fetchall()
+        return [str(row["confirmed"]) for row in rows if row["confirmed"]]
+
     def mark_verified(self, doc_ids: list[str], *, when_utc: str) -> None:
         """Record that these documents' content matched the catalog at `when_utc`."""
         if not doc_ids:
