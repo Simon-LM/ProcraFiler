@@ -212,13 +212,22 @@ class PriceArithmeticTests(unittest.TestCase):
         self.assertAlmostEqual(audio_only or 0.0, 600 / 60 * 0.003)
 
     def test_a_model_that_bills_both_ways_is_charged_both_ways(self) -> None:
-        """Voxtral Small charges per audio minute AND per text token. Suppressing
-        the tokens because a duration price exists would under-report its bill."""
-        from procrafiler.pricing import load_price_table
+        """Some models charge per audio minute AND per text token — Voxtral Small
+        is one, at the rates used here. Suppressing the tokens because a duration
+        price exists would under-report the bill.
 
-        table = load_price_table()
-        assert table is not None
-        both = table.cost("mistral", "voxtral-small-latest", audio_seconds=600, tokens_in=1_000_000)
+        Built here rather than read from the shipped table: that model is one
+        ProcraFiler never configures, so it is deliberately absent from
+        `price_labels.json` and has no price. The shape is what this test is about,
+        not the seller's current figure for it."""
+        table = PriceTable(
+            providers={
+                "mistral": ProviderPrices(
+                    models={"two-units": ModelPrice(in_per_mtok=0.1, per_audio_minute=0.004)}
+                )
+            }
+        )
+        both = table.cost("mistral", "two-units", audio_seconds=600, tokens_in=1_000_000)
         audio_part = 600 / 60 * 0.004
         self.assertGreater(both or 0.0, audio_part, "the token price must be added too")
         self.assertAlmostEqual(both or 0.0, audio_part + 0.1)

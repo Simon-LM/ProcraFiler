@@ -1,0 +1,8 @@
+{
+  "_README": "Which line of a seller's price list each model ProcraFiler calls is billed under. The published table keys every entry by whatever the seller's own page states, which for Mistral is a human label with a generation number in it -- 'mistral small 4', 'ocr 4.1 / ocr' -- and never an API model id. 'feed_latest' names the FAMILY, not the line: the generation is read from the feed on every run, so 'ocr 4' becoming 'ocr 4.1' (which happened in days) is followed with no release. Resolution takes the newest generation, skips rows that are not models (kind: product), falls back on a withdrawn generation rather than losing its price, and refuses a tie instead of guessing. SCOPE: only the models this app configures. The feed serves other projects too, so it lists many models ProcraFiler never calls; mapping those would ship resolutions nothing exercises. There is no per-user version of this file -- a model with no entry simply has no price, which the run forecast states and `procrafiler doctor` reports by name.",
+
+  "mistral:mistral-small-latest": { "feed_latest": "mistral small" },
+  "mistral:mistral-medium-latest": { "feed_latest": "mistral medium" },
+  "mistral:mistral-ocr-latest": { "feed_latest": "ocr" },
+  "mistral:voxtral-mini-latest": { "feed_latest": "voxtral mini transcribe" }
+}
