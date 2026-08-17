@@ -32,12 +32,20 @@ model the provider declares FREE, which is a fact rather than an absence.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 _PACKAGED_TABLE = Path(__file__).resolve().parent / "data" / "pricing.json"
+_PACKAGED_FAMILIES = Path(__file__).resolve().parent / "data" / "price_labels.json"
+
+# The version number that follows a family name in a published key: the `4` of
+# `mistral small 4`, the `3.5` of `mistral medium 3.5`, the `4.1` of `ocr 4.1 /
+# ocr`. It is the only place a generation is stated — the format has no version
+# field, because it publishes what the seller's page says and that is a name.
+_VERSION_AFTER_FAMILY = re.compile(r"\s+(\d+(?:\.\d+)?)\b")
 
 # Past this, the displayed date stops being a footnote and becomes a warning. Not
 # a hard failure: stale figures the user can see the age of are still far more
@@ -61,6 +69,34 @@ class ModelPrice:
     # is a fact, "I have no price for this" is an admission, and the whole point of
     # this module is that the two never look alike.
     free: bool = False
+    # The day the source stopped offering this entry. The published format states
+    # what that implies in as many words: "every price beside it is the last one
+    # observed, not a current one". A figure quoted from such a row is therefore
+    # still the best estimate available AND no longer a current rate, and a forecast
+    # that shows the first without the second is overstating what it knows.
+    absent_since: str | None = None
+    # Absent on a model, which is the normal case. `"product"` marks a billable
+    # thing that is NOT a model — web search, code execution, image generation,
+    # Mistral's Document AI offer.
+    kind: str | None = None
+
+    @property
+    def is_model(self) -> bool:
+        """Whether this row is something you can name in an API request.
+
+        What makes it load-bearing is `resolve_family`, which finds a rate by
+        scanning the keys a seller publishes instead of being told one. `ocr 4.1 /
+        ocr` (4.00 per thousand pages) and `ocr 4.1 / document ai` (5.00, `kind:
+        product`) are the same OCR engine sold two ways, under the SAME generation
+        number — so the number cannot separate them and, without `kind`, a scan of
+        the `ocr` family would be choosing between 4.00 and 5.00 on nothing. You
+        can send `model: "mistral-ocr-latest"`; you cannot send `model:
+        "document ai"`.
+
+        An explicit `kind: "model"` is accepted for the day the format states the
+        normal case rather than leaving it absent.
+        """
+        return self.kind is None or self.kind == "model"
 
     @property
     def is_priceable(self) -> bool:
@@ -98,12 +134,70 @@ class ProviderPrices:
 class PriceTable:
     origin: str = "packaged"
     providers: dict[str, ProviderPrices] = field(default_factory=dict)
+    # `"provider:model"` -> the FAMILY its price is published under, from
+    # `data/price_labels.json`. Not the key itself: see `resolve_family`.
+    model_families: dict[str, str] = field(default_factory=dict)
 
     def provider(self, provider: str) -> ProviderPrices | None:
         return self.providers.get(provider)
 
+    def resolve_family(self, provider: str, family: str) -> str | None:
+        """The current key of a family — its newest generation, read from the feed.
+
+        The published table keys each entry by **whatever the source itself states**,
+        which for Mistral is the label printed on its pricing page: `mistral small
+        4`, `ocr 4.1 / ocr`. Those are not API model ids and never were, and the
+        `-latest` aliases were dropped from the file on purpose — keeping them meant
+        a human deciding, every week, which label an alias resolves to.
+
+        So the generation is read rather than recorded. `mistral small 4` becomes
+        `mistral small 5` and this follows it with no release, which matters because
+        these lines do move: `ocr 4` became `ocr 4.1` within days.
+
+        Three rules, each one forced by a case in the live file:
+
+        - **Skip what is not a model.** `ocr 4.1 / ocr` and `ocr 4.1 / document ai`
+          share generation 4.1, so the number cannot separate 4.00 from 5.00 —
+          `kind` can.
+        - **Prefer a generation still published, but fall back on a withdrawn one.**
+          `voxtral mini transcribe 2` carries `absent_since` today and its only
+          living sibling, `voxtral mini transcribe realtime`, has no number at all
+          (it is the same model billed for streaming, at double). Skipping withdrawn
+          rows outright would lose that price rather than age it.
+        - **Refuse a tie.** Two models at the same top generation is not a decision
+          this can make, and picking by name order would be a coin flip on real
+          money. No price is the honest answer, and it is reported as one.
+        """
+        prices = self.providers.get(provider)
+        if prices is None:
+            return None
+
+        # (generation, key, still published)
+        found: list[tuple[float, str, bool]] = []
+        for key, price in prices.models.items():
+            if not key.startswith(family) or not price.is_model:
+                continue
+            version = _VERSION_AFTER_FAMILY.match(key[len(family):])
+            if version is None:
+                continue
+            found.append((float(version.group(1)), key, price.absent_since is None))
+        if not found:
+            return None
+
+        pool = [entry for entry in found if entry[2]] or found
+        newest = max(entry[0] for entry in pool)
+        at_newest = [key for version, key, _ in pool if version == newest]
+        return at_newest[0] if len(at_newest) == 1 else None
+
+    def label_for(self, provider: str, model: str) -> str | None:
+        """The table key this model is priced under, when it is not the model id."""
+        family = self.model_families.get(f"{provider}:{model}")
+        if family is None:
+            return None
+        return self.resolve_family(provider, family)
+
     def price_for(self, provider: str, model: str) -> ModelPrice | None:
-        """Exact match on BOTH, with one deliberate fallback.
+        """Exact match on BOTH, then on the mapped label, with one fallback.
 
         `mistral-medium-latest` is an ALIAS that will one day resolve to a
         different model at a different price, so guessing from a prefix would mean
@@ -111,14 +205,27 @@ class PriceTable:
         just as exactly, because the same model id costs different amounts — and is
         billed in a different currency — depending on who serves it.
 
+        The model id is tried FIRST, at both keys, before the label is considered:
+        a `pricing.json` the user wrote themselves is keyed by real model ids, and
+        must keep working exactly as it did.
+
         The fallback is the `*` bucket: a schema-1 file, or a rate the user wrote
         down themselves, names a model without naming a seller, and refusing to use
         it would throw away the one figure they explicitly asked for.
+
+        Rows that are not models are never returned — see `ModelPrice.is_model`.
         """
-        for name in (provider, ANY_PROVIDER):
-            prices = self.providers.get(name)
-            if prices is not None and model in prices.models:
-                return prices.models[model]
+        label = self.label_for(provider, model)
+        for key in (model, label):
+            if key is None:
+                continue
+            for name in (provider, ANY_PROVIDER):
+                prices = self.providers.get(name)
+                if prices is None:
+                    continue
+                price = prices.models.get(key)
+                if price is not None and price.is_model:
+                    return price
         return None
 
     def currency_of(self, provider: str) -> str:
@@ -281,6 +388,8 @@ def _parse_models(raw_models: Any) -> dict[str, ModelPrice]:
             per_audio_minute=_as_price(spec.get("per_audio_minute")),
             per_audio_second=_as_price(spec.get("per_audio_second")),
             free=spec.get("free") is True,
+            absent_since=(str(spec["absent_since"]) if spec.get("absent_since") else None),
+            kind=(str(spec["kind"]) if spec.get("kind") else None),
         )
     return models
 
@@ -361,6 +470,39 @@ def _load_file(path: Path, origin: str) -> PriceTable | None:
     return _parse_table(payload, origin)
 
 
+def model_families(path: Path = _PACKAGED_FAMILIES) -> dict[str, str]:
+    """`"provider:model"` -> the family its price is published under.
+
+    Shipped with the app and maintained with it; there is no per-user version. What
+    it records is which line of a seller's price list corresponds to a model this
+    app calls, which is knowledge about ProcraFiler's own choices, not a setting.
+    Nobody installing a document filer should have to learn how a price feed names
+    its rows, and the one thing a user could once repair here cannot happen: the
+    feed never deletes a key, so a price is never lost — it ages, and says so.
+
+    Unusable content is ignored rather than raised: a malformed file must cost a
+    price, never a run. Entries are objects so that each states its own semantics,
+    and `feed_latest` is the same field name the other consumer of this feed uses.
+    """
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    families: dict[str, str] = {}
+    for key, spec in payload.items():
+        # A key with no `provider:` in it is not a mapping — that is what keeps the
+        # file's own `_README` out of the way of whoever opens it.
+        if not isinstance(key, str) or ":" not in key or not isinstance(spec, dict):
+            continue
+        family = spec.get("feed_latest")
+        if isinstance(family, str) and family:
+            families[key] = family
+    return families
+
+
 def load_price_table(config_dir: Path | None = None) -> PriceTable | None:
     """The table in force. None only if even the packaged copy is unusable, in
     which case the app must report costs as unavailable rather than as zero.
@@ -370,16 +512,20 @@ def load_price_table(config_dir: Path | None = None) -> PriceTable | None:
     spend ceiling — can call it freely without any of them wondering whether it will
     block.
     """
+    table = None
     if config_dir is not None:
-        user_table = _load_file(config_dir / "pricing.json", "your own pricing.json")
-        if user_table is not None:
-            return user_table
-        # The user's own file outranks it: someone who wrote down a negotiated rate
-        # must not have it overwritten by a public one, however fresh.
-        cached = _load_file(config_dir / "pricing.cached.json", "downloaded")
-        if cached is not None:
-            return cached
-    return _load_file(_PACKAGED_TABLE, "shipped with the app")
+        table = _load_file(config_dir / "pricing.json", "your own pricing.json")
+        if table is None:
+            # The user's own file outranks it: someone who wrote down a negotiated
+            # rate must not have it overwritten by a public one, however fresh.
+            table = _load_file(config_dir / "pricing.cached.json", "downloaded")
+    if table is None:
+        table = _load_file(_PACKAGED_TABLE, "shipped with the app")
+    if table is None:
+        return None
+    # Attached here rather than parsed with the table: the families live in their own
+    # file, and they apply to whichever table won above — including a user's.
+    return replace(table, model_families=model_families())
 
 
 def format_amount(amount: float, symbol: str = "$") -> str:

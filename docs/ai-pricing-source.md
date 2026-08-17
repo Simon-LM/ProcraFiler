@@ -139,10 +139,57 @@ catalogue costs nothing and spares a release when a project switches model.
 tomorrow it will resolve to something else, **at a different price, with no change
 anywhere in this file or in ProcraFiler**.
 
-The scraper therefore matches marketing names to API ids through an **explicit,
-hand-maintained mapping** committed in the repo — never through fuzzy matching,
-never by lowercasing and hoping. When the page shows a name the mapping does not
-know, that is a **failure to report**, not a row to guess at.
+**Where that mapping lives has moved, and this is the current answer.** The
+companion repository dropped the aliases in August 2026 and now keys every entry
+by **whatever the seller's own page calls it** — `mistral small 4`,
+`ocr 4.1 / ocr`, `voxtral mini transcribe 2`. Its README says so plainly: keys are
+"whatever the source itself states, per provider". Maintaining an id-to-label
+mapping *there* meant a human deciding, every week, which label each alias resolves
+to — the exact manual work that repository exists to avoid.
+
+So the mapping lives **here**, in
+[`src/procrafiler/data/price_labels.json`](../src/procrafiler/data/price_labels.json).
+ProcraFiler is what chooses the models, so ProcraFiler is what knows which line they
+are sold under. The published file stays a faithful, automatic transcript of a page.
+
+And it records the **family**, never the line: `feed_latest: "mistral small"`, not
+`mistral small 4`. The generation is read off the table on every run, the way the
+other consumer of this feed does it, because there is no version field anywhere in
+the format — the generation exists only inside the name the seller prints. Those
+names move: `ocr 4` became `ocr 4.1` within days. A recorded generation would mean a
+release every time one did, which is the same manual work in a new place.
+
+Three rules decide which generation is in force, each one forced by a case in the
+live file:
+
+- **Skip rows that are not models.** `ocr 4.1 / ocr` (4.00 per thousand pages, the
+  model behind `/v1/ocr`) and `ocr 4.1 / document ai` (5.00, Mistral's higher-level
+  offer) share generation 4.1, so the number cannot separate them. **`kind:
+  "product"`** can, and that is what the field is for.
+- **Prefer a generation still published, but fall back on a withdrawn one.**
+  **`absent_since`** means the seller has stopped publishing that entry, and — the
+  format's own words — "every price beside it is the last one observed, not a
+  current one". `voxtral mini transcribe 2` carries it today, while its only living
+  sibling, `voxtral mini transcribe realtime`, is the same model billed for
+  streaming at double and carries no number at all. Skipping withdrawn rows outright
+  would lose that price rather than age it. Both halves are reported: the figure is
+  used, and the forecast says the rate is no longer published, naming the day.
+- **Refuse a tie.** Two models at the same top generation is not a decision a rule
+  can make, and choosing by name order would be a coin flip on real money. No price
+  is the honest answer, and it is reported as one.
+
+Note what none of this is: **fuzzy matching on names**, which stays banned. The
+family is stated by a human who knows what this app calls; only the generation is
+derived, from a number the seller published. A model with no family recorded has
+**no price**, which the forecast says out loud and `procrafiler doctor` reports by
+name. There is no per-user version of the file: nobody installing a document filer
+should have to learn how a price feed names its rows, and the repair it would have
+offered cannot arise — the feed never deletes a key, so a price it once published is
+never lost, it ages and says so.
+
+It records **only the models this app configures** — four, today. That table is not
+written for ProcraFiler alone; other projects read it, which is why it lists every
+model a seller publishes. So its contents are not a to-do list.
 
 This is also why every consumer must display the date alongside any converted
 figure: `≈ $0.80 (rates of 2026-07-30)`, never `$0.80`.
