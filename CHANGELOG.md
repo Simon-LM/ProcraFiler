@@ -11,6 +11,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ### Added
 
+- **Prices survive the day a seller renames its models.** The published price table stopped speaking API model ids: it now keys every rate by the name printed on the seller's own pricing page — `mistral small 4`, `ocr 4.1 / ocr`, `voxtral mini transcribe 2` — because maintaining the `-latest` aliases there meant a human deciding every week which label each alias resolved to.
+
+  Measured before writing anything: **all four models ProcraFiler configures by default priced to nothing**, and the weekly refresh accepted the file regardless — it asks whether a *seller* can price anything, and Mistral could price thirty-one entries nobody here buys. A working table would have been replaced by one unable to cost a single run, everywhere at once, without anyone acting.
+
+  The mapping now lives with the app, in `price_labels.json`, extendable in your config directory (merged over the shipped one, so adding one model never loses the rest). Deriving it automatically was tried and rejected on the data itself: `voxtral mini transcribe 2` and `voxtral mini transcribe realtime` are the **same model** at 0.003 and 0.006 per audio minute — the difference being whether the request streams, which no price file can know. A name-matching guess would double the quoted figure, so an unmapped model has **no price**, said out loud rather than guessed.
+
+  Two new fields are honoured. **`kind: "product"`** marks a billable thing that is not a model, and it is what separates `ocr 4.1 / ocr` (4.00 per thousand pages) from `ocr 4.1 / document ai` (5.00): both begin with the same words, so ignoring it would overcharge every scanned page by 25%. **`absent_since`** means the seller has stopped publishing that rate — the figure stays the best estimate available *and* stops being a current rate, and the run says both.
+
+- **`procrafiler doctor` reports whether your models can be priced at all**, in its own section: the label each was priced under, a warning naming any model with no price and how to map it, and a warning when a rate has left the seller's list, with the date. Never a failure — a missing price is no reason to refuse to file documents. The weekly refresh was deliberately **not** tightened to reject such a table, since that would stop every price update for every model the day one label moved; this is the other half of that choice, making the loss loud instead.
+
+- **A run's cost line names the label each model was priced under.** A hand-kept mapping that nothing displays is a mapping nobody checks.
+
 - **`status` now tells you when your files were last checked for corruption.** The integrity check already existed and already healed — `scrub` re-hashes every stored document against the fingerprint recorded when it was filed, and `scrub --repair` restores a damaged copy from the mirror. But nothing ever asked you to run it, so a corruption surfaced the day a restore failed, which is the one day it is too late. **A protection nobody triggers is not a protection.**
 
   `status` reports how many documents have gone unchecked and for how long, and nudges past 30 days. Every stored document is counted, including one no scrub has ever seen: filing computed its fingerprint *from the file*, so that moment did confirm it. A document filed yesterday is therefore not overdue, and one filed two years ago and never re-checked is — where a separate "never verified" bucket would have put exactly those stale documents outside the rule meant to cover them.

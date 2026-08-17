@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from procrafiler.ai_estimate import AICallEstimate  # type: ignore[reportMissingImports]
@@ -90,6 +90,17 @@ class CostForecast:
     # printed beside the figure describes THOSE rates: the table also holds sellers
     # ProcraFiler cannot call, and their freshness says nothing about this total.
     priced_providers: frozenset[str] = frozenset()
+    # model -> the day its rate stopped being published. The published format says
+    # what that means: "every price beside it is the last one observed, not a
+    # current one". So the figure stands as the best estimate available AND is no
+    # longer a current rate, and a forecast that shows the first without the second
+    # overstates what it knows.
+    withdrawn_rates: dict[str, str] = field(default_factory=dict)
+    # model -> the table key it was priced under, when that is not the model id.
+    # Reported so a wrong mapping is visible the first time somebody reads a cost
+    # line, rather than never: the labels are maintained by hand, and a hand-kept
+    # mapping that nothing displays is a hand-kept mapping nobody checks.
+    priced_as: dict[str, str] = field(default_factory=dict)
 
     @property
     def currency(self) -> str:
@@ -200,7 +211,18 @@ def forecast_cost(
     calibrated: set[str] = set()
     coarse: set[str] = set()
     unpriced: set[str] = set()
+    withdrawn: dict[str, str] = {}
+    priced_as: dict[str, str] = {}
     calls_low = calls_high = 0
+
+    def note_source(provider: str, model: str) -> None:
+        """Where this model's rate came from, and whether it is still published."""
+        label = price_table.label_for(provider, model)
+        if label is not None:
+            priced_as[model] = label
+        row = price_table.price_for(provider, model)
+        if row is not None and row.absent_since:
+            withdrawn[model] = row.absent_since
 
     for task, (task_low, task_high) in estimate.calls_by_task().items():
         if task_high <= 0:
@@ -222,6 +244,7 @@ def forecast_cost(
             calls_high += task_high
             currencies[price_table.currency_of(provider)] = price_table.symbol_of(provider)
             priced.add(provider)
+            note_source(provider, model)
             low += amount
             high += amount
             continue
@@ -239,6 +262,7 @@ def forecast_cost(
             continue
         currencies[price_table.currency_of(provider)] = price_table.symbol_of(provider)
         priced.add(provider)
+        note_source(provider, model)
 
         calls_low += task_low
         calls_high += task_high
@@ -274,6 +298,8 @@ def forecast_cost(
         currencies=frozenset(currencies),
         currency_symbol=currencies.get(next(iter(sorted(currencies)), ""), "$"),
         priced_providers=frozenset(priced),
+        withdrawn_rates=dict(withdrawn),
+        priced_as=dict(priced_as),
     )
 
 
@@ -345,6 +371,20 @@ def format_cost_forecast(forecast: CostForecast | None) -> str:
         notes.append(f"the cost of {what} is a rough default until a first run measures yours")
     if forecast.calibrated_tasks:
         notes.append(f"calibrated on your previous runs for {', '.join(sorted(forecast.calibrated_tasks))}")
+    if forecast.withdrawn_rates:
+        # Not a footnote about age: the seller has STOPPED publishing this rate, so
+        # the figure is the last one observed rather than a current one. Naming the
+        # model and the day is what lets someone decide to migrate.
+        gone = "; ".join(
+            f"{model}, last published {when}"
+            for model, when in sorted(forecast.withdrawn_rates.items())
+        )
+        notes.append(f"no longer on the seller's price list ({gone}) — the rate is the last one seen")
+    if forecast.priced_as:
+        priced_as = ", ".join(
+            f'{model} as "{label}"' for model, label in sorted(forecast.priced_as.items())
+        )
+        notes.append(f"priced {priced_as}")
     if table.is_stale(providers=sellers):
         # `table.source` here was an AttributeError waiting for the first stale
         # table: the per-provider rewrite moved `source` onto each seller and this

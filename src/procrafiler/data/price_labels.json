@@ -1,0 +1,12 @@
+{
+  "_README": "Maps an API model id to the key it is priced under in pricing.json. The published table keys each entry by whatever the seller's own pricing page calls it, which for Mistral is a human label rather than an API id -- and no rule can derive one from the other, because two labels can be the same model billed two ways (streaming or not). Keys are 'provider:model'. Add your own in <config>/price_labels.json; those are merged over these, so adding one model does not lose the rest. A model with no entry here simply has no price, which the forecast says out loud and `procrafiler doctor` reports.",
+
+  "mistral:mistral-small-latest": "mistral small 4",
+  "mistral:mistral-medium-latest": "mistral medium 3.5",
+  "mistral:mistral-large-latest": "mistral large 3",
+  "mistral:mistral-ocr-latest": "ocr 4.1 / ocr",
+  "mistral:voxtral-mini-latest": "voxtral mini transcribe 2",
+  "mistral:voxtral-small-latest": "voxtral small",
+  "mistral:mistral-embed": "mistral embed",
+  "mistral:codestral-latest": "codestral"
+}

@@ -15,11 +15,13 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
 
-from procrafiler.ai_naming import SUPPORTED_AI_TASKS, task_chain_from_env
+from procrafiler.ai_naming import LOCAL_PROVIDERS, SUPPORTED_AI_TASKS, task_chain_from_env
 from procrafiler.config import RuntimePaths, layout_conflicts, load_feature_settings
+from procrafiler.pricing import load_price_table
 from procrafiler.runtime_lock import probe_runtime_lock
 from procrafiler.user_setup import on_same_disk
 
@@ -266,6 +268,72 @@ def check_ai_config() -> list[DoctorCheck]:
     return results
 
 
+def _config_dir(paths: RuntimePaths) -> Path:
+    """Where the user's own pricing.json / price_labels.json would be."""
+    return paths.settings_file.parent
+
+
+def check_pricing(paths: RuntimePaths) -> list[DoctorCheck]:
+    """Can the models this installation calls actually be priced?
+
+    Worth its own section because the answer can change without anybody touching
+    ProcraFiler. The published price table keys each entry by whatever the seller's
+    own page calls it, so a renamed label — `mistral small 4` becoming `mistral
+    small 5` — silently costs a price on the next weekly refresh. Nothing crashes;
+    the run forecast simply stops being able to quote a total.
+
+    Deliberately a WARN and never a FAIL. A missing price is not a reason to refuse
+    to file documents, and the refresh is deliberately NOT tightened to reject such
+    a table: doing so would stop every price update, for every model, the day one
+    label moved. This check is the other half of that decision — the loss is loud
+    here instead of being prevented there.
+    """
+    section = "Pricing"
+    results: list[DoctorCheck] = []
+
+    table = load_price_table(_config_dir(paths))
+    if table is None:
+        return [DoctorCheck(section, "price_table", STATUS_WARN, "no usable price table")]
+    results.append(DoctorCheck(section, "price_table", STATUS_OK, table.origin))
+
+    for task in SUPPORTED_AI_TASKS:
+        chain = task_chain_from_env(task)
+        if not chain:
+            continue
+        entry = chain[0]
+        name = f"price_{task.lower()}"
+        if entry.provider in LOCAL_PROVIDERS:
+            results.append(DoctorCheck(section, name, STATUS_SKIP, f"{entry.provider} runs locally, nothing billed"))
+            continue
+
+        price = table.price_for(entry.provider, entry.model)
+        label = table.label_for(entry.provider, entry.model)
+        if price is None or not price.is_priceable:
+            results.append(
+                DoctorCheck(
+                    section, name, STATUS_WARN,
+                    f"no price for {entry.provider}:{entry.model} — a run cannot be costed. "
+                    f"Map it in <config>/price_labels.json to the name it is listed under.",
+                )
+            )
+            continue
+
+        priced_as = f' as "{label}"' if label else ""
+        if price.absent_since:
+            results.append(
+                DoctorCheck(
+                    section, name, STATUS_WARN,
+                    f"{entry.provider}:{entry.model} priced{priced_as}, but that entry left the "
+                    f"seller's price list on {price.absent_since} — the rate is the last one "
+                    f"observed, not a current one",
+                )
+            )
+            continue
+        results.append(DoctorCheck(section, name, STATUS_OK, f"{entry.provider}:{entry.model}{priced_as}"))
+
+    return results
+
+
 def check_catalog(paths: RuntimePaths) -> list[DoctorCheck]:
     section = "Catalog"
     db_path = paths.catalog_db_file
@@ -354,6 +422,7 @@ _CHECK_GROUPS_AFTER_PATHS: tuple[Callable[[RuntimePaths], list[DoctorCheck]], ..
     check_queue,
     check_env,
     lambda _paths: check_ai_config(),
+    check_pricing,
     check_catalog,
     check_runtime_lock,
 )

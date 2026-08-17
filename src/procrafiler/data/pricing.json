@@ -2,182 +2,186 @@
   "schema_version": 2,
   "providers": {
     "mistral": {
-      "checked_utc": "2026-08-10T04:32:45Z",
-      "updated": "2026-08-04",
+      "checked_utc": "2026-08-17T12:13:49Z",
+      "updated": "2026-08-17",
       "source": "https://mistral.ai/pricing/api",
       "currency": "USD",
       "models": {
-        "mistral-medium-latest": {
-          "in_per_mtok": 1.5,
-          "out_per_mtok": 7.5,
-          "display_name": "Mistral Medium 3.5"
-        },
-        "mistral-small-latest": {
-          "in_per_mtok": 0.15,
-          "out_per_mtok": 0.6,
-          "display_name": "Mistral Small 4"
-        },
-        "mistral-large-latest": {
-          "in_per_mtok": 0.5,
-          "out_per_mtok": 1.5,
-          "display_name": "Mistral Large 3"
-        },
-        "devstral-medium-latest": {
-          "in_per_mtok": 0.4,
-          "out_per_mtok": 2.0,
-          "display_name": "Devstral 2"
-        },
-        "devstral-small-latest": {
-          "in_per_mtok": 0.1,
-          "out_per_mtok": 0.3,
-          "display_name": "Devstral Small 2"
-        },
-        "codestral-latest": {
-          "in_per_mtok": 0.3,
-          "out_per_mtok": 0.9,
-          "display_name": "Codestral"
-        },
-        "magistral-medium-latest": {
-          "in_per_mtok": 2.0,
-          "out_per_mtok": 5.0,
-          "display_name": "Magistral Medium"
-        },
-        "magistral-small-latest": {
-          "in_per_mtok": 0.5,
-          "out_per_mtok": 1.5,
-          "display_name": "Magistral Small"
-        },
-        "ministral-3b-latest": {
-          "in_per_mtok": 0.1,
-          "out_per_mtok": 0.1,
-          "display_name": "Ministral 3 3B"
-        },
-        "ministral-8b-latest": {
-          "in_per_mtok": 0.15,
-          "out_per_mtok": 0.15,
-          "display_name": "Ministral 3 8B"
-        },
-        "ministral-14b-latest": {
-          "in_per_mtok": 0.2,
-          "out_per_mtok": 0.2,
-          "display_name": "Ministral 3 14B"
-        },
-        "open-mistral-nemo": {
-          "in_per_mtok": 0.15,
-          "out_per_mtok": 0.15,
-          "display_name": "Mistral NeMo"
-        },
-        "open-mixtral-8x7b": {
-          "in_per_mtok": 0.7,
-          "out_per_mtok": 0.7,
-          "display_name": "Mixtral 8x7B"
-        },
-        "open-mixtral-8x22b": {
-          "in_per_mtok": 2.0,
-          "out_per_mtok": 6.0,
-          "display_name": "Mixtral 8x22B"
-        },
-        "mistral-embed": {
-          "in_per_mtok": 0.1,
-          "display_name": "Mistral Embed"
-        },
-        "codestral-embed": {
-          "in_per_mtok": 0.15,
-          "display_name": "Codestral Embed"
-        },
-        "mistral-ocr-latest": {
-          "per_1k_pages": 4.0,
-          "display_name": "OCR 4"
-        },
-        "voxtral-mini-latest": {
-          "per_audio_minute": 0.003,
-          "display_name": "Voxtral Mini Transcribe 2"
-        },
-        "voxtral-mini-transcribe-realtime-latest": {
-          "per_audio_minute": 0.006,
-          "display_name": "Voxtral Mini Transcribe Realtime"
-        },
-        "voxtral-small-latest": {
-          "in_per_mtok": 0.1,
-          "out_per_mtok": 0.4,
-          "per_audio_minute": 0.004,
-          "display_name": "Voxtral Small"
-        },
-        "voxtral-mini-tts-latest": {
-          "per_1k_chars": 0.016,
-          "display_name": "Voxtral TTS"
-        },
-        "document-ai": {
-          "per_1k_pages": 5.0,
-          "display_name": "Document AI",
-          "kind": "product"
-        },
-        "classifier-3b": {
+        "classifier api model (3b)": {
           "in_per_mtok": 0.1,
           "out_per_mtok": 0.1,
           "train_per_mtok": 1.0,
           "per_model_month": 2.0,
-          "display_name": "Classifier API Model 3B",
+          "display_name": "classifier api model (3b)",
           "kind": "product"
         },
-        "classifier-8b": {
+        "classifier api model (8b)": {
           "in_per_mtok": 0.04,
           "out_per_mtok": 0.04,
           "train_per_mtok": 1.0,
           "per_model_month": 2.0,
-          "display_name": "Classifier API Model 8B",
+          "display_name": "classifier api model (8b)",
+          "kind": "product"
+        },
+        "code execution": {
+          "per_1k_calls": 30.0,
+          "display_name": "code execution",
+          "kind": "product"
+        },
+        "codestral": {
+          "in_per_mtok": 0.3,
+          "out_per_mtok": 0.9,
+          "display_name": "codestral"
+        },
+        "codestral embed": {
+          "in_per_mtok": 0.15,
+          "display_name": "codestral embed"
+        },
+        "data capture": {
+          "per_mtok": 0.04,
+          "display_name": "data capture",
+          "kind": "product"
+        },
+        "devstral 2": {
+          "in_per_mtok": 0.4,
+          "out_per_mtok": 2.0,
+          "display_name": "devstral 2",
+          "absent_since": "2026-08-17"
+        },
+        "devstral small 2": {
+          "in_per_mtok": 0.1,
+          "out_per_mtok": 0.3,
+          "display_name": "devstral small 2",
+          "absent_since": "2026-08-17"
+        },
+        "glm 5.2": {
+          "in_per_mtok": 1.4,
+          "out_per_mtok": 4.4,
+          "cache_read_per_mtok": 0.14,
+          "display_name": "glm 5.2"
+        },
+        "images": {
+          "per_1k_images": 100.0,
+          "display_name": "images",
           "kind": "product"
         },
         "libraries": {
           "index_per_mtok": 1.0,
           "per_1k_pages": 3.0,
           "per_call": 0.01,
-          "display_name": "Libraries",
+          "display_name": "libraries",
           "kind": "product"
         },
-        "code-execution": {
-          "per_1k_calls": 30.0,
-          "display_name": "Code Execution",
+        "magistral medium": {
+          "in_per_mtok": 2.0,
+          "out_per_mtok": 5.0,
+          "display_name": "magistral medium",
+          "absent_since": "2026-08-17"
+        },
+        "magistral small": {
+          "in_per_mtok": 0.5,
+          "out_per_mtok": 1.5,
+          "display_name": "magistral small",
+          "absent_since": "2026-08-17"
+        },
+        "ministral 3 (14b)": {
+          "in_per_mtok": 0.2,
+          "out_per_mtok": 0.2,
+          "display_name": "ministral 3 (14b)"
+        },
+        "ministral 3 (3b)": {
+          "in_per_mtok": 0.1,
+          "out_per_mtok": 0.1,
+          "display_name": "ministral 3 (3b)"
+        },
+        "ministral 3 (8b)": {
+          "in_per_mtok": 0.15,
+          "out_per_mtok": 0.15,
+          "display_name": "ministral 3 (8b)"
+        },
+        "mistral embed": {
+          "in_per_mtok": 0.1,
+          "display_name": "mistral embed"
+        },
+        "mistral large 3": {
+          "in_per_mtok": 0.5,
+          "out_per_mtok": 1.5,
+          "display_name": "mistral large 3"
+        },
+        "mistral medium 3.5": {
+          "in_per_mtok": 1.5,
+          "out_per_mtok": 7.5,
+          "display_name": "mistral medium 3.5"
+        },
+        "mistral nemo": {
+          "in_per_mtok": 0.15,
+          "out_per_mtok": 0.15,
+          "display_name": "mistral nemo",
+          "absent_since": "2026-08-17"
+        },
+        "mistral small 4": {
+          "in_per_mtok": 0.15,
+          "out_per_mtok": 0.6,
+          "display_name": "mistral small 4"
+        },
+        "mixtral 8x22b": {
+          "in_per_mtok": 2.0,
+          "out_per_mtok": 6.0,
+          "display_name": "mixtral 8x22b",
+          "absent_since": "2026-08-17"
+        },
+        "mixtral 8x7b": {
+          "in_per_mtok": 0.7,
+          "out_per_mtok": 0.7,
+          "display_name": "mixtral 8x7b",
+          "absent_since": "2026-08-17"
+        },
+        "ocr 4.1 / document ai": {
+          "per_1k_pages": 5.0,
+          "display_name": "ocr 4.1 / document ai",
           "kind": "product"
         },
-        "web-search": {
-          "per_1k_calls": 30.0,
-          "display_name": "Web Search",
-          "kind": "product"
+        "ocr 4.1 / ocr": {
+          "per_1k_pages": 4.0,
+          "display_name": "ocr 4.1 / ocr"
         },
-        "premium-news": {
+        "premium news": {
           "per_1k_calls": 50.0,
-          "display_name": "Premium News",
+          "display_name": "premium news",
           "kind": "product"
         },
-        "images": {
-          "per_1k_images": 100.0,
-          "display_name": "Images",
-          "kind": "product"
+        "voxtral mini transcribe 2": {
+          "per_audio_minute": 0.003,
+          "display_name": "voxtral mini transcribe 2",
+          "absent_since": "2026-08-17"
         },
-        "data-capture": {
-          "per_mtok": 0.04,
-          "display_name": "Data Capture",
+        "voxtral mini transcribe realtime": {
+          "per_audio_minute": 0.006,
+          "display_name": "voxtral mini transcribe realtime"
+        },
+        "voxtral small": {
+          "in_per_mtok": 0.1,
+          "out_per_mtok": 0.4,
+          "per_audio_minute": 0.004,
+          "display_name": "voxtral small"
+        },
+        "voxtral tts": {
+          "per_1k_chars": 0.016,
+          "display_name": "voxtral tts"
+        },
+        "web search": {
+          "per_1k_calls": 30.0,
+          "display_name": "web search",
           "kind": "product"
         }
       }
     },
     "ovh": {
-      "checked_utc": "2026-08-10T05:31:15Z",
+      "checked_utc": "2026-08-17T12:13:49Z",
       "updated": "2026-08-04",
       "source": "https://www.ovhcloud.com/fr/public-cloud/ai-endpoints/catalog/",
       "currency": "EUR",
       "models": {
-        "gpt-oss-120b": {
-          "in_per_mtok": 0.08,
-          "out_per_mtok": 0.4,
-          "display_name": "gpt-oss-120b"
-        },
-        "gpt-oss-20b": {
-          "in_per_mtok": 0.04,
-          "out_per_mtok": 0.15,
-          "display_name": "gpt-oss-20b"
-        },
         "Meta-Llama-3_3-70B-Instruct": {
           "in_per_mtok": 0.67,
           "out_per_mtok": 0.67,
@@ -187,6 +191,10 @@
           "in_per_mtok": 0.91,
           "out_per_mtok": 0.91,
           "display_name": "Qwen2.5-VL-72B-Instruct"
+        },
+        "Qwen3-Embedding-8B": {
+          "in_per_mtok": 0.1,
+          "display_name": "Qwen3-Embedding-8B"
         },
         "Qwen3.5-397B-A17B": {
           "in_per_mtok": 0.6,
@@ -203,9 +211,13 @@
           "out_per_mtok": 2.7,
           "display_name": "Qwen3.6-27B"
         },
-        "Qwen3-Embedding-8B": {
-          "in_per_mtok": 0.1,
-          "display_name": "Qwen3-Embedding-8B"
+        "Qwen3Guard-Gen-0.6B": {
+          "free": true,
+          "display_name": "Qwen3Guard-Gen-0.6B"
+        },
+        "Qwen3Guard-Gen-8B": {
+          "free": true,
+          "display_name": "Qwen3Guard-Gen-8B"
         },
         "bge-m3": {
           "in_per_mtok": 0.01,
@@ -215,33 +227,23 @@
           "in_per_mtok": 0.01,
           "display_name": "bge-multilingual-gemma2"
         },
-        "whisper-large-v3": {
-          "per_audio_second": 4.083e-05,
-          "display_name": "whisper-large-v3"
+        "gpt-oss-120b": {
+          "in_per_mtok": 0.08,
+          "out_per_mtok": 0.4,
+          "display_name": "gpt-oss-120b"
         },
-        "whisper-large-v3-turbo": {
-          "per_audio_second": 1.278e-05,
-          "display_name": "whisper-large-v3-turbo"
-        },
-        "Qwen3Guard-Gen-8B": {
-          "free": true,
-          "display_name": "Qwen3Guard-Gen-8B"
-        },
-        "Qwen3Guard-Gen-0.6B": {
-          "free": true,
-          "display_name": "Qwen3Guard-Gen-0.6B"
-        },
-        "stable-diffusion-xl-base-v10": {
-          "free": true,
-          "display_name": "stable-diffusion-xl-base-v10"
-        },
-        "nvr-tts-en-us": {
-          "free": true,
-          "display_name": "nvr-tts-en-us"
+        "gpt-oss-20b": {
+          "in_per_mtok": 0.04,
+          "out_per_mtok": 0.15,
+          "display_name": "gpt-oss-20b"
         },
         "nvr-tts-de-de": {
           "free": true,
           "display_name": "nvr-tts-de-de"
+        },
+        "nvr-tts-en-us": {
+          "free": true,
+          "display_name": "nvr-tts-en-us"
         },
         "nvr-tts-es-es": {
           "free": true,
@@ -250,12 +252,24 @@
         "nvr-tts-it-it": {
           "free": true,
           "display_name": "nvr-tts-it-it"
+        },
+        "stable-diffusion-xl-base-v10": {
+          "free": true,
+          "display_name": "stable-diffusion-xl-base-v10"
+        },
+        "whisper-large-v3": {
+          "per_audio_second": 4.083e-05,
+          "display_name": "whisper-large-v3"
+        },
+        "whisper-large-v3-turbo": {
+          "per_audio_second": 1.278e-05,
+          "display_name": "whisper-large-v3-turbo"
         }
       }
     },
     "edenai": {
-      "checked_utc": "2026-08-10T00:00:00Z",
-      "updated": "2026-08-10",
+      "checked_utc": "2026-08-17T12:13:49Z",
+      "updated": "2026-08-17",
       "source": "https://api.edenai.run/v3/models",
       "currency": "USD",
       "models": {
@@ -543,6 +557,11 @@
           "out_per_mtok": 8.0,
           "display_name": "sonar-reasoning-pro"
         },
+        "scaleway/deepseek-v4-flash-0731": {
+          "in_per_mtok": 0.462680213943331,
+          "out_per_mtok": 0.925360427886662,
+          "display_name": "deepseek-v4-flash-0731"
+        },
         "scaleway/devstral-2-123b-instruct-2512": {
           "in_per_mtok": 0.4593999547491045,
           "out_per_mtok": 2.296999773745522,
@@ -554,18 +573,18 @@
           "display_name": "gemma-3-27b-it"
         },
         "scaleway/gemma-4-26b-a4b-it": {
-          "in_per_mtok": 0.28837491507358753,
-          "out_per_mtok": 0.5767498301471751,
+          "in_per_mtok": 0.28917513371458187,
+          "out_per_mtok": 0.5783502674291637,
           "display_name": "gemma-4-26b-a4b-it"
         },
         "scaleway/glm-5.2": {
-          "in_per_mtok": 2.07629938852983,
-          "out_per_mtok": 6.344248131618926,
+          "in_per_mtok": 2.082060962744989,
+          "out_per_mtok": 6.361852941720801,
           "display_name": "glm-5.2"
         },
         "scaleway/gpt-oss-120b": {
-          "in_per_mtok": 0.17302494904415253,
-          "out_per_mtok": 0.6920997961766101,
+          "in_per_mtok": 0.17350508022874914,
+          "out_per_mtok": 0.6940203209149965,
           "display_name": "gpt-oss-120b"
         },
         "scaleway/holo2-30b-a3b": {
@@ -574,49 +593,50 @@
           "display_name": "holo2-30b-a3b"
         },
         "scaleway/llama-3.3-70b-instruct": {
-          "in_per_mtok": 1.038149694264915,
-          "out_per_mtok": 1.038149694264915,
+          "in_per_mtok": 1.0410304813724947,
+          "out_per_mtok": 1.0410304813724947,
           "display_name": "llama-3.3-70b-instruct"
         },
         "scaleway/mistral-medium-3.5-128b": {
-          "in_per_mtok": 1.730249490441525,
-          "out_per_mtok": 8.651247452207626,
+          "in_per_mtok": 1.735050802287491,
+          "out_per_mtok": 8.675254011437456,
           "display_name": "mistral-medium-3.5-128b"
         },
         "scaleway/mistral-small-3.2-24b-instruct-2506": {
-          "in_per_mtok": 0.17302494904415253,
-          "out_per_mtok": 0.4037248811030225,
+          "in_per_mtok": 0.17350508022874914,
+          "out_per_mtok": 0.4048451872004146,
           "display_name": "mistral-small-3.2-24b-instruct-2506"
         },
         "scaleway/pixtral-12b-2409": {
-          "in_per_mtok": 0.23069993205887004,
-          "out_per_mtok": 0.23069993205887004,
+          "in_per_mtok": 0.2313401069716655,
+          "out_per_mtok": 0.2313401069716655,
           "display_name": "pixtral-12b-2409"
         },
         "scaleway/qwen3-235b-a22b-instruct-2507": {
-          "in_per_mtok": 0.8651247452207625,
-          "out_per_mtok": 2.5953742356622875,
+          "in_per_mtok": 0.8675254011437455,
+          "out_per_mtok": 2.6025762034312363,
           "display_name": "qwen3-235b-a22b-instruct-2507"
         },
         "scaleway/qwen3-coder-30b-a3b-instruct": {
-          "in_per_mtok": 0.23069993205887004,
-          "out_per_mtok": 0.9227997282354802,
+          "in_per_mtok": 0.2313401069716655,
+          "out_per_mtok": 0.925360427886662,
           "display_name": "qwen3-coder-30b-a3b-instruct"
         },
         "scaleway/qwen3.5-397b-a17b": {
-          "in_per_mtok": 0.6920997961766101,
-          "out_per_mtok": 4.152598777059661,
+          "in_per_mtok": 0.6940203209149965,
+          "out_per_mtok": 4.164121925489978,
           "display_name": "qwen3.5-397b-a17b"
         },
         "scaleway/qwen3.6-35b-a3b": {
-          "in_per_mtok": 0.28837491507358753,
-          "out_per_mtok": 1.730249490441525,
+          "in_per_mtok": 0.28917513371458187,
+          "out_per_mtok": 1.735050802287491,
           "display_name": "qwen3.6-35b-a3b"
         },
         "scaleway/voxtral-small-24b-2507": {
           "in_per_mtok": 0.17227498303091418,
           "out_per_mtok": 0.4019749604054664,
-          "display_name": "voxtral-small-24b-2507"
+          "display_name": "voxtral-small-24b-2507",
+          "absent_since": "2026-08-17"
         },
         "xai/grok-3": {
           "in_per_mtok": 3.0,
@@ -783,6 +803,12 @@
           "cache_read_per_mtok": 0.3,
           "display_name": "grok-4.5"
         },
+        "xai/grok-4.6": {
+          "in_per_mtok": 2.0,
+          "out_per_mtok": 6.0,
+          "cache_read_per_mtok": 0.5,
+          "display_name": "grok-4.6"
+        },
         "xai/grok-build-0.1": {
           "in_per_mtok": 1.0,
           "out_per_mtok": 2.0,
@@ -810,13 +836,13 @@
         "xai/grok-latest": {
           "in_per_mtok": 2.0,
           "out_per_mtok": 6.0,
-          "cache_read_per_mtok": 0.3,
-          "display_name": "grok-4.5"
+          "cache_read_per_mtok": 0.5,
+          "display_name": "grok-4.6"
         }
       }
     },
     "huggingface": {
-      "checked_utc": "2026-08-10T00:00:00Z",
+      "checked_utc": "2026-08-17T12:13:49Z",
       "updated": "2026-08-10",
       "source": "https://router.huggingface.co/v1/models",
       "currency": "USD",

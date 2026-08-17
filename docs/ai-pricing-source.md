@@ -139,10 +139,40 @@ catalogue costs nothing and spares a release when a project switches model.
 tomorrow it will resolve to something else, **at a different price, with no change
 anywhere in this file or in ProcraFiler**.
 
-The scraper therefore matches marketing names to API ids through an **explicit,
-hand-maintained mapping** committed in the repo — never through fuzzy matching,
-never by lowercasing and hoping. When the page shows a name the mapping does not
-know, that is a **failure to report**, not a row to guess at.
+**Where that mapping lives has moved, and this is the current answer.** The
+companion repository dropped the aliases in August 2026 and now keys every entry
+by **whatever the seller's own page calls it** — `mistral small 4`,
+`ocr 4.1 / ocr`, `voxtral mini transcribe 2`. Its README says so plainly: keys are
+"whatever the source itself states, per provider". Maintaining an id-to-label
+mapping *there* meant a human deciding, every week, which label each alias resolves
+to — the exact manual work that repository exists to avoid.
+
+So the mapping lives **here**, in
+[`src/procrafiler/data/price_labels.json`](../src/procrafiler/data/price_labels.json),
+extendable per user in `<config>/price_labels.json` (merged over the shipped one, so
+adding one model never loses the rest). ProcraFiler is what chooses the models, so
+ProcraFiler is what knows which label they are sold under. The published file stays
+a faithful, automatic transcript of a page.
+
+Still **never fuzzy matching**, and now with a measured reason. `voxtral mini
+transcribe 2` and `voxtral mini transcribe realtime` are the SAME model at 0.003
+and 0.006 per audio minute — the difference is whether the request streams, which
+no price file can know and only `ai_transcribe.py` can answer. A matcher comparing
+names would have to guess, and guessing wrong doubles the quoted figure. An
+unmapped model therefore has **no price**, which the forecast says out loud and
+`procrafiler doctor` reports by name.
+
+Two fields carry the rest of the format's meaning:
+
+- **`kind: "product"`** marks a billable thing that is *not* a model. It is what
+  separates `ocr 4.1 / ocr` (4.00 per thousand pages, the model behind `/v1/ocr`)
+  from `ocr 4.1 / document ai` (5.00, Mistral's higher-level offer). Both begin with
+  the same words, so a lookup ignoring `kind` would overcharge every scanned page by
+  25%. A row that is not a model is never returned as one.
+- **`absent_since`** means the seller has stopped publishing that entry, and — the
+  format's own words — "every price beside it is the last one observed, not a
+  current one". Both halves are reported: the figure is still used, and the run
+  forecast says the rate is no longer published, naming the model and the day.
 
 This is also why every consumer must display the date alongside any converted
 figure: `≈ $0.80 (rates of 2026-07-30)`, never `$0.80`.

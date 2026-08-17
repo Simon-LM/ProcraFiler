@@ -14,6 +14,7 @@ from unittest import mock
 from procrafiler.cli import main
 from procrafiler.config import default_runtime_paths, ensure_runtime_layout
 from procrafiler.doctor import (
+    check_pricing,
     STATUS_FAIL,
     STATUS_OK,
     STATUS_SKIP,
@@ -219,6 +220,81 @@ class TestDoctor(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("ProcraFiler doctor", stdout.getvalue())
         self.assertIn("Summary", stdout.getvalue())
+
+
+class TestDoctorPricing(unittest.TestCase):
+    """Whether the models this installation calls can be priced at all.
+
+    The answer changes without anyone touching ProcraFiler: the published table
+    keys each entry by whatever the seller's page calls it, so a renamed label
+    costs a price on the next weekly refresh. The refresh is deliberately NOT
+    tightened to reject such a table — that would stop every price update, for
+    every model, the day one label moved — so this is where the loss is made loud.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self._snapshot = {k: v for k, v in os.environ.items() if k.startswith("PROCRAFILER_")}
+        for key in list(os.environ):
+            if key.startswith("PROCRAFILER_"):
+                del os.environ[key]
+        self.addCleanup(lambda: os.environ.update(self._snapshot))
+        for name, sub in (("WORKSPACE_DIR", "Inbox"), ("LIBRARY_DIR", "Library"),
+                          ("LIBRARY_MIRROR_DIR", "Mirror"), ("HOME", "state"),
+                          ("CONFIG_HOME", "config")):
+            os.environ[f"PROCRAFILER_{name}"] = str(root / sub)
+        self.paths = default_runtime_paths()
+        ensure_runtime_layout(self.paths)
+        self.config = self.paths.settings_file.parent
+
+    def _statuses(self) -> dict[str, tuple[str, str]]:
+        return {c.name: (c.status, c.message) for c in check_pricing(self.paths)}
+
+    def test_a_priced_model_is_reported_with_the_label_it_used(self) -> None:
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:mistral-small-latest"
+        status, detail = self._statuses()["price_analysis"]
+        self.assertEqual(status, STATUS_OK)
+        self.assertIn('as "mistral small 4"', detail)
+
+    def test_a_model_with_no_price_warns_and_says_how_to_fix_it(self) -> None:
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:no-such-model-anywhere"
+        status, detail = self._statuses()["price_analysis"]
+        self.assertEqual(status, STATUS_WARN)
+        self.assertIn("no-such-model-anywhere", detail)
+        self.assertIn("price_labels.json", detail, "a warning with no remedy is a dead end")
+
+    def test_it_warns_when_the_rate_is_no_longer_published(self) -> None:
+        os.environ["PROCRAFILER_AI_TRANSCRIBE_PRIMARY"] = "mistral:voxtral-mini-latest"
+        status, detail = self._statuses()["price_transcribe"]
+        self.assertEqual(status, STATUS_WARN)
+        self.assertIn("2026-08-17", detail)
+        self.assertIn("not a current one", detail)
+
+    def test_a_local_model_is_skipped_rather_than_warned_about(self) -> None:
+        """Anti-vacuity: nothing is billed, so a warning would be noise the user
+        learns to ignore — and then misses the real one."""
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "ollama:qwen3.5:9b"
+        status, detail = self._statuses()["price_analysis"]
+        self.assertEqual(status, STATUS_SKIP)
+        self.assertIn("locally", detail)
+
+    def test_a_user_mapping_repairs_an_unpriced_model(self) -> None:
+        """The whole point of keeping the mapping here: when a label moves, one line
+        in the user's own config restores the forecast without a release."""
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:private-build"
+        self.assertEqual(self._statuses()["price_analysis"][0], STATUS_WARN)
+
+        (self.config / "price_labels.json").write_text(
+            '{"mistral:private-build": "mistral small 4"}', encoding="utf-8")
+
+        self.assertEqual(self._statuses()["price_analysis"][0], STATUS_OK)
+
+    def test_it_never_fails_the_whole_doctor_run(self) -> None:
+        """A missing price is no reason to refuse to file documents."""
+        os.environ["PROCRAFILER_AI_ANALYSIS_PRIMARY"] = "mistral:no-such-model-anywhere"
+        self.assertNotIn(STATUS_FAIL, [c.status for c in check_pricing(self.paths)])
 
 
 if __name__ == "__main__":

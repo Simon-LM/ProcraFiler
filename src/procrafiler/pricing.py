@@ -32,12 +32,13 @@ model the provider declares FREE, which is a fact rather than an absence.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 _PACKAGED_TABLE = Path(__file__).resolve().parent / "data" / "pricing.json"
+_PACKAGED_LABELS = Path(__file__).resolve().parent / "data" / "price_labels.json"
 
 # Past this, the displayed date stops being a footnote and becomes a warning. Not
 # a hard failure: stale figures the user can see the age of are still far more
@@ -61,6 +62,32 @@ class ModelPrice:
     # is a fact, "I have no price for this" is an admission, and the whole point of
     # this module is that the two never look alike.
     free: bool = False
+    # The day the source stopped offering this entry. The published format states
+    # what that implies in as many words: "every price beside it is the last one
+    # observed, not a current one". A figure quoted from such a row is therefore
+    # still the best estimate available AND no longer a current rate, and a forecast
+    # that shows the first without the second is overstating what it knows.
+    absent_since: str | None = None
+    # Absent on a model, which is the normal case. `"product"` marks a billable
+    # thing that is NOT a model — web search, code execution, image generation,
+    # Mistral's Document AI offer.
+    kind: str | None = None
+
+    @property
+    def is_model(self) -> bool:
+        """Whether this row is something you can name in an API request.
+
+        Load-bearing since the published table began keying models by the label
+        printed on the seller's pricing page. `ocr 4.1 / ocr` (4.00 per thousand
+        pages) and `ocr 4.1 / document ai` (5.00, `kind: product`) are the same OCR
+        engine sold two ways, and both begin with the same words — so a lookup that
+        ignored `kind` could price every scanned page 25% too high. You can send
+        `model: "mistral-ocr-latest"`; you cannot send `model: "document ai"`.
+
+        An explicit `kind: "model"` is accepted for the day the format states the
+        normal case rather than leaving it absent.
+        """
+        return self.kind is None or self.kind == "model"
 
     @property
     def is_priceable(self) -> bool:
@@ -98,12 +125,40 @@ class ProviderPrices:
 class PriceTable:
     origin: str = "packaged"
     providers: dict[str, ProviderPrices] = field(default_factory=dict)
+    # `"provider:model"` -> the key that model is priced under in the table. Loaded
+    # from `data/price_labels.json`, extendable in the user's config directory. See
+    # `label_for` for why this cannot be derived.
+    model_labels: dict[str, str] = field(default_factory=dict)
 
     def provider(self, provider: str) -> ProviderPrices | None:
         return self.providers.get(provider)
 
+    def label_for(self, provider: str, model: str) -> str | None:
+        """The table key this model is priced under, when it is not the model id.
+
+        The published table keys each entry by **whatever the source itself states**
+        — which, for Mistral, is now the label printed on its pricing page:
+        `mistral small 4`, `ocr 4.1 / ocr`, `voxtral mini transcribe 2`. Those are
+        not API model ids and never were; `-latest` aliases were dropped from the
+        file because keeping them meant a human deciding, every week, which label an
+        alias currently points at.
+
+        That decision has to be made somewhere, and this is the right somewhere:
+        ProcraFiler is what chooses the models, so ProcraFiler is what knows. The
+        published file stays a faithful, automatic transcript of the seller's page.
+
+        Deriving the mapping was tried and rejected. Two entries can share every
+        word of their name and differ only in HOW the model is called — `voxtral
+        mini transcribe 2` and `voxtral mini transcribe realtime` are one model at
+        0.003 and 0.006 per audio minute, the difference being whether the request
+        streams. Nothing in a price file can say which mode this app uses; that fact
+        lives in `ai_transcribe.py`. A matcher comparing names would have to guess,
+        and guessing wrong doubles the quoted price.
+        """
+        return self.model_labels.get(f"{provider}:{model}")
+
     def price_for(self, provider: str, model: str) -> ModelPrice | None:
-        """Exact match on BOTH, with one deliberate fallback.
+        """Exact match on BOTH, then on the mapped label, with one fallback.
 
         `mistral-medium-latest` is an ALIAS that will one day resolve to a
         different model at a different price, so guessing from a prefix would mean
@@ -111,14 +166,27 @@ class PriceTable:
         just as exactly, because the same model id costs different amounts — and is
         billed in a different currency — depending on who serves it.
 
+        The model id is tried FIRST, at both keys, before the label is considered:
+        a `pricing.json` the user wrote themselves is keyed by real model ids, and
+        must keep working exactly as it did.
+
         The fallback is the `*` bucket: a schema-1 file, or a rate the user wrote
         down themselves, names a model without naming a seller, and refusing to use
         it would throw away the one figure they explicitly asked for.
+
+        Rows that are not models are never returned — see `ModelPrice.is_model`.
         """
-        for name in (provider, ANY_PROVIDER):
-            prices = self.providers.get(name)
-            if prices is not None and model in prices.models:
-                return prices.models[model]
+        label = self.label_for(provider, model)
+        for key in (model, label):
+            if key is None:
+                continue
+            for name in (provider, ANY_PROVIDER):
+                prices = self.providers.get(name)
+                if prices is None:
+                    continue
+                price = prices.models.get(key)
+                if price is not None and price.is_model:
+                    return price
         return None
 
     def currency_of(self, provider: str) -> str:
@@ -281,6 +349,8 @@ def _parse_models(raw_models: Any) -> dict[str, ModelPrice]:
             per_audio_minute=_as_price(spec.get("per_audio_minute")),
             per_audio_second=_as_price(spec.get("per_audio_second")),
             free=spec.get("free") is True,
+            absent_since=(str(spec["absent_since"]) if spec.get("absent_since") else None),
+            kind=(str(spec["kind"]) if spec.get("kind") else None),
         )
     return models
 
@@ -361,6 +431,37 @@ def _load_file(path: Path, origin: str) -> PriceTable | None:
     return _parse_table(payload, origin)
 
 
+def _load_labels(path: Path) -> dict[str, str]:
+    """`"provider:model"` -> table key, from a JSON object. Unusable content is
+    silently ignored: a broken label file must cost a price, never a run."""
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in payload.items()
+        if isinstance(key, str) and isinstance(value, str) and ":" in key and value
+    }
+
+
+def model_labels(config_dir: Path | None = None) -> dict[str, str]:
+    """The shipped mapping, with the user's own entries laid over it.
+
+    MERGED rather than replaced, unlike `pricing.json`. The two files answer
+    different questions: a hand-written `pricing.json` means "charge me this rate
+    instead", so it must win whole, while a label file means "this model is listed
+    under that name" — and someone adding the one model we do not ship must not
+    thereby lose the mapping for the four we do.
+    """
+    labels = _load_labels(_PACKAGED_LABELS)
+    if config_dir is not None:
+        labels.update(_load_labels(config_dir / "price_labels.json"))
+    return labels
+
+
 def load_price_table(config_dir: Path | None = None) -> PriceTable | None:
     """The table in force. None only if even the packaged copy is unusable, in
     which case the app must report costs as unavailable rather than as zero.
@@ -370,16 +471,20 @@ def load_price_table(config_dir: Path | None = None) -> PriceTable | None:
     spend ceiling — can call it freely without any of them wondering whether it will
     block.
     """
+    table = None
     if config_dir is not None:
-        user_table = _load_file(config_dir / "pricing.json", "your own pricing.json")
-        if user_table is not None:
-            return user_table
-        # The user's own file outranks it: someone who wrote down a negotiated rate
-        # must not have it overwritten by a public one, however fresh.
-        cached = _load_file(config_dir / "pricing.cached.json", "downloaded")
-        if cached is not None:
-            return cached
-    return _load_file(_PACKAGED_TABLE, "shipped with the app")
+        table = _load_file(config_dir / "pricing.json", "your own pricing.json")
+        if table is None:
+            # The user's own file outranks it: someone who wrote down a negotiated
+            # rate must not have it overwritten by a public one, however fresh.
+            table = _load_file(config_dir / "pricing.cached.json", "downloaded")
+    if table is None:
+        table = _load_file(_PACKAGED_TABLE, "shipped with the app")
+    if table is None:
+        return None
+    # Attached here rather than parsed with the table: the labels live in their own
+    # file, and they apply to whichever table won above — including a user's.
+    return replace(table, model_labels=model_labels(config_dir))
 
 
 def format_amount(amount: float, symbol: str = "$") -> str:
