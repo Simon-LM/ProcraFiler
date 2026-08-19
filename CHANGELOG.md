@@ -9,6 +9,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-19 — Prices that follow a seller's renamings, and a filing you are reminded to verify
+
 ### Added
 
 - **Prices survive the day a seller renames its models.** The published price table stopped speaking API model ids: it now keys every rate by the name printed on the seller's own pricing page — `mistral small 4`, `ocr 4.1 / ocr`, `voxtral mini transcribe 2` — because maintaining the `-latest` aliases there meant a human deciding every week which label each alias resolved to.
